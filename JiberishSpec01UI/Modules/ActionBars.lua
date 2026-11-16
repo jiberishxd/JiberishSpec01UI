@@ -168,8 +168,12 @@ HW.SLOT = {0.149, 0.149, 0.141}
 function HW.Window(size, even)
 	if not HW.On() then return even, even, even, even end
 	local inset = tonumber(DB().iconInset)
-	local side = (inset and inset > 0) and Kit:Clamp(floor(inset), 2, floor(size / 3)) or max(4, floor(size * 0.15 + 0.5))
-	local band = max(8, floor(size * 0.27 + 0.5))
+	-- Small keys (pet, stance, side bars) keep a thinner rim and band, so the
+	-- icon window does not shrink to nothing.
+	local small = size < 32
+	local side = (inset and inset > 0) and Kit:Clamp(floor(inset), 2, floor(size / 3))
+		or (small and max(3, floor(size * 0.13 + 0.5)) or max(4, floor(size * 0.15 + 0.5)))
+	local band = small and max(7, floor(size * 0.27 + 0.5)) or max(8, floor(size * 0.27 + 0.5))
 	return side, band, side, max(3, floor(size * 0.12 + 0.5))
 end
 
@@ -262,6 +266,44 @@ function HW.PlaceBank(bank, parent, x, y, width, shown)
 	bank.shine:SetPoint('TOPLEFT', bank.rule, 'BOTTOMLEFT', 0, 0)
 end
 HW.BANK_H = 11 -- room a bank legend takes above its keys
+
+-- Legends on small keys ----------------------------------------------------------------
+HW.LEGEND_MIN = 6 -- the smallest legend size that still reads
+-- The legend's size for a band: about two thirds of its height.
+function HW.LegendSize(band) return max(HW.LEGEND_MIN, floor(band * 0.68)) end
+
+-- A bound key printed shorter still: the modifier's letter and the key's
+-- number ("CF1" -> "C1"), else its first two letters.
+function HW.Shorter(text)
+	local digits = text:match('(%d+)$')
+	if digits and #text > #digits + 1 then return text:sub(1, 1)..digits end
+	return text:sub(1, 2)
+end
+
+-- Print `text` into `label`, kept inside `width`: the size steps down to the
+-- minimum, then the shorter legend is tried, then the line is cut at the
+-- box's edge (it never wraps or spills onto the next key). Too narrow a box
+-- prints nothing.
+function HW.FitLegend(label, text, width, size)
+	text = text or ''
+	label:SetWidth(max(width, 1))
+	label:SetWordWrap(false)
+	if label.SetMaxLines then label:SetMaxLines(1) end
+	if width < HW.LEGEND_MIN then label:SetText('') return end
+	local function Measure(value, fontSize)
+		Kit:Font(label, fontSize, '', true)
+		label:SetText(value)
+		return label.GetUnboundedStringWidth and label:GetUnboundedStringWidth() or label:GetStringWidth()
+	end
+	if text == '' then Measure('', size) return end
+	for fontSize = size, HW.LEGEND_MIN, -1 do
+		if Measure(text, fontSize) <= width then return end
+	end
+	local short = HW.Shorter(text)
+	if short ~= text and Measure(short, HW.LEGEND_MIN) <= width then return end
+	-- Still too wide: the shorter legend, cut at the box's edge.
+	Measure(short, HW.LEGEND_MIN)
+end
 
 -- A small device's printed name, top left, with its rule (pet and stance strips).
 function HW.MiniLegend(device, text)
@@ -556,15 +598,17 @@ end
 local function UpdateLegend(key)
 	local db = DB()
 	local text = db.hotkeys and key.binding or ''
-	key.hotkey:SetText(text)
 	local light = LightCap()
 	if HW.On() then
-		-- Printed on the cap's band, above the icon window: ink on the cap.
+		-- Printed on the cap's band, above the icon window: ink on the cap, fitted to the band.
+		if key.legendWidth then HW.FitLegend(key.hotkey, text, key.legendWidth, key.legendSize)
+		else key.hotkey:SetText(text) end
 		key.hotkeyChip:Hide()
 		Kit:Tint(key.hotkey, light and (key.has and 'ink' or 'dim') or (key.has and 'darkInk' or 'darkDim'))
 		key.hotkey:SetShadowOffset(0, 0)
 		return
 	end
+	key.hotkey:SetText(text)
 	local chip = key.has and db.legendChip ~= false and text ~= ''
 	key.hotkeyChip:SetShown(chip)
 	if chip then
@@ -727,7 +771,10 @@ local function ApplyLook(key)
 		local side, band = HW.Window(size, inset)
 		local point = db.hotkeyPoint or 'TOPLEFT'
 		local align = point:find('RIGHT') and 'RIGHT' or ((point == 'TOP' or point == 'BOTTOM') and 'CENTER' or 'LEFT')
-		Kit:Font(key.hotkey, Sized(db.hotkeySize, max(6, floor(band * 0.68))), '', true)
+		-- The legend's box: the band between the cap's sides, less the lamp's room.
+		key.legendSize = Sized(db.hotkeySize, HW.LegendSize(band))
+		key.legendWidth = size - 2 * side - (align == 'CENTER' and 12 or 7)
+		key.hotkey:SetJustifyH(align)
 		key.hotkey:ClearAllPoints()
 		local y = -band / 2
 		if align == 'RIGHT' then key.hotkey:SetPoint('RIGHT', key.face, 'TOPRIGHT', -side, y)
@@ -745,6 +792,7 @@ local function ApplyLook(key)
 		key.macro:ClearAllPoints()
 		key.macro:SetPoint('BOTTOMLEFT', key.icon, 'BOTTOMLEFT', 1, 1)
 		key.macro:SetPoint('BOTTOMRIGHT', key.icon, 'BOTTOMRIGHT', -1, 1)
+		UpdateLegend(key)
 	else
 		Kit:Font(key.hotkey, Sized(db.hotkeySize, max(7, floor(size * 0.22))), '', true)
 		Corner(key.hotkey, db.hotkeyPoint, inset + 1)
@@ -1007,6 +1055,7 @@ end
 -- so the binding window keeps working.
 local binder = CreateFrame('Frame')
 local extraKeys = {} -- {button, command, legend fontstring} for pet and stance keys
+local dressed = {} -- Blizzard pet, stance and ability buttons -> our key parts
 
 local function Bind()
 	if InCombatLockdown() then return UI:AfterCombat(Bind, 'ab.bind') end
@@ -1026,7 +1075,12 @@ local function Bind()
 	end
 	for _, extra in ipairs(extraKeys) do
 		local legend = Legend(BindCommand(extra.command, extra.button:GetName()))
-		if extra.hotkey then extra.hotkey:SetText(DB().hotkeys and legend or '') end
+		if extra.hotkey then
+			local text = DB().hotkeys and legend or ''
+			local key = dressed[extra.button]
+			if HW.On() and key and key.legendWidth then HW.FitLegend(extra.hotkey, text, key.legendWidth, key.legendSize)
+			else extra.hotkey:SetText(text) end
+		end
 	end
 end
 
@@ -1037,7 +1091,6 @@ end
 -- Nothing runs every frame: the cap goes down from the button's own mouse and
 -- click scripts (key binds click too), and the lamp follows the pet, stance
 -- and action state events.
-local dressed = {}
 local function DressedPress(key, down)
 	if not key or key.down == down then return end
 	key.down = down
@@ -1126,9 +1179,13 @@ local function Dress(button, size, round)
 	if hotkey then
 		hotkey:ClearAllPoints()
 		if hardware and not round then
-			-- Printed on the cap's band, in ink, like the action keys.
-			Kit:Font(hotkey, max(6, floor(top * 0.68)), '', true)
+			-- Printed on the cap's band, in ink, like the action keys, in a box
+			-- that ends short of the lamp (the game's own box is wider and right-aligned).
+			Kit:Font(hotkey, HW.LegendSize(top), '', true)
+			hotkey:SetJustifyH('LEFT')
 			hotkey:SetPoint('LEFT', button, 'TOPLEFT', left, -top / 2)
+			hotkey:SetWidth(max(size - left - right - 7, 1))
+			hotkey:SetWordWrap(false)
 			hotkey:SetShadowOffset(0, 0)
 			local r, g, b = Kit:RGB(LightCap() and 'ink' or 'darkInk')
 			hotkey:SetTextColor(r, g, b)
@@ -1172,6 +1229,7 @@ local function Dress(button, size, round)
 	else key.lamp:SetPoint('TOPRIGHT', -2, -2) end
 	Kit:ShowLed(key.lamp, false)
 	key.hotkey = hotkey
+	key.legendWidth, key.legendSize = size - left - right - 7, HW.LegendSize(top)
 	dressed[button] = key
 	WatchPress(button)
 	DressedChecked(key)
