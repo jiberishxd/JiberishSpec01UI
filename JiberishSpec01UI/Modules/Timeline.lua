@@ -17,8 +17,11 @@
 -- nearest free lane (re-checked four times a second, eased when they change).
 -- A time made secret by a fight keeps an estimate from its last plain reading
 -- (the clock runs the same either way); a key with no estimate at all takes
--- lanes in turn. Long timers waiting at the far end and lasting buffs pinned
--- past it are stacked in a tidy grid there.
+-- lanes in turn.
+--
+-- Only what is on the line shows: a timer longer than the line waits unseen
+-- past its clipped end and slides on as it drops below the line's length, and
+-- auras that last until cancelled never show.
 local _, UI = ...
 local Kit = UI.Kit
 
@@ -50,7 +53,7 @@ end
 -- defaults:begin
 UI:RegisterDefaults('timeline', {
 	enable = true,
-	buffs = 'all', -- 'mine' | 'all' | 'off'
+	buffs = 'mine', -- 'mine' (auras you cast) | 'all' | 'off'
 	longBuffs = 0, -- seconds; an optional cap: buffs known to last longer are left off (0 keeps them all)
 	debuffs = false, -- harmful auras on you
 	cooldowns = true, -- your spell cooldowns from the action bars
@@ -74,20 +77,18 @@ UI:RegisterDefaults('timeline', {
 
 local function DB() return UI.db.timeline end
 
--- Saved profiles catch up once: 0.5.0 saved 'mine' and no cooldowns (which
--- left the line empty for most characters); a short-lived build capped long
--- buffs at 5 minutes; keys were small.
+-- Saved profiles catch up once: a short-lived build capped long buffs at 5
+-- minutes; keys were small; and the line is for your own abilities and
+-- cooldowns (buffs you cast, cooldowns on, debuffs off), which every saved
+-- profile is moved to once.
 local function Upgrade()
 	local db = DB()
 	local done = tonumber(db.upgraded) or 0
-	if done >= 3 then return end
-	if done < 1 then
-		if db.buffs == 'mine' then db.buffs = 'all' end
-		if db.cooldowns == false then db.cooldowns = true end
-	end
+	if done >= 4 then return end
 	if done < 2 and db.longBuffs == 300 then db.longBuffs = 0 end
-	if db.iconSize == 20 then db.iconSize = 24 end
-	db.upgraded = 3
+	if done < 3 and db.iconSize == 20 then db.iconSize = 24 end
+	db.buffs, db.cooldowns, db.debuffs = 'mine', true, false
+	db.upgraded = 4
 end
 
 local INTERPOLATION = Enum and Enum.StatusBarInterpolation
@@ -96,7 +97,7 @@ local WHITE = [[Interface\Buttons\WHITE8X8]]
 local MARKS = {0, 5, 10, 30, 60, 120, 300, 600}
 local CHIP_H, GAP, STEM_BASE, LABEL_BAND = 10, 3, 6, 11
 
-local holder, lane, line, caps, ticks, minors, farPoint
+local holder, lane, clip, line, caps, ticks, minors
 local entries, active = {}, 0
 local metrics
 local preview = false
@@ -277,16 +278,18 @@ local function SizeKey(key, m, withChip)
 end
 
 -- Entries -----------------------------------------------------------------------------
--- Each entry has two keys and shows one: the timed key hangs off a point that
--- rides the fill edge of the entry's own (invisible) StatusBar; the pinned key
--- sits in the grid past the far end, for an aura that lasts until cancelled or
--- one the game won't time. Which one shows can be a secret answer (does the
--- duration last forever), so each sits on its own gate and the answer reaches
--- only their alphas. The motion frame fades a new entry in.
+-- Each entry's key hangs off a point that rides the fill edge of the entry's
+-- own (invisible) StatusBar. The bar runs RANGE times the line's length past
+-- zero, on the same scale, and lives in the clip frame, which shows only the
+-- line itself: a key with more time left than the line rides out past the
+-- clip's end, unseen, and slides on as its time drops below the line's length.
+-- The gate takes a secret "lasts forever" answer, the motion frame fades a key
+-- in as it arrives.
+local RANGE = 6
+
 local function NewEntry(index)
 	local entry = {index = index}
-	entry.bar = CreateFrame('StatusBar', nil, lane)
-	entry.bar:SetAllPoints(lane)
+	entry.bar = CreateFrame('StatusBar', nil, clip)
 	entry.bar:SetStatusBarTexture(WHITE)
 	entry.bar:EnableMouse(false)
 	local fill = entry.bar:GetStatusBarTexture()
@@ -297,19 +300,15 @@ local function NewEntry(index)
 	entry.point:SetSize(1, 1)
 	local level = holder:GetFrameLevel() + 8 + index * 4
 	entry.gate = CreateFrame('Frame', nil, entry.bar)
-	entry.gate:SetAllPoints(holder)
+	entry.gate:SetAllPoints(clip)
 	entry.gate:EnableMouse(false)
 	entry.motion = CreateFrame('Frame', nil, entry.gate)
-	entry.motion:SetAllPoints(holder)
+	entry.motion:SetAllPoints(clip)
 	entry.motion:EnableMouse(false)
 	entry.key = MakeKey(entry.motion, level)
 	-- The stem and the lit tick where it meets the line hide with the key.
 	entry.stem = Kit:Solid(entry.key, 'white', 'BACKGROUND', -4, 0.55)
 	entry.tick = Kit:Solid(entry.key, 'lamp', 'OVERLAY', 4)
-	entry.pinGate = CreateFrame('Frame', nil, entry.bar)
-	entry.pinGate:SetAllPoints(holder)
-	entry.pinGate:EnableMouse(false)
-	entry.pin = MakeKey(entry.pinGate, level)
 	entry.bar:Hide()
 	entries[index] = entry
 	return entry
@@ -318,26 +317,30 @@ end
 local function LayoutEntry(entry)
 	local db, m = DB(), metrics
 	if not m then return end
-	entry.bar:SetOrientation(m.vertical and 'VERTICAL' or 'HORIZONTAL')
-	entry.bar:SetReverseFill(db.reverse and true or false)
-	entry.bar:SetMinMaxValues(0, max(db.maxTime or 60, 1))
+	local bar = entry.bar
+	bar:SetOrientation(m.vertical and 'VERTICAL' or 'HORIZONTAL')
+	bar:SetReverseFill(db.reverse and true or false)
+	bar:SetMinMaxValues(0, max(db.maxTime or 60, 1) * RANGE)
+	-- From the zero end, RANGE times the line's length, on the line.
+	bar:ClearAllPoints()
+	local zero = m.vertical and (db.reverse and 'TOP' or 'BOTTOM') or (db.reverse and 'RIGHT' or 'LEFT')
+	bar:SetPoint(zero, lane, zero, 0, 0)
+	if m.vertical then bar:SetSize(m.px, m.length * RANGE) else bar:SetSize(m.length * RANGE, m.px) end
 	entry.point:ClearAllPoints()
-	entry.point:SetPoint('CENTER', entry.bar:GetStatusBarTexture(), Edge())
+	entry.point:SetPoint('CENTER', bar:GetStatusBarTexture(), Edge())
 	SizeKey(entry.key, m, true)
-	SizeKey(entry.pin, m, false)
 	entry.tick:ClearAllPoints()
 	entry.tick:SetSize(3 * m.px, 3 * m.px)
 	entry.tick:SetPoint('CENTER', entry.point, 'CENTER', 0, 0)
-	if entry.sNow then PlaceCell(entry.key, entry.point, entry.sNow, entry.aNow or 0, m, entry.stem) end
-	if entry.pinS then PlaceCell(entry.pin, farPoint, entry.pinS, entry.pinA or 0, m) end
+	if entry.sNow then PlaceCell(entry.key, entry.point, entry.sNow, 0, m, entry.stem) end
 end
 
 -- Lanes -------------------------------------------------------------------------------
 local prevLane = {} -- identity -> the lane it had, so keys keep their lane when they can
 local laneNow = {} -- identity -> where its key is now, carried across rebuilds
 
--- Work out every key's lane, and the grid at the far end. Cheap: a dozen
--- entries, a few lanes.
+-- Work out every visible key's lane. Cheap: a dozen entries, a few lanes.
+-- Keys still beyond the line take no room; they keep the lane they had.
 local function Arrange()
 	local m = metrics
 	if not m or active == 0 then return end
@@ -351,40 +354,18 @@ local function Arrange()
 		end
 		return true
 	end
-	local function Take(k, lo, hi) local list = busy[k]; list[#list + 1] = {lo, hi} end
-	local slot = 0
-	local function NextSlot()
-		slot = slot + 1
-		return (slot - 1) % lanes + 1, floor((slot - 1) / lanes)
-	end
-	-- The far end first: timers waiting there, then lasting buffs (those known
-	-- to last, then those a secret may pin), in one tidy grid.
 	local known, unknown = {}, {}
 	for index = 1, active do
 		local entry = entries[index]
-		entry.lane, entry.col, entry.pinLane, entry.pinCol = nil, nil, nil, nil
-		if not entry.pinned then
-			local left = entry.estimate
-			if left and left >= maxTime then
-				local k, col = NextSlot()
-				entry.lane, entry.col = k, col
-				Take(k, length + col * m.step - half, length + col * m.step + half)
-			elseif left then
-				entry.pos = length * left / maxTime
-				known[#known + 1] = entry
-			else
-				unknown[#unknown + 1] = entry
-			end
-		end
-	end
-	for pass = 1, 2 do
-		for index = 1, active do
-			local entry = entries[index]
-			if (pass == 1 and entry.pinned) or (pass == 2 and entry.maybePinned) then
-				local k, col = NextSlot()
-				entry.pinLane, entry.pinCol = k, col
-				Take(k, length + col * m.step - half, length + col * m.step + half)
-			end
+		local left = entry.estimate
+		if left and left > maxTime then
+			local had = entry.identity and prevLane[entry.identity]
+			entry.lane = (had and had <= lanes) and had or 1
+		elseif left then
+			entry.pos = length * left / maxTime
+			known[#known + 1] = entry
+		else
+			unknown[#unknown + 1] = entry
 		end
 	end
 	-- Keys on the line, nearest zero first: the lane they had if it is still
@@ -402,27 +383,21 @@ local function Arrange()
 			choice = 1
 			for k = 2, lanes do if #busy[k] < #busy[choice] then choice = k end end
 		end
-		entry.lane, entry.col = choice, 0
-		Take(choice, lo, hi)
+		entry.lane = choice
+		local list = busy[choice]
+		list[#list + 1] = {lo, hi}
 	end
 	-- No time to read at all: lanes in turn.
-	for order, entry in ipairs(unknown) do entry.lane, entry.col = (order - 1) % lanes + 1, 0 end
+	for order, entry in ipairs(unknown) do entry.lane = (order - 1) % lanes + 1 end
 	for index = 1, active do
 		local entry = entries[index]
-		if entry.lane then
-			entry.sGoal, entry.aGoal = LaneStart(m, entry.lane), entry.col * m.step
-			if entry.identity then prevLane[entry.identity] = entry.lane end
-			if entry.sNow == nil then
-				-- New: slide in from a little further out.
-				local fresh = entry.fresh and not Reduced()
-				entry.sNow = entry.sGoal + (fresh and (entry.sGoal >= 0 and 8 or -8) or 0)
-				entry.aNow = entry.aGoal
-				PlaceCell(entry.key, entry.point, entry.sNow, entry.aNow, m, entry.stem)
-			end
-		end
-		if entry.pinLane then
-			entry.pinS, entry.pinA = LaneStart(m, entry.pinLane), entry.pinCol * m.step
-			PlaceCell(entry.pin, farPoint, entry.pinS, entry.pinA, m)
+		entry.sGoal = LaneStart(m, entry.lane or 1)
+		if entry.identity then prevLane[entry.identity] = entry.lane end
+		if entry.sNow == nil then
+			-- New: slide in from a little further out.
+			local fresh = entry.fresh and not Reduced()
+			entry.sNow = entry.sGoal + (fresh and (entry.sGoal >= 0 and 8 or -8) or 0)
+			PlaceCell(entry.key, entry.point, entry.sNow, 0, m, entry.stem)
 		end
 	end
 end
@@ -430,18 +405,17 @@ end
 -- Ease each key toward its lane.
 local function Ease(entry, elapsed)
 	if not (entry.sGoal and entry.sNow) then return end
-	local ds, da = entry.sGoal - entry.sNow, (entry.aGoal or 0) - (entry.aNow or 0)
-	if abs(ds) < 0.05 and abs(da) < 0.05 then
-		if ds ~= 0 or da ~= 0 then
-			entry.sNow, entry.aNow = entry.sGoal, entry.aGoal
-			PlaceCell(entry.key, entry.point, entry.sNow, entry.aNow, metrics, entry.stem)
+	local ds = entry.sGoal - entry.sNow
+	if abs(ds) < 0.05 then
+		if ds ~= 0 then
+			entry.sNow = entry.sGoal
+			PlaceCell(entry.key, entry.point, entry.sNow, 0, metrics, entry.stem)
 			if entry.identity then laneNow[entry.identity] = entry.sNow end
 		end
 		return
 	end
-	local k = Reduced() and 1 or min(1, elapsed * 12)
-	entry.sNow, entry.aNow = entry.sNow + ds * k, (entry.aNow or 0) + da * k
-	PlaceCell(entry.key, entry.point, entry.sNow, entry.aNow, metrics, entry.stem)
+	entry.sNow = entry.sNow + ds * (Reduced() and 1 or min(1, elapsed * 12))
+	PlaceCell(entry.key, entry.point, entry.sNow, 0, metrics, entry.stem)
 	if entry.identity then laneNow[entry.identity] = entry.sNow end
 end
 
@@ -482,8 +456,19 @@ local function Tick(entry, now)
 		elseif entry.estimate and entry.estimate >= 60 then text:SetText(TimeText(entry.estimate))
 		elseif secret then text:SetFormattedText('%.1f', value) end -- the widget formats a secret; no Lua reads it
 	end
-	-- Running out: the glow behind the key pulses.
+	-- Arriving: a time read (or estimated) crossing onto the line from beyond
+	-- it fades the key in with a short lamp flash as it comes past the clip.
 	local left = remaining or entry.estimate
+	if left then
+		local beyond = left > max(db.maxTime or 60, 1)
+		if entry.beyond and not beyond and not Reduced() then
+			entry.motion:SetAlpha(0)
+			Kit:FadeTo(entry.motion, 1, 'FAST')
+			if Kit.Flash then Kit:Flash(entry.key, {token = 'lamp', alpha = 0.55, duration = 0.3}) end
+		end
+		entry.beyond = beyond
+	end
+	-- Running out: the glow behind the key pulses.
 	local soon = left and left > 0 and left < 3 and not Reduced()
 	if soon then
 		entry.key.glow:SetAlpha(0.25 + 0.4 * (0.5 + 0.5 * sin(now * 10)))
@@ -558,8 +543,8 @@ local function KnownLong(id, spellID)
 end
 
 -- Auras seen plainly lasting until cancelled (a seal, an aura, a form), by
--- aura and by spell: in a fight, where their length is secret, they are known
--- to be pinned rather than only maybe.
+-- aura and by spell: in a fight, where their length is secret, they are still
+-- known to stay off the line.
 local lastingAuras, lastingSpells, lastingCount = {}, {}, 0
 local function RememberLasting(id, spellID)
 	if lastingCount > 400 then wipe(lastingAuras); wipe(lastingSpells); lastingCount = 0 end
@@ -750,41 +735,27 @@ end
 local function Clear(entry)
 	entry.bar:Hide()
 	entry.duration, entry.expires, entry.identity, entry.last, entry.popped = nil, nil, nil, nil, nil
-	entry.estimate, entry.pinned, entry.maybePinned, entry.pulsing = nil, nil, nil, nil
-	entry.lane, entry.pinLane, entry.sGoal, entry.sNow, entry.pinS = nil, nil, nil, nil, nil
+	entry.estimate, entry.pulsing, entry.beyond, entry.lane, entry.sGoal, entry.sNow = nil, nil, nil, nil, nil, nil
 end
 
 -- Every field an entry had is reset here, so a reused entry carries nothing
--- (timer, gate alphas, lane, pin) over from what it showed before.
+-- (timer, gate alphas, lane) over from what it showed before.
 local function Assign(entry, item, seen)
 	entry.duration, entry.expires, entry.popped, entry.last = item.duration, item.expires, nil, nil
-	entry.identity, entry.estimate, entry.pulsing = item.identity, nil, nil
-	entry.pinned = item.pinned and true or nil
-	entry.maybePinned = (item.hasZero and not item.noPin) and true or nil
-	entry.lane, entry.col, entry.pinLane, entry.pinCol, entry.sGoal, entry.aGoal = nil, nil, nil, nil, nil, nil
-	entry.pinS, entry.pinA = nil, nil
+	entry.identity, entry.estimate, entry.pulsing, entry.beyond = item.identity, nil, nil, nil
+	entry.lane, entry.sGoal = nil, nil
 	-- Where its key is: carried over for an aura seen before, else it slides in.
 	local id = item.identity
 	entry.sNow = id and laneNow[id] or nil
-	entry.aNow = nil
 	entry.fresh = (id ~= nil and not seen[id]) and true or nil
 	Dress(entry.key, item, entry, 'surface')
-	Dress(entry.pin, item, entry, 'pinSurface')
-	entry.bar:SetMinMaxValues(0, max(DB().maxTime or 60, 1))
-	entry.bar:SetValue(item.pinned and 0 or max(DB().maxTime or 60, 1), IMMEDIATE)
-	-- Which key shows: plain answers set it outright; a secret "lasts forever"
-	-- reaches the two gates' alphas, untested.
-	if item.pinned then
-		entry.gate:SetAlpha(0)
-		entry.pinGate:SetAlpha(1)
-	elseif item.hasZero and entry.gate.SetAlphaFromBoolean then
-		entry.gate:SetAlphaFromBoolean(item.zeroFlag, 0, 1)
-		if item.noPin then entry.pinGate:SetAlpha(0)
-		else entry.pinGate:SetAlphaFromBoolean(item.zeroFlag, 1, 0) end
-	else
-		entry.gate:SetAlpha(1)
-		entry.pinGate:SetAlpha(0)
-	end
+	local top = max(DB().maxTime or 60, 1) * RANGE
+	entry.bar:SetMinMaxValues(0, top)
+	-- Until its first tick, the key waits out of sight past the line.
+	entry.bar:SetValue(top, IMMEDIATE)
+	-- A secret "lasts forever" reaches the gate's alpha, untested.
+	entry.gate:SetAlpha(1)
+	if item.hasZero and entry.gate.SetAlphaFromBoolean then entry.gate:SetAlphaFromBoolean(item.zeroFlag, 0, 1) end
 	-- "Is it running" and "is it only the global cooldown", when secret.
 	if item.hasActive and entry.key.SetAlphaFromBoolean then entry.key:SetAlphaFromBoolean(item.activeFlag, 1, 0) end
 	if item.hasGCD and entry.key.face.SetAlphaFromBoolean then entry.key.face:SetAlphaFromBoolean(item.gcdFlag, 0, 1) end
@@ -796,8 +767,6 @@ local function Assign(entry, item, seen)
 		entry.motion:SetAlpha(1)
 	end
 	LayoutEntry(entry)
-	entry.pin:ClearAllPoints()
-	entry.pin:SetPoint('CENTER', farPoint, 'CENTER', 0, 0)
 	entry.bar:Show()
 end
 
@@ -933,7 +902,28 @@ local function LayoutTrack()
 	local farSide = m.vertical and (db.reverse and 'BOTTOM' or 'TOP') or (db.reverse and 'LEFT' or 'RIGHT')
 	caps.zero:ClearAllPoints(); caps.zero:SetSize(7, 7); caps.zero:SetPoint('CENTER', lane, zeroPoint)
 	caps.far:ClearAllPoints(); caps.far:SetSize(4, 4); caps.far:SetPoint('CENTER', lane, farSide)
-	farPoint:ClearAllPoints(); farPoint:SetPoint('CENTER', lane, farSide)
+	-- The clip: exactly the line, plus a key's overhang (and its glow) at the
+	-- zero end and half a key at the far end, so a key whose time left is the
+	-- line's length still shows whole and anything longer slides out of sight.
+	-- Across, it holds every lane.
+	local over, farOver = m.cellAlong / 2 + 8, m.cellAlong / 2 + 1
+	local up, down = upExt + 8, downExt + 8
+	clip:ClearAllPoints()
+	if m.vertical then
+		if db.reverse then
+			clip:SetPoint('TOPLEFT', lane, 'TOP', -down, over)
+			clip:SetPoint('BOTTOMRIGHT', lane, 'TOP', up, -(length + farOver))
+		else
+			clip:SetPoint('BOTTOMLEFT', lane, 'BOTTOM', -down, -over)
+			clip:SetPoint('TOPRIGHT', lane, 'BOTTOM', up, length + farOver)
+		end
+	elseif db.reverse then
+		clip:SetPoint('BOTTOMRIGHT', lane, 'RIGHT', over, -down)
+		clip:SetPoint('TOPLEFT', lane, 'RIGHT', -(length + farOver), up)
+	else
+		clip:SetPoint('BOTTOMLEFT', lane, 'LEFT', -over, -down)
+		clip:SetPoint('TOPRIGHT', lane, 'LEFT', length + farOver, up)
+	end
 	-- Labelled marks, and minor ticks between them on the linear scale.
 	local maxTime = max(db.maxTime or 60, 1)
 	local labelled, isLabel = {}, {}
@@ -957,7 +947,6 @@ local function LayoutTrack()
 	for index = count + 1, #minors do minors[index].tex:Hide() end
 	for index, entry in ipairs(entries) do
 		entry.sNow = entry.sGoal or entry.sNow
-		entry.aNow = entry.aGoal or entry.aNow
 		if index <= active then LayoutEntry(entry) end
 	end
 	UI:Safe(Arrange)
@@ -973,8 +962,10 @@ local function Build()
 	line:SetColorTexture(1, 1, 1, 0.85)
 	line.shadow = holder:CreateTexture(nil, 'BACKGROUND')
 	line.shadow:SetColorTexture(0, 0, 0, 0.55)
-	farPoint = CreateFrame('Frame', nil, holder)
-	farPoint:SetSize(1, 1)
+	clip = CreateFrame('Frame', nil, holder)
+	clip:SetClipsChildren(true)
+	clip:EnableMouse(false)
+	clip:SetFrameLevel(holder:GetFrameLevel() + 4)
 	-- The end caps are small frames, so a flash can be laid on them. Zero is a
 	-- lit lamp with its glow: "now".
 	local function Cap()
@@ -995,10 +986,11 @@ local function Build()
 	LayoutTrack()
 	UI:RegisterMover(holder, 'tl.player', 'Aura timeline', {'BOTTOM', -228, 330})
 
-	-- Placing it: made-up entries counting down so the track and its stacking show.
+	-- Placing it: made-up entries counting down so the track and its stacking
+	-- show; the last one waits past the line and arrives after a few seconds.
 	local fakes = {
 		{7.8, 'help', 136243}, {9.5, 'harm', 135987, 3}, {24, 'cooldown', 136085},
-		{960, 'help', 135932}, {240, 'help', 136116}, {false, 'help', 135961},
+		{38, 'help', 135932}, {66, 'help', 136116},
 	}
 	function holder:SetPreview(on)
 		preview = on and true or false
@@ -1008,7 +1000,7 @@ local function Build()
 		for index, fake in ipairs(fakes) do
 			local entry = entries[index] or NewEntry(index)
 			local item = {icon = fake[3], kind = fake[2], apps = fake[4], identity = 'preview'..index}
-			if fake[1] then item.expires, item.length = stamp + fake[1], fake[1] else item.pinned = true end
+			item.expires, item.length = stamp + fake[1], fake[1]
 			UI:Safe(Assign, entry, item, {})
 		end
 		for index = #fakes + 1, #entries do Clear(entries[index]) end
@@ -1057,9 +1049,10 @@ local function Seconds(value) return value >= 60 and format('%dm %02ds', floor(v
 local function Whole(value) return tostring(value) end
 UI:RegisterPage('timeline', {title = 'Aura timeline', order = 12.5, cards = {
 	{title = 'Timeline', rows = {
-		{'switch', 'Aura timeline', 'timeline.enable', 'Your buffs ride a line toward zero as they run out, each on a key with its time under it.', since = '0.5.0'},
-		{'dropdown', 'Buffs', 'timeline.buffs', items = {{'mine', 'Yours'}, {'all', 'All'}, {'off', 'None'}}, disabled = Off},
-		{'slider', 'Longest buff', 'timeline.longBuffs', 0, 3600, 30, 'Optional: buffs that last longer than this stay off the line. At All, long buffs wait at the far end and buffs that last until cancelled (a seal, an aura) are pinned past it.',
+		{'switch', 'Aura timeline', 'timeline.enable', 'The abilities you use and your cooldowns ride a line toward zero, each on a key with its time under it.', since = '0.5.0'},
+		{'dropdown', 'Buffs', 'timeline.buffs', items = {{'mine', 'Yours'}, {'all', 'All'}, {'off', 'None'}}, disabled = Off,
+			note = 'Yours: auras you cast. All: every timed buff on you.'},
+		{'slider', 'Longest buff', 'timeline.longBuffs', 0, 3600, 30, 'Optional: buffs that last longer than this are never tracked. At All, every timed buff is tracked and shows once its time left drops onto the line.',
 			format = function(value) if value == 0 then return 'All' end return value >= 60 and format('%dm', floor(value / 60)) or format('%ds', value) end,
 			disabled = Off, since = '0.5.1'},
 		{'switch', 'Debuffs on you', 'timeline.debuffs', 'Harmful auras on charcoal keys with a red edge.', disabled = Off},
@@ -1067,7 +1060,7 @@ UI:RegisterPage('timeline', {title = 'Aura timeline', order = 12.5, cards = {
 		{'slider', 'Shortest cooldown', 'timeline.minCooldown', 0, 30, 1, 'Shorter ones are left out when the game tells their length.',
 			format = Seconds, hidden = function() return not DB().cooldowns end},
 		{'input', 'Hidden spells', 'timeline.blacklist', 'Spell IDs to leave off, separated by commas.'},
-		{'note', 'The line is linear: a key\'s distance from zero is its time left. Keys that would overlap stack into lanes. Times longer than the line wait at its far end, and buffs that last until cancelled (a seal, an aura) are stacked just past it. The game moves the keys itself, so they keep working when it hides exact times in combat.'},
+		{'note', 'The line is linear: a key\'s distance from zero is its time left. Only what is on the line shows: a longer timer slides on once its time left drops below the line\'s length, and auras that last until cancelled (a seal, an aura) never show. Keys that would overlap stack into lanes. The game moves the keys itself, so this keeps working when it hides exact times in combat.'},
 	}},
 	{title = 'Keys', rows = {
 		{'slider', 'Key size', 'timeline.iconSize', 16, 40, 1, nil, format = Whole},
