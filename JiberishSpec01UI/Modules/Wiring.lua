@@ -10,8 +10,13 @@
 --   * Links: player to target, target to its target, player to pet or focus,
 --     unit frames to the console, the aura timeline to the player, the game's
 --     swing timers to the console.
---   * Rails: a bus along the bottom of the screen (and optionally the top) with
---     risers up into every device that sits near it, like a backplane.
+--   * Chassis: dark hairline buses along the screen's edges (bottom, and the
+--     left and right edges, optionally the top) with a short right-angle feed
+--     from each device to its nearest bus, ending in a keyed plug at the
+--     device's edge and a pad on the bus, so the whole interface hangs on one
+--     frame of lines. Feeds never cross a device: blocked ones step along the
+--     edge, or chain into the device in the way. The older rails (a bus with
+--     risers) stand down while the chassis is on.
 --   * States: a new target draws its trace in from the player with a lit
 --     capsule at its head, then holds it lit in the target's reaction color
 --     (hostile red, friendly green, neutral amber) and its LEDs on; losing the
@@ -35,8 +40,10 @@ local module = UI:RegisterModule('wiring', {always = true})
 
 -- defaults:begin
 UI:RegisterDefaults('wiring', {enable = true, style = 'traces', target = true, tot = true, pet = true, focus = false,
-	console = true, timeline = true, swing = true, topRail = false, thickness = 2, opacity = 0.85, pulses = true,
-	speed = 700, casing = true, nodes = true, labels = true, dashed = true, ambient = true})
+	console = true, timeline = false, swing = true, topRail = false, thickness = 2, opacity = 0.85, pulses = true,
+	speed = 700, casing = true, nodes = true, labels = true, dashed = false, ambient = true,
+	chassis = true, chassisDensity = 'standard', chassisBottom = true, chassisTop = false, chassisLeft = true,
+	chassisRight = true, chassisFull = true, chassisColor = 'black', chassisThickness = 1, chassisMoved = false})
 -- defaults:end
 
 local function DB() return UI.db.wiring end
@@ -120,10 +127,10 @@ end
 
 -- Parts ---------------------------------------------------------------------------------
 -- Pieces are made as a wire first needs them and kept for reuse.
-local function Line(list, index, sublevel)
+local function Line(list, index, sublevel, layer)
 	local line = list[index]
 	if not line then
-		line = root:CreateLine(nil, 'ARTWORK', nil, sublevel)
+		line = root:CreateLine(nil, layer or 'ARTWORK', nil, sublevel)
 		line:SetColorTexture(1, 1, 1, 1)
 		list[index] = line
 	end
@@ -168,10 +175,10 @@ local LABELS = {
 	['console.player'] = 'UF-1 · CX-1', ['console.target'] = 'UF-2 · CX-1', timeline = 'UF-1 · TL-1', rail = 'BUS',
 }
 
-local function Wire(key)
+local function Wire(key, kind)
 	local wire = wires[key]
-	if wire then return wire end
-	wire = {key = key, casing = {}, core = {}, dashes = {}, pads = {}, lits = {}, ends = {}, fraction = 1,
+	if wire then wire.kind = kind or wire.kind return wire end
+	wire = {key = key, kind = kind, casing = {}, core = {}, dashes = {}, pads = {}, lits = {}, ends = {}, fraction = 1,
 		token = 'darkInk', alpha = 0.85, active = false, shown = false}
 	wires[key] = wire
 	return wire
@@ -219,7 +226,9 @@ local function Outward(wire, atEnd)
 	return dx / length, dy / length
 end
 
+local DrawChassis
 local function Paint(wire)
+	if wire.kind == 'chassis' then return DrawChassis(wire) end
 	local db = DB()
 	local r, g, b = Kit:RGB(wire.token)
 	for _, line in ipairs(wire.core) do line:SetVertexColor(r, g, b, wire.alpha) end
@@ -264,8 +273,88 @@ local function Dashes(wire, used, ax, ay, bx, by, thickness)
 	return used
 end
 
+-- Chassis lines: a dark core with a faint lit edge on one side, square pads at
+-- corners and junctions, and a keyed plug where a feed meets its device.
+local CHASSIS_COLORS = {
+	black = function() return 0.05, 0.05, 0.05, 0.92, 1, 1, 1, 0.22 end,
+	ink = function() local r, g, b = Kit:RGB('darkInk') return r, g, b, 0.8, 0, 0, 0, 0.5 end,
+	key = function() local r, g, b = Kit:RGB('lamp') return r, g, b, 0.9, 1, 1, 1, 0.3 end,
+}
+function DrawChassis(wire)
+	local db = DB()
+	local points = wire.points
+	local count = points and wire.shown and #points or 0
+	local cr, cg, cb, ca, hr, hg, hb, ha = (CHASSIS_COLORS[db.chassisColor] or CHASSIS_COLORS.black)()
+	local core = Px(max(1, db.chassisThickness or 1))
+	local edge = Px(1)
+	local shift = core / 2 + edge / 2
+	for index = 1, max(count - 1, #wire.core) do
+		local coreLine, litLine = wire.core[index], wire.casing[index]
+		if index < count then
+			local a, b = points[index], points[index + 1]
+			local across = abs(b[2] - a[2]) < abs(b[1] - a[1])
+			local dx, dy = across and 0 or -shift, across and shift or 0
+			coreLine = Line(wire.core, index, 1, 'BORDER')
+			coreLine:SetThickness(core)
+			coreLine:SetStartPoint('BOTTOMLEFT', root, a[1], a[2])
+			coreLine:SetEndPoint('BOTTOMLEFT', root, b[1], b[2])
+			coreLine:SetVertexColor(cr, cg, cb, ca)
+			coreLine:Show()
+			litLine = Line(wire.casing, index, 0, 'BORDER')
+			litLine:SetThickness(edge)
+			litLine:SetStartPoint('BOTTOMLEFT', root, a[1] + dx, a[2] + dy)
+			litLine:SetEndPoint('BOTTOMLEFT', root, b[1] + dx, b[2] + dy)
+			litLine:SetVertexColor(hr, hg, hb, ha)
+			litLine:Show()
+		else
+			if coreLine then coreLine:Hide() end
+			if litLine then litLine:Hide() end
+		end
+	end
+	-- Pads on every corner and at the bus end of a feed (a feed's first point is its plug).
+	local padSize, used = Px(4), 0
+	for index = 1, count do
+		if not (wire.feed and index == 1) and (index > 1 and index < count or wire.feed or wire.bus) then
+			used = used + 1
+			local pad, lit = Square(wire.pads, used, 4), Square(wire.lits, used, 5)
+			pad:SetSize(padSize, padSize)
+			pad:ClearAllPoints()
+			pad:SetPoint('CENTER', root, 'BOTTOMLEFT', points[index][1], points[index][2])
+			pad:SetVertexColor(cr * 0.6, cg * 0.6, cb * 0.6, 1)
+			lit:SetSize(padSize, edge)
+			lit:ClearAllPoints()
+			lit:SetPoint('TOP', pad, 'TOP')
+			lit:SetVertexColor(hr, hg, hb, ha + 0.15)
+			pad:Show(); lit:Show()
+		end
+	end
+	for index = used + 1, #wire.pads do wire.pads[index]:Hide(); wire.lits[index]:Hide() end
+	-- The plug at the device's edge.
+	if wire.feed and count > 0 then
+		local node = Node(wire, 1)
+		local ox, oy = Outward(wire, false)
+		local length, width = Px(6), Px(4)
+		local across = abs(ox) > abs(oy)
+		node.plug:SetSize(across and length or width, across and width or length)
+		node.plug:ClearAllPoints()
+		node.plug:SetPoint('CENTER', root, 'BOTTOMLEFT', points[1][1] + ox * length / 2, points[1][2] + oy * length / 2)
+		node.plug:SetVertexColor(cr * 0.6, cg * 0.6, cb * 0.6, 1)
+		node.key:SetSize(across and Px(2) or edge, across and edge or Px(2))
+		node.key:ClearAllPoints()
+		node.key:SetPoint('CENTER', node.plug, 'CENTER')
+		node.key:SetVertexColor(hr, hg, hb, ha + 0.25)
+		node.plug:Show(); node.key:Show()
+		node.ring:Hide(); node.lamp:Hide(); node.glow:Hide()
+	elseif wire.ends[1] then
+		HideNode(wire.ends[1])
+	end
+	if wire.ends[2] then HideNode(wire.ends[2]) end
+	if wire.label then wire.label:Hide() end
+end
+
 -- Lay the wire out up to its drawn fraction (from its start).
 local function Draw(wire)
+	if wire.kind == 'chassis' then return DrawChassis(wire) end
 	local db = DB()
 	local points = wire.points
 	local count = points and wire.shown and #points or 0
@@ -537,9 +626,174 @@ local function Rails(byKey, list)
 	if db.topRail then Rail('rail.top', Snap(height - edge * 2), false) end
 end
 
+-- Chassis ------------------------------------------------------------------------------
+-- Which devices hang on the chassis at each density.
+local STANDARD = {'^chat$', '^ab%.', '^dm%.', '^ip%.', '^bags%.', '^tl%.', '^uf%.player$', '^uf%.target$', '^minimap$',
+	'^objectives$', '^buffs$'}
+local function Wanted(key, density)
+	if density == 'minimal' then return false end
+	if density == 'full' then return true end
+	for _, pattern in ipairs(STANDARD) do if key:find(pattern) then return true end end
+	return false
+end
+
+-- Devices on screen: our movers plus the game's chat, minimap, tracker and buffs.
+local function Devices(byKey)
+	local list = {}
+	local function Add(key, frame)
+		Watch(frame)
+		local rect = Rect(frame)
+		if rect and rect.r - rect.l >= 12 and rect.t - rect.b >= 8 then list[#list + 1] = {key = key, rect = rect} end
+	end
+	for key, entry in pairs(byKey) do
+		if not entry.docked then Add(key, entry.frame) end
+	end
+	Add('chat', _G.ChatFrame1)
+	Add('minimap', _G.Minimap)
+	Add('objectives', _G.ObjectiveTrackerFrame)
+	Add('buffs', _G.BuffFrame)
+	return list
+end
+
+-- Whether an upright or level run crosses any device but the ones named.
+local function Blocked(devices, x1, y1, x2, y2, skip, margin)
+	local lowX, highX, lowY, highY = min(x1, x2), max(x1, x2), min(y1, y2), max(y1, y2)
+	for _, device in ipairs(devices) do
+		local r = device.rect
+		if device ~= skip and highX > r.l - margin and lowX < r.r + margin and highY > r.b - margin and lowY < r.t + margin then
+			return device
+		end
+	end
+	return nil
+end
+
+local FRACTIONS = {0.5, 0.3, 0.7, 0.15, 0.85}
+
+-- Every chassis line, by key, into `live`; feeds recorded by device key.
+local feeds = {}
+local function Chassis(byKey, live)
+	local db = DB()
+	wipe(feeds)
+	local width, height = root:GetSize()
+	local inset = Px(6)
+	local L, R, B, T = Snap(inset), Snap(width - inset), Snap(inset), Snap(height - inset)
+	local density = db.chassisDensity or 'standard'
+	local devices = Devices(byKey)
+	local sides = {bottom = db.chassisBottom, top = db.chassisTop, left = db.chassisLeft, right = db.chassisRight}
+	local used = {bottom = {}, top = {}, left = {}, right = {}}
+	local reach = {left = 0, right = 0}
+	local spacing, margin = Px(8), Px(2)
+	local function Free(side, at)
+		for _, other in ipairs(used[side]) do if abs(other - at) < spacing then return false end end
+		return true
+	end
+	for _, device in ipairs(devices) do
+		if Wanted(device.key, density) then
+			local r = device.rect
+			-- The nearest bus that is on.
+			local choices = {}
+			if sides.bottom then choices[#choices + 1] = {'bottom', r.b - B} end
+			if sides.top then choices[#choices + 1] = {'top', T - r.t} end
+			if sides.left then choices[#choices + 1] = {'left', r.l - L} end
+			if sides.right then choices[#choices + 1] = {'right', R - r.r} end
+			table.sort(choices, function(a, b) return a[2] < b[2] end)
+			local placed = false
+			for _, choice in ipairs(choices) do
+				local side = choice[1]
+				if choice[2] > Px(4) then
+					for _, fraction in ipairs(FRACTIONS) do
+						local x1, y1, x2, y2
+						if side == 'bottom' or side == 'top' then
+							x1 = Snap(r.l + (r.r - r.l) * fraction)
+							x2 = x1
+							if side == 'bottom' then y1, y2 = Snap(r.b), B else y1, y2 = Snap(r.t), T end
+						else
+							y1 = Snap(r.b + (r.t - r.b) * fraction)
+							y2 = y1
+							if side == 'left' then x1, x2 = Snap(r.l), L else x1, x2 = Snap(r.r), R end
+						end
+						local along = (side == 'bottom' or side == 'top') and x1 or y1
+						if Free(side, along) then
+							local blocker = Blocked(devices, x1, y1, x2, y2, device, margin)
+							if not blocker then
+								used[side][#used[side] + 1] = along
+								live['ch.'..device.key] = {kind = 'chassis', feed = true, points = {{x1, y1}, {x2, y2}}}
+								feeds[device.key] = {bus = (side == 'top') and 'ch.top' or 'ch.main', x = x2, y = y2}
+								if side == 'left' or side == 'right' then reach[side] = max(reach[side], y2) end
+								placed = true
+							elseif fraction == FRACTIONS[#FRACTIONS] and (side == 'bottom' or side == 'top') then
+								-- No clear column: chain into the device in the way instead.
+								local br = blocker.rect
+								local cx = Snap(min(max(x1, br.l + Px(6)), br.r - Px(6)))
+								local cy = side == 'bottom' and Snap(br.t) or Snap(br.b)
+								live['ch.'..device.key] = {kind = 'chassis', feed = true, points = {{cx, y1}, {cx, cy}}}
+								placed = true
+							end
+						end
+						if placed then break end
+					end
+				end
+				if placed then break end
+			end
+		end
+	end
+	-- The buses: bottom across (turning up the left and right edges), top across.
+	local full = db.chassisFull or density == 'minimal'
+	local leftTop = density == 'minimal' and (sides.top and T or Snap(height * 0.6)) or max(reach.left, Snap(height * 0.25))
+	local rightTop = density == 'minimal' and (sides.top and T or Snap(height * 0.6)) or max(reach.right, Snap(height * 0.25))
+	if sides.top then leftTop, rightTop = T, T end
+	local lowX, highX = R, L
+	for _, at in ipairs(used.bottom) do lowX, highX = min(lowX, at), max(highX, at) end
+	local main = {}
+	if sides.left then main[#main + 1] = {L, leftTop}; main[#main + 1] = {L, B}
+	elseif sides.bottom then main[#main + 1] = {full and L or Snap(lowX - Px(12)), B} end
+	if sides.bottom or (sides.left and sides.right) then
+		if sides.right then main[#main + 1] = {R, B}; main[#main + 1] = {R, rightTop}
+		else main[#main + 1] = {full and R or Snap(highX + Px(12)), B} end
+	elseif sides.right then main = {{R, B}, {R, rightTop}} end
+	if #main >= 2 and (full or #used.bottom > 0 or #used.left > 0 or #used.right > 0) then
+		live['ch.main'] = {kind = 'chassis', bus = true, points = main}
+	end
+	if sides.top then live['ch.top'] = {kind = 'chassis', bus = true, points = {{L, T}, {R, T}}} end
+end
+
+-- How far along a wire a point on it lies.
+local function DistanceOn(wire, x, y)
+	local points, cum = wire.points, wire.cum
+	if not points then return nil end
+	local best, bestGap
+	for index = 2, #points do
+		local a, b = points[index - 1], points[index]
+		local lowX, highX, lowY, highY = min(a[1], b[1]), max(a[1], b[1]), min(a[2], b[2]), max(a[2], b[2])
+		local cx, cy = min(max(x, lowX), highX), min(max(y, lowY), highY)
+		local gap = abs(cx - x) + abs(cy - y)
+		if not bestGap or gap < bestGap then
+			bestGap, best = gap, cum[index - 1] + abs(cx - a[1]) + abs(cy - a[2])
+		end
+	end
+	return best
+end
+
+-- A packet down one device's feed, along the bus, and up another's.
+local function Relay(fromKey, toKey, token)
+	local from, to = feeds[fromKey], feeds[toKey]
+	local feedA, feedB = wires['ch.'..fromKey], wires['ch.'..toKey]
+	if not (from and to and from.bus == to.bus and feedA and feedB and feedA.shown and feedB.shown) then return end
+	local bus = wires[from.bus]
+	if not (bus and bus.shown) then return end
+	local d1, d2 = DistanceOn(bus, from.x, from.y), DistanceOn(bus, to.x, to.y)
+	if not (d1 and d2) then return end
+	Pulse(feedA, token, 0, feedA.total, function()
+		Pulse(bus, token, d1, d2, function()
+			Pulse(feedB, token, feedB.total, 0)
+		end)
+	end)
+end
+
 -- State: which wires carry a signal, and in what color.
 local LIVE = {target = true, ['console.player'] = true, ['console.target'] = true}
 local function Restyle(wire)
+	if wire.kind == 'chassis' then return Draw(wire) end
 	local db = DB()
 	local idle = db.opacity or 0.85
 	wire.token, wire.alpha, wire.active = 'darkInk', idle, false
@@ -568,14 +822,18 @@ local function Rebuild()
 				if points then live[link.key] = points end
 			end
 		end
-		if style ~= 'traces' then
+		if db.chassis then
+			UI:Safe(Chassis, byKey, live)
+		elseif style ~= 'traces' then
 			local list = {}
 			Rails(byKey, list)
 			for _, item in ipairs(list) do live[item.key] = item.points end
 		end
 	end
-	for key, points in pairs(live) do
-		local wire = Wire(key)
+	for key, spec in pairs(live) do
+		local points = spec.points or spec
+		local wire = Wire(key, spec.kind)
+		wire.feed, wire.bus = spec.feed, spec.bus
 		if not wire.retracting then
 			SetPath(wire, points)
 			wire.shown = wire.points ~= nil
@@ -629,6 +887,8 @@ local function TargetChanged()
 			end, function() wire.fraction = 1; Draw(wire) end, 'cubic')
 			Pulse(wire, Reaction(), 0, wire.total)
 		end
+		-- And along the chassis: down the player's feed, along the bus, up the target's.
+		if DB().chassis then Relay('uf.player', 'uf.target', Reaction()) end
 	elseif wire and wire.shown and not Reduced() then
 		wire.retracting = true
 		Kit:Animate(wire, 0.28, wire.fraction or 1, 0, function(value)
@@ -651,7 +911,7 @@ end
 local ticker
 local function PulseLive(token)
 	for key, wire in pairs(wires) do
-		if wire.shown and (LIVE[key] or key == 'rail') then Pulse(wire, token) end
+		if wire.shown and (LIVE[key] or key == 'rail' or key == 'ch.main') then Pulse(wire, token) end
 	end
 end
 
@@ -665,8 +925,10 @@ local function CombatChanged(entering)
 			if fighting then UI:Safe(PulseLive, 'red') end
 		end)
 	else
-		-- One green packet down every trace, then the board settles.
-		for _, wire in pairs(wires) do if wire.shown then Pulse(wire, 'green') end end
+		-- One green packet down every trace and the main bus, then the board settles.
+		for key, wire in pairs(wires) do
+			if wire.shown and (wire.kind ~= 'chassis' or key == 'ch.main') then Pulse(wire, 'green') end
+		end
 	end
 end
 
@@ -677,6 +939,10 @@ function module:Enable()
 		if saved.opacity and saved.opacity <= 0.35 then saved.opacity = 0.85 end
 		if saved.thickness and saved.thickness < 2 then saved.thickness = 2 end
 		saved.upgraded = 1
+	end
+	-- 0.5.2: the chassis joins the board; the timeline trace and dashed idle traces go off. Once.
+	if type(saved) == 'table' and not saved.chassisMoved then
+		saved.chassis, saved.timeline, saved.dashed, saved.chassisMoved = true, false, false, true
 	end
 	root = CreateFrame('Frame', 'JiberishSpec01Wiring', UIParent)
 	root:SetAllPoints()
@@ -732,7 +998,11 @@ function module:Preview(kind)
 		CombatChanged(true)
 		C_Timer.After(3.6, function() if not InCombatLockdown() then CombatChanged(false) end end)
 	else
-		for _, wire in pairs(wires) do if wire.shown then Pulse(wire, wire.active and wire.token or 'lamp') end end
+		for key, wire in pairs(wires) do
+			if wire.shown and (wire.kind ~= 'chassis' or key == 'ch.main' or key == 'ch.top') then
+				Pulse(wire, wire.active and wire.token or 'lamp')
+			end
+		end
 	end
 end
 
@@ -751,6 +1021,19 @@ UI:RegisterPage('wiring', {title = 'Wiring', order = 4.25, cards = {
 		{'button', 'Preview', 'Packets', function() module:Preview('target') end, 'A packet down every trace.'},
 		{'button', 'Preview', 'Fight', function() module:Preview('combat') end, 'A fight starting, then ending a few seconds later.'},
 	}},
+	{title = 'Chassis', rows = {
+		{'switch', 'Chassis', 'wiring.chassis', 'Dark buses along the screen edges with a short feed into every device, so the whole interface hangs on one frame of lines.', disabled = Off, since = '0.5.2'},
+		{'segmented', 'Density', 'wiring.chassisDensity', items = {{'minimal', 'Minimal'}, {'standard', 'Standard'}, {'full', 'Full'}},
+			note = 'Minimal: the buses only. Standard: bars, chat, meters, info panel, bags, minimap, tracker, buffs, timeline, player and target. Full: every device.',
+			disabled = Off, since = '0.5.2'},
+		{'switch', 'Bottom bus', 'wiring.chassisBottom', nil, disabled = Off, since = '0.5.2'},
+		{'switch', 'Left edge', 'wiring.chassisLeft', nil, disabled = Off, since = '0.5.2'},
+		{'switch', 'Right edge', 'wiring.chassisRight', nil, disabled = Off, since = '0.5.2'},
+		{'switch', 'Top bus', 'wiring.chassisTop', nil, disabled = Off, since = '0.5.2'},
+		{'switch', 'Full width', 'wiring.chassisFull', 'The bottom bus spans the whole screen rather than just its devices.', disabled = Off, since = '0.5.2'},
+		{'segmented', 'Color', 'wiring.chassisColor', items = {{'black', 'Black'}, {'ink', 'Ink'}, {'key', 'Key color'}}, disabled = Off, since = '0.5.2'},
+		{'slider', 'Thickness', 'wiring.chassisThickness', 1, 2, 1, 'Width of the dark core in screen pixels.', format = Whole, disabled = Off, since = '0.5.2'},
+	}},
 	{title = 'Look', rows = {
 		{'switch', 'Casing', 'wiring.casing', 'A dark edge under the lit core, so traces read on bright ground.', disabled = Off, since = '0.5.2'},
 		{'switch', 'Nodes', 'wiring.nodes', 'Keyed plugs and lamps at each end, square pads at each elbow.', disabled = Off, since = '0.5.2'},
@@ -768,8 +1051,8 @@ UI:RegisterPage('wiring', {title = 'Wiring', order = 4.25, cards = {
 		{'switch', 'Pet', 'wiring.pet', nil, disabled = Off, since = '0.5.2'},
 		{'switch', 'Focus', 'wiring.focus', nil, disabled = Off, since = '0.5.2'},
 		{'switch', 'Unit frames to console', 'wiring.console', 'When a unit frame isn\'t docked in the console.', disabled = Off, since = '0.5.2'},
-		{'switch', 'Aura timeline', 'wiring.timeline', 'Player frame to the aura timeline, while the timeline is on.', disabled = Off, since = '0.5.2'},
+		{'switch', 'Aura timeline', 'wiring.timeline', 'A signal trace from the player frame to the aura timeline. The chassis feeds the timeline either way.', disabled = Off, since = '0.5.2'},
 		{'switch', 'Swing timers', 'wiring.swing', 'Only while a swing timer is timing.', disabled = Off, since = '0.5.2'},
-		{'switch', 'Top rail', 'wiring.topRail', 'A second bus along the top edge, for the minimap and info panel.', disabled = Off, since = '0.5.2'},
+		{'switch', 'Top rail', 'wiring.topRail', 'Rails style only (when the chassis is off): a second rail along the top edge.', disabled = Off, since = '0.5.2'},
 	}},
 }})
