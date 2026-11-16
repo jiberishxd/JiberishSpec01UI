@@ -39,10 +39,10 @@ local max, min, abs, floor = math.max, math.min, math.abs, math.floor
 local module = UI:RegisterModule('wiring', {always = true})
 
 -- defaults:begin
-UI:RegisterDefaults('wiring', {enable = false, style = 'traces', target = true, tot = true, pet = true, focus = false,
-	console = true, timeline = false, swing = true, topRail = false, thickness = 2, opacity = 0.85, pulses = true,
-	speed = 700, casing = true, nodes = true, labels = true, dashed = false, ambient = true,
-	chassis = true, chassisDensity = 'standard', chassisBottom = true, chassisTop = false, chassisLeft = true,
+UI:RegisterDefaults('wiring', {enable = true, style = 'traces', target = true, tot = false, pet = false, focus = false,
+	console = false, timeline = false, swing = false, topRail = false, thickness = 2, opacity = 0.85, pulses = true,
+	speed = 700, casing = true, nodes = true, labels = false, dashed = false, ambient = false,
+	chassis = false, chassisDensity = 'standard', chassisBottom = true, chassisTop = false, chassisLeft = true,
 	chassisRight = true, chassisFull = true, chassisColor = 'black', chassisThickness = 1, chassisMoved = false})
 -- defaults:end
 
@@ -948,6 +948,13 @@ function module:Enable()
 	-- for everyone once, until a better design replaces them.
 	if type(saved) == 'table' and not saved.offMoved then
 		saved.enable, saved.offMoved = false, true
+	end
+	-- 0.5.2: wiring comes back as one link: player to target, while a target
+	-- exists. Every other trace, the chassis, labels and ambient packets go off. Once.
+	if type(saved) == 'table' and not saved.targetOnly then
+		saved.enable, saved.style, saved.target, saved.chassis = true, 'traces', true, false
+		saved.tot, saved.pet, saved.focus, saved.console, saved.timeline, saved.swing = false, false, false, false, false, false
+		saved.labels, saved.dashed, saved.ambient, saved.targetOnly = false, false, false, true
 	end
 	root = CreateFrame('Frame', 'JiberishSpec01Wiring', UIParent)
 	root:SetAllPoints()
