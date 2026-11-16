@@ -100,6 +100,8 @@ local FRAME_DEFAULTS = {
 	track = 'default', -- 'default' | 'screen' | 'dim' | 'clear'
 	healthColor = 'default', -- 'default' | 'accent' | 'class' | 'gradient' | 'custom'
 	healthCustom = {0.29, 0.64, 1},
+	-- 'gradient2' on this frame: its own stops ('page' follows the page's).
+	healthStops = 'page', healthStart = {0.10, 0.45, 0.28}, healthEnd = {0.47, 0.88, 0.45}, healthDirection = 'horizontal',
 	healthHeight = 5, powerHeight = 3, nameSize = 10, digitsSize = 10,
 	combatLamp = true, sweep = true, arrive = true, rangeFade = false, rangeAlpha = 0.45,
 	auras = false, buffs = true, debuffs = true, onlyMine = false, bossOnly = false,
@@ -133,8 +135,28 @@ UI:RegisterDefaults('unitframes', {
 	castStyle = 'bar',
 	-- Fill looks: 'flat' | 'solid' | 'gloss' | 'gradient' | 'glass' | 'striped' | 'lsm:<name>'.
 	healthTexture = 'flat', powerTexture = 'flat', castTexture = 'flat',
-	-- The track behind the fill: 'default' (the housing) | 'screen' (black) | 'dim' | 'clear'.
-	track = 'default',
+	-- The track behind the fill: 'default' (the housing) | 'screen' (black) | 'dim' | 'clear' | 'custom'.
+	track = 'default', trackColor = {0.05, 0.05, 0.05}, trackAlpha = 0.9,
+	-- Two-color health gradient (health color 'gradient2'): start and end, along the bar or up it.
+	healthStart = {0.10, 0.45, 0.28}, healthEnd = {0.47, 0.88, 0.45}, healthDirection = 'horizontal',
+	-- Power: 'blizzard' (the game's colors) | 'custom' (the table below) | 'key'; an optional gradient
+	-- from a darker shade of the color to the color itself.
+	powerMode = 'custom', powerGradient = false, powerDirection = 'horizontal',
+	powerColors = {
+		MANA = {0.29, 0.55, 1}, RAGE = {0.94, 0.23, 0.19}, ENERGY = {1, 0.82, 0.24}, FOCUS = {1, 0.58, 0.25},
+		RUNIC_POWER = {0.2, 0.78, 0.95}, LUNAR_POWER = {0.36, 0.55, 1}, MAELSTROM = {0.1, 0.6, 1}, INSANITY = {0.62, 0.29, 0.95},
+		FURY = {0.79, 0.26, 0.99}, PAIN = {1, 0.61, 0}, ESSENCE = {0.4, 0.8, 0.8}, OTHER = {0.6, 0.6, 0.58},
+	},
+	-- Cast bars: 'key' (the key color, gray when it can't be interrupted) or 'custom' (these).
+	castMode = 'key',
+	castColors = {cast = {1, 0.66, 0}, channel = {0.29, 0.64, 1}, locked = {0.55, 0.55, 0.52}, interrupted = {1, 0.23, 0.19}},
+	-- Text and housing.
+	nameColor = 'default', nameCustom = {1, 1, 1}, -- 'default' | 'class' | 'custom'
+	textColor = 'default', textCustom = {0.85, 0.89, 0.78}, -- digits and level: 'default' | 'custom'
+	housing = 'default', housingColor = {0.11, 0.11, 0.1}, housingAlpha = 0.95, -- 'default' | 'custom'
+	-- Avatars (portrait styles): the ring's color and the presence lamp.
+	avatarRing = 'reaction', -- 'reaction' | 'class' | 'key'
+	avatarStatus = true,
 	units = {
 		player = Copy(FRAME_DEFAULTS, {width = 224, height = 70, healthHeight = 6, digitsSize = 13, status = 'lit'}),
 		target = Copy(FRAME_DEFAULTS, {width = 224, height = 70, healthHeight = 6, digitsSize = 13, auras = true, rangeFade = true,
@@ -233,13 +255,16 @@ for index = 1, 4 do
 end
 
 -- Colors -------------------------------------------------------------------
+-- Kept in a block of its own: the main chunk may hold at most 200 locals.
+local ClassColor, ReactionColor, PaintPower, CastColor, PaintHealth
+do
 local function Soften(r, g, b)
 	-- A little toward gray, so frames sit calmly over the world.
 	local gray = 0.299 * r + 0.587 * g + 0.114 * b
 	return (r + (gray - r) * 0.15) * 0.95, (g + (gray - g) * 0.15) * 0.95, (b + (gray - b) * 0.15) * 0.95
 end
 
-local function ClassColor(unit)
+function ClassColor(unit)
 	local ok, r, g, b = pcall(function()
 		if UnitIsPlayer(unit) then
 			local _, class = UnitClass(unit)
@@ -258,6 +283,14 @@ local function ClassColor(unit)
 end
 
 local function PowerColor(unit)
+	local db = DB()
+	if db.powerMode == 'key' then return Kit:RGB('lamp') end
+	if db.powerMode == 'custom' and type(db.powerColors) == 'table' then
+		local okType, _, token = pcall(UnitPowerType, unit)
+		local color = okType and not IsSecret(token) and token and db.powerColors[token] or db.powerColors.OTHER
+		local cr, cg, cb = RGB(color)
+		if cr then return cr, cg, cb end
+	end
 	local ok, r, g, b = pcall(function()
 		local _, token = UnitPowerType(unit)
 		local color = not IsSecret(token) and token and PowerBarColor and PowerBarColor[token]
@@ -295,7 +328,7 @@ end
 -- SPEC-01's own colors as health colors: its lamps and its six key swatches.
 local TOKEN_COLORS = {ledGreen = 'ledGreen', ledBlue = 'ledBlue', amber = 'amber', screen = 'screenAccent', red = 'red'}
 
-local function ReactionColor(unit)
+function ReactionColor(unit)
 	local ok, r, g, b = pcall(function()
 		if UnitIsTapDenied and UnitIsTapDenied(unit) then return 0.55, 0.55, 0.53 end
 		local reaction = UnitReaction(unit, 'player')
@@ -306,8 +339,56 @@ local function ReactionColor(unit)
 	return Kit:RGB('lamp')
 end
 
-local function PaintHealth(frame)
+-- Two colors across a fill texture: set straight on the texture (SetGradient),
+-- so it rides the fill with no value read. 'vertical' runs bottom to top.
+local function FillGradient(bar, direction, start, finish)
+	local fill = bar and bar:GetStatusBarTexture()
+	local r1, g1, b1 = RGB(start)
+	local r2, g2, b2 = RGB(finish)
+	if not (fill and fill.SetGradient and CreateColor and r1 and r2) then
+		if r2 then bar:SetStatusBarColor(r2, g2, b2) end
+		return
+	end
+	fill:SetGradient(direction == 'vertical' and 'VERTICAL' or 'HORIZONTAL', CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
+	bar.gradientEnd = finish
+end
+
+local function HealthStops(frame)
+	local cfg, db = Cfg(frame), DB()
+	if cfg.healthColor == 'gradient2' and cfg.healthStops == 'own' then return cfg.healthDirection, cfg.healthStart, cfg.healthEnd end
+	return db.healthDirection, db.healthStart, db.healthEnd
+end
+
+-- Power: its color, or a gradient from a darker shade of it to the color.
+function PaintPower(bar, unit)
+	local r, g, b = PowerColor(unit)
+	local db = DB()
+	if db.powerGradient then FillGradient(bar, db.powerDirection, {r * 0.45, g * 0.45, b * 0.45}, {r, g, b})
+	else bar:SetStatusBarColor(r, g, b) end
+end
+
+-- Cast colors: kind is 'cast', 'channel', 'locked' (can't be interrupted) or 'interrupted'.
+local KEY_CAST = {cast = 'lamp', channel = 'lamp', interrupted = 'red'}
+function CastColor(kind)
+	local db = DB()
+	if db.castMode == 'custom' and type(db.castColors) == 'table' then
+		local r, g, b = RGB(db.castColors[kind])
+		if r then return r, g, b end
+	end
+	if kind == 'locked' then return 0.55, 0.55, 0.52 end
+	return Kit:RGB(KEY_CAST[kind] or 'lamp')
+end
+
+-- Shared with the raid, boss and arena frames.
+UI.UnitColors = {PowerColor = PowerColor, PaintPower = PaintPower, CastColor = CastColor, FillGradient = FillGradient}
+
+function PaintHealth(frame)
 	local bar, unit, mode = frame.health, frame.unit, HealthMode(frame)
+	if mode == 'gradient2' then
+		FillGradient(bar, HealthStops(frame))
+		if frame.gauge then pcall(frame.gauge.bar.SetStatusBarColor, frame.gauge.bar, RGB(select(3, HealthStops(frame)))) end
+		return
+	end
 	if mode == 'custom' then
 		local r, g, b = RGB(Cfg(frame).healthCustom)
 		if r then return bar:SetStatusBarColor(r, g, b) end
@@ -328,6 +409,7 @@ local function PaintHealth(frame)
 		end
 	end
 	bar:SetStatusBarColor(ClassColor(unit))
+end
 end
 
 -- Numbers -------------------------------------------------------------------------
@@ -758,7 +840,7 @@ local function UpdatePower(frame)
 	local unit = frame.unit
 	frame.power:SetMinMaxValues(0, UnitPowerMax(unit))
 	frame.power:SetValue(UnitPower(unit), Smooth())
-	frame.power:SetStatusBarColor(PowerColor(unit))
+	PaintPower(frame.power, unit)
 	UI:Safe(PowerExtras, frame)
 	if frame.layout.classpower then UpdateClassPower(frame) end
 	if frame.tag and Cfg(frame).lcdTag == 'power' then UpdateTag(frame) end
@@ -855,9 +937,274 @@ function RefreshModel(frame, tries)
 	end)
 end
 
+-- Avatars ---------------------------------------------------------------------------
+-- SPEC-01's component 35 and its relatives, as portrait styles. The reference's
+-- avatar is a small LED matrix behind a round black lens in a light bezel; each
+-- person's glyph is worked out from their name (FNV-1a, mirrored, kept inside
+-- the lens) so it never changes. Here a colored ring sits between bezel and
+-- lens (reaction, class or key color) and a presence lamp sits on the rim:
+-- green online, red in combat, amber away, unlit when dead or offline.
+--   matrix:   the reference's LED glyph
+--   monogram: the unit's initials in Plex Mono on the lens
+--   ring:     the 2D portrait in the round lens
+--   glyph:    the class icon in the round lens
+--   key:      the 2D portrait on a rounded-square key
+-- Names and GUIDs are used only when plain; a secret name falls back to the
+-- class (matrix) or the class icon (monogram).
+local AVATARS = {matrix = true, monogram = true, ring = true, glyph = true, key = true}
+-- Events that can change the presence lamp.
+local AVATAR_EVENTS = {UNIT_HEALTH = true, UNIT_CONNECTION = true, UNIT_FLAGS = true, PLAYER_FLAGS_CHANGED = true}
+local IsAvatar, ShowAvatar, UpdateAvatar, AvatarStatus
+do
+local MATRIX = 7
+local function Disc(parent, sublevel)
+	local texture = parent:CreateTexture(nil, 'BORDER', nil, sublevel)
+	texture:SetTexture(Kit.media..'mask-round.tga')
+	return texture
+end
+
+local function Xor8(a, b)
+	local result, place = 0, 1
+	for _ = 1, 8 do
+		local x, y = a % 2, b % 2
+		if x ~= y then result = result + place end
+		a, b, place = (a - x) / 2, (b - y) / 2, place * 2
+	end
+	return result
+end
+
+-- FNV-1a over the bytes, kept exact in doubles: the multiply by 16777619
+-- (2^24 + 403) is split so no step passes 2^53.
+local function Fnv(text)
+	local hash = 2166136261
+	for index = 1, #text do
+		local low = hash % 256
+		hash = hash - low + Xor8(low, text:byte(index))
+		hash = ((hash % 256) * 16777216 + hash * 403) % 4294967296
+	end
+	return hash
+end
+
+local function Lit(hash, row, column)
+	local half = column < 4 and column or MATRIX - 1 - column
+	local shift = (row * 4 + half) % 31
+	local bit = floor(hash / 2 ^ shift) % 2
+	local inside = math.sqrt((row - 3) ^ 2 + (column - 3) ^ 2) <= 3.2
+	return inside and (bit == 1 or (row == 3 and half == 3)), inside
+end
+
+local function Seed(unit)
+	local name = UnitName(unit)
+	if not IsSecret(name) and type(name) == 'string' and name ~= '' then return name end
+	local guid = Plain(UnitGUID, unit)
+	if type(guid) == 'string' then return guid end
+	local _, class = UnitClass(unit)
+	if not IsSecret(class) and class then return class end
+	return 'SPEC-01'
+end
+
+local function Initials(unit)
+	local name = UnitName(unit)
+	if IsSecret(name) or type(name) ~= 'string' or name == '' then return nil end
+	local letters = ''
+	for word in name:gmatch('%S+') do
+		local first = word:match('^[%z\1-\127\194-\244][\128-\191]*')
+		if first then letters = letters..first end
+		if #letters >= 2 then break end
+	end
+	return letters ~= '' and strupper(letters) or nil
+end
+
+local function Build(frame)
+	local avatar = frame.avatar
+	if avatar then return avatar end
+	avatar = CreateFrame('Frame', nil, frame.portraitHolder)
+	avatar:SetAllPoints(frame.portraitHolder)
+	avatar:EnableMouse(false)
+	-- Round: an outline, the light bezel, the colored ring, the black lens.
+	avatar.outline = Disc(avatar, -4)
+	avatar.outline:SetVertexColor(0, 0, 0, 0.18)
+	avatar.bezel = Disc(avatar, -3)
+	if avatar.bezel.SetGradient and CreateColor then
+		avatar.bezel:SetGradient('VERTICAL', CreateColor(0.9, 0.9, 0.89, 1), CreateColor(1, 1, 1, 1))
+	end
+	avatar.ring = Disc(avatar, -2)
+	avatar.lens = Disc(avatar, -1)
+	if avatar.lens.SetGradient and CreateColor then
+		avatar.lens:SetGradient('VERTICAL', CreateColor(0.04, 0.04, 0.04, 1), CreateColor(0.11, 0.11, 0.11, 1))
+	end
+	avatar.roundMask = avatar:CreateMaskTexture()
+	avatar.roundMask:SetTexture(Kit.media..'mask-round.tga', 'CLAMPTOBLACKADDITIVE', 'CLAMPTOBLACKADDITIVE')
+	avatar.roundMask:SetAllPoints(avatar.lens)
+	-- Square key: a light key with a recessed screen.
+	avatar.keyFrame = CreateFrame('Frame', nil, avatar)
+	avatar.keyFrame:SetAllPoints()
+	avatar.keyFrame.shell = Kit:Shell(avatar.keyFrame, {surface = 'paper', radius = 6, shadowAlpha = 0.25})
+	avatar.keyScreen = CreateFrame('Frame', nil, avatar.keyFrame)
+	avatar.keyScreen.shell = Kit:Shell(avatar.keyScreen, {surface = 'screen', radius = 4, shadow = false})
+	avatar.keyMask = avatar:CreateMaskTexture()
+	avatar.keyMask:SetTexture(Kit.media..'mask-icon.tga', 'CLAMPTOBLACKADDITIVE', 'CLAMPTOBLACKADDITIVE')
+	avatar.keyMask:SetAllPoints(avatar.keyScreen)
+	-- Content.
+	avatar.content = CreateFrame('Frame', nil, avatar)
+	avatar.content:SetAllPoints()
+	avatar.content:SetFrameLevel(avatar.keyScreen:GetFrameLevel() + 2)
+	avatar.picture = avatar.content:CreateTexture(nil, 'ARTWORK')
+	avatar.initials = Kit:Text(avatar.content, '', 12, 'darkInk', true)
+	avatar.initials:SetPoint('CENTER', avatar.lens, 'CENTER', 0, 0)
+	avatar.dots = {}
+	for index = 1, MATRIX * MATRIX do
+		local dot = avatar.content:CreateTexture(nil, 'ARTWORK', nil, 1)
+		dot:SetColorTexture(1, 1, 1, 1)
+		avatar.dots[index] = dot
+	end
+	-- Presence lamp on the rim, in a collar of the panel's color.
+	avatar.collar = Disc(avatar.content, 2)
+	avatar.collar:SetDrawLayer('OVERLAY', 1)
+	avatar.led = Kit:Led(avatar.content, 6, true)
+	avatar:HookScript('OnSizeChanged', function() if frame.avatarStyle then UI:Safe(UpdateAvatar, frame) end end)
+	frame.avatar = avatar
+	return avatar
+end
+
+local function Around(texture, avatar, inset)
+	texture:ClearAllPoints()
+	texture:SetPoint('TOPLEFT', avatar, 'TOPLEFT', inset, -inset)
+	texture:SetPoint('BOTTOMRIGHT', avatar, 'BOTTOMRIGHT', -inset, inset)
+end
+
+local function RingColor(frame)
+	local mode = DB().avatarRing
+	if mode == 'class' then return ClassColor(frame.unit) end
+	if mode == 'key' then return Kit:RGB('lamp') end
+	return ReactionColor(frame.unit)
+end
+
+function IsAvatar(mode) return AVATARS[mode] and true or false end
+
+-- Show or hide the avatar parts for a portrait mode; returns true when one shows.
+function ShowAvatar(frame, mode)
+	if not AVATARS[mode] then
+		if frame.avatar then frame.avatar:Hide() end
+		frame.avatarStyle = nil
+		return false
+	end
+	local avatar = Build(frame)
+	frame.avatarStyle = mode
+	avatar:Show()
+	return true
+end
+
+function AvatarStatus(frame)
+	local avatar = frame.avatar
+	if not (avatar and avatar:IsShown()) then return end
+	local show = DB().avatarStatus and true or false
+	avatar.collar:SetShown(show)
+	Kit:ShowLed(avatar.led, show)
+	if not show then return end
+	local unit = frame.unit
+	local connected, dead = Plain(UnitIsConnected, unit), Plain(UnitIsDeadOrGhost, unit)
+	if connected == false or dead == true then return Kit:SetLed(avatar.led, false) end
+	local fighting = Plain(UnitAffectingCombat, unit)
+	if unit == 'player' and frame.combatEvent ~= nil then fighting = frame.combatEvent end
+	if fighting == true then return Kit:SetLed(avatar.led, true, 'red') end
+	if Plain(UnitIsAFK, unit) == true then return Kit:SetLed(avatar.led, true, 'amber') end
+	Kit:SetLed(avatar.led, true, 'ledGreen')
+end
+
+function UpdateAvatar(frame)
+	local avatar, style = frame.avatar, frame.avatarStyle
+	if not (avatar and style) then return end
+	local unit = frame.unit
+	local Px = UI.Pixel.Px
+	local size = avatar:GetWidth()
+	if IsSecret(size) or not size or size <= 2 then return end
+	local px = Px(avatar, 1)
+	local round = style ~= 'key'
+	for _, part in ipairs({avatar.outline, avatar.bezel, avatar.ring, avatar.lens}) do part:SetShown(round) end
+	avatar.keyFrame:SetShown(not round)
+	-- Geometry.
+	Around(avatar.outline, avatar, -px)
+	Around(avatar.bezel, avatar, 0)
+	local bezel = UI.Pixel.Snap(avatar, max(2 * px, size * 0.07))
+	local ring = UI.Pixel.Snap(avatar, max(px, size * 0.045))
+	Around(avatar.ring, avatar, bezel)
+	Around(avatar.lens, avatar, bezel + ring)
+	Kit:Tint(avatar.ring, {RingColor(frame)})
+	avatar.keyScreen:ClearAllPoints()
+	avatar.keyScreen:SetPoint('TOPLEFT', bezel, -bezel)
+	avatar.keyScreen:SetPoint('BOTTOMRIGHT', -bezel, bezel)
+	avatar.keyScreen.shell.opts.edge = {RingColor(frame)}
+	Kit:PaintShell(avatar.keyScreen.shell)
+	-- Content.
+	local picture, initials = avatar.picture, avatar.initials
+	picture:Hide()
+	initials:Hide()
+	for _, dot in ipairs(avatar.dots) do dot:Hide() end
+	picture:RemoveMaskTexture(avatar.roundMask)
+	picture:RemoveMaskTexture(avatar.keyMask)
+	local mode = style
+	local _, class = UnitClass(unit)
+	local coords = not IsSecret(class) and class and Plain(UnitIsPlayer, unit) and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]
+	local letters = mode == 'monogram' and Initials(unit)
+	if mode == 'monogram' and not letters then mode = coords and 'glyph' or 'ring' end
+	if mode == 'glyph' and not coords then mode = 'ring' end
+	if mode == 'matrix' then
+		local hash = Fnv(Seed(unit))
+		local lens = size - 2 * (bezel + ring)
+		local pitch = max(2 * px, UI.Pixel.Snap(avatar, lens * 0.8 / MATRIX))
+		local dotSize = max(px, UI.Pixel.Snap(avatar, pitch * 0.62))
+		for row = 0, MATRIX - 1 do
+			for column = 0, MATRIX - 1 do
+				local on, inside = Lit(hash, row, column)
+				local dot = avatar.dots[row * MATRIX + column + 1]
+				if inside then
+					dot:ClearAllPoints()
+					dot:SetSize(dotSize, dotSize)
+					dot:SetPoint('CENTER', avatar, 'CENTER', (column - 3) * pitch, (3 - row) * pitch)
+					dot:SetVertexColor(0.957, 0.957, 0.941, on and 1 or 0.08)
+					dot:Show()
+				end
+			end
+		end
+	elseif mode == 'monogram' then
+		Kit:Font(initials, max(7, floor((size - 2 * (bezel + ring)) * 0.42)), nil, true)
+		initials:SetText(letters)
+		Kit:Tint(initials, {RingColor(frame)})
+		initials:Show()
+	else
+		local target = round and avatar.lens or avatar.keyScreen
+		picture:ClearAllPoints()
+		picture:SetAllPoints(target)
+		if mode == 'glyph' then
+			picture:SetTexture(CLASS_ICONS)
+			picture:SetTexCoord(unpack(coords))
+		else
+			SetPortraitTexture(picture, unit)
+			picture:SetTexCoord(0.1, 0.9, 0.1, 0.9)
+		end
+		picture:AddMaskTexture(round and avatar.roundMask or avatar.keyMask)
+		picture:Show()
+	end
+	-- The presence lamp on the lower rim.
+	local led = max(5, floor(size * 0.18))
+	avatar.led:SetSize(led, led)
+	if avatar.led.glow then Kit:FitSprite(avatar.led.glow, led, led) end
+	avatar.led:ClearAllPoints()
+	avatar.led:SetPoint('CENTER', avatar, 'BOTTOMRIGHT', -size * 0.15, size * 0.15)
+	avatar.collar:ClearAllPoints()
+	avatar.collar:SetPoint('TOPLEFT', avatar.led, 'TOPLEFT', -2 * px, 2 * px)
+	avatar.collar:SetPoint('BOTTOMRIGHT', avatar.led, 'BOTTOMRIGHT', 2 * px, -2 * px)
+	Kit:Tint(avatar.collar, 'panel')
+	AvatarStatus(frame)
+end
+end
+
 local function UpdatePortrait(frame)
 	local unit, mode = frame.unit, frame.portraitMode
-	if mode == 'model' and frame.model then
+	if IsAvatar(mode) then
+		UpdateAvatar(frame)
+	elseif mode == 'model' and frame.model then
 		-- Draw now when we can, so a new target shows at once; else when it can.
 		frame.modelToken = (frame.modelToken or 0) + 1
 		if DrawModel(frame) then VerifyModel(frame, 0) else RefreshModel(frame, 1) end
@@ -884,6 +1231,7 @@ local function UpdateName(frame, polled)
 	local name = UnitName(unit)
 	if IsSecret(name) then frame.nameText:SetText(name)
 	else frame.nameText:SetText(name and strupper(name) or strupper(frame.layout.title)) end
+	if DB().nameColor == 'class' then Kit:Tint(frame.nameText, {ClassColor(unit)}) end
 	if frame.levelText then
 		local ok = pcall(function()
 			local level = UnitLevel(unit)
@@ -910,6 +1258,7 @@ local function UpdateCombat(frame, event)
 		if event == 'PLAYER_REGEN_DISABLED' then frame.combatEvent = true
 		elseif event == 'PLAYER_REGEN_ENABLED' then frame.combatEvent = false end
 	end
+	if frame.avatarStyle then AvatarStatus(frame) end
 end
 
 -- Indicators ------------------------------------------------------------------------
@@ -1498,7 +1847,7 @@ local LSM = LibStub and LibStub('LibSharedMedia-3.0', true)
 local SOLID = [[Interface\Buttons\WHITE8X8]]
 local FILL_ITEMS = {{'flat', 'Flat'}, {'solid', 'Solid'}, {'gloss', 'Gloss'}, {'gradient', 'Gradient'}, {'glass', 'Glass'},
 	{'striped', 'Segmented'}}
-local TRACK_ITEMS = {{'default', 'Housing'}, {'screen', 'Black'}, {'dim', 'Dim fill'}, {'clear', 'None'}}
+local TRACK_ITEMS = {{'default', 'Housing'}, {'screen', 'Black'}, {'dim', 'Dim fill'}, {'custom', 'Custom'}, {'clear', 'None'}}
 
 local function FillItems(withDefault)
 	local items = {}
@@ -1648,11 +1997,20 @@ function ApplyTrack(bar, track)
 	-- A dot meter needs its housing color between the dots.
 	if bar.kitPerforated and track == 'clear' then track = 'default' end
 	local black = track == 'screen' or track == 'dim'
-	if black then shell.opts.surface, shell.opts.fill = 'screen', nil
-	else shell.opts.surface, shell.opts.fill = base.surface, base.fill end
+	local custom = track == 'custom'
+	if black then shell.opts.surface, shell.opts.fill, shell.opts.alpha = 'screen', nil, nil
+	elseif custom then
+		-- Your own color and opacity, on a screen-style track.
+		local color = DB().trackColor
+		shell.opts.surface = 'screen'
+		shell.opts.fill = type(color) == 'table' and {RGB(color)} or nil
+		shell.opts.alpha = DB().trackAlpha or 1
+	else shell.opts.surface, shell.opts.fill, shell.opts.alpha = base.surface, base.fill, nil end
 	Kit:PaintShell(shell)
 	shell:SetAlpha(track == 'clear' and 0 or 1)
-	if bar.kitCover and bar.coverToken then Kit:Tint(bar.kitCover, black and 'black' or bar.coverToken) end
+	if bar.kitCover and bar.coverToken then
+		Kit:Tint(bar.kitCover, (black and 'black') or (custom and shell.opts.fill) or bar.coverToken)
+	end
 	local dim = bar.lookDim
 	if track == 'dim' then
 		if not dim then
@@ -1741,7 +2099,9 @@ end
 local function PortraitMode(frame)
 	local mode = Cfg(frame).portrait
 	if mode == 'default' or not mode then
-		mode = frame.layout.size == 'large' and (DB().portrait == 'model' and 'model' or 'texture') or 'off'
+		local page = DB().portrait
+		local valid = page == 'model' or page == 'texture' or page == 'class' or IsAvatar(page)
+		mode = frame.layout.size == 'large' and (valid and page or 'texture') or 'off'
 	end
 	return mode
 end
@@ -1754,6 +2114,16 @@ local function ApplyPortrait(frame)
 	if mode == 'off' then frame.portraitSlot:Hide() return false end
 	frame.portraitSlot:Show()
 	local screen = frame.portraitScreen.screen
+	-- An avatar replaces the black display entirely.
+	local avatar = ShowAvatar(frame, mode)
+	frame.portraitScreen:SetShown(not avatar)
+	if avatar then
+		ModelFallback(frame, false)
+		if frame.model then frame.model:Hide() end
+		if frame.portrait then frame.portrait:Hide() end
+		if UnitExists(frame.unit) then UI:Safe(UpdatePortrait, frame) end
+		return true
+	end
 	if mode == 'model' then
 		if not frame.model then
 			frame.model = CreateFrame('PlayerModel', nil, screen)
@@ -2631,6 +3001,28 @@ local function LayoutLamps(frame, cfg)
 	end
 end
 
+-- Your own colors over each layout's: the housing tint, the name, the digits and level.
+local function ApplyColors(frame)
+	local db, shell = DB(), frame.shell
+	if shell then
+		if db.housing == 'custom' then
+			shell.opts.fill, shell.opts.alpha = {RGB(db.housingColor)}, db.housingAlpha or 0.95
+			shell.customTint = true
+			Kit:PaintShell(shell)
+		elseif shell.customTint then
+			shell.opts.fill, shell.opts.alpha, shell.customTint = nil, nil, nil
+			Kit:PaintShell(shell)
+		end
+	end
+	if db.nameColor == 'custom' then Kit:Tint(frame.nameText, {RGB(db.nameCustom)})
+	elseif db.nameColor == 'class' then Kit:Tint(frame.nameText, {ClassColor(frame.unit)}) end
+	if db.textColor == 'custom' then
+		local color = {RGB(db.textCustom)}
+		Kit:Tint(frame.digits, color)
+		Kit:Tint(frame.levelText, color)
+	end
+end
+
 local function Layout(frame)
 	local cfg = Cfg(frame)
 	Resize(frame, cfg)
@@ -2651,6 +3043,7 @@ local function Layout(frame)
 			mirror and 2 or -2, 3, mirror and 'RIGHT' or 'LEFT')
 	end
 	SyncGhost(frame, cfg)
+	ApplyColors(frame)
 	LayoutLamps(frame, cfg)
 	LayoutAuras(frame)
 	LayoutPowerDigits(frame)
@@ -2852,6 +3245,7 @@ local function Build(layout)
 		local handler = HANDLERS[event]
 		if handler then UI:Safe(handler, self) else UI:Safe(UpdateAll, self) end
 		if handler and self.status and STATUS_EVENTS[event] then UI:Safe(UpdateStatus, self) end
+		if self.avatarStyle and AVATAR_EVENTS[event] then UI:Safe(AvatarStatus, self) end
 		-- Loading screens leave models blank: draw again once the world is up.
 		if event == 'PLAYER_ENTERING_WORLD' then RefreshModel(self) end
 	end)
@@ -3075,9 +3469,29 @@ local function BuildCastBar(unit, title, at)
 	-- The time left, from the client's duration object while a cast runs.
 	cast.clock = CreateFrame('Frame', nil, cast)
 
-	local function Paint(interruptible)
-		if interruptible == false then bar:SetStatusBarColor(0.55, 0.55, 0.52)
-		else bar:SetStatusBarColor(Kit:RGB('lamp')) end
+	-- The lock wash: the "can't interrupt" color over the fill, shown straight
+	-- from the flag, which may be secret and is then never tested.
+	local wash = bar:CreateTexture(nil, 'ARTWORK', nil, 3)
+	wash:SetAllPoints(bar:GetStatusBarTexture())
+	wash:SetColorTexture(1, 1, 1, 1)
+	if bar.fillMask then wash:AddMaskTexture(bar.fillMask) end
+	wash:Hide()
+	cast.wash = wash
+
+	local function Paint(channel, locked)
+		bar:SetStatusBarColor(CastColor(channel and 'channel' or 'cast'))
+		wash:SetVertexColor(CastColor('locked'))
+		if IsSecret(locked) then
+			if wash.SetAlphaFromBoolean then
+				wash:Show()
+				wash:SetAlphaFromBoolean(locked, 1, 0)
+			else
+				wash:Hide()
+			end
+		else
+			wash:SetAlpha(1)
+			wash:SetShown(locked and true or false)
+		end
 	end
 
 	-- Is anything being cast? Asked through the duration objects, which are
@@ -3128,8 +3542,7 @@ local function BuildCastBar(unit, title, at)
 		else name, _, texture, _, _, _, _, notInterruptible = UnitCastingInfo(unit) end
 		cast.label:SetText(name)
 		cast.icon:SetTexture(texture)
-		-- The flag can be secret; only a public "not interruptible" is shown gray.
-		Paint(not (not IsSecret(notInterruptible) and notInterruptible))
+		Paint(channel, notInterruptible)
 		if duration ~= true and bar.SetTimerDuration and TIMER then
 			-- An empowered cast charges up; a channel drains.
 			bar:SetTimerDuration(duration, IMMEDIATE, (channel and not empowering) and TIMER.RemainingTime or TIMER.ElapsedTime)
@@ -3162,7 +3575,8 @@ local function BuildCastBar(unit, title, at)
 		end
 		if failed then
 			-- An interrupted cast holds a moment in red so the eye catches it.
-			bar:SetStatusBarColor(Kit:RGB('red'))
+			wash:Hide()
+			bar:SetStatusBarColor(CastColor('interrupted'))
 			cast.label:SetText(failed)
 			C_Timer.After(0.6, Out)
 		else
@@ -3408,15 +3822,18 @@ local SHAPE_NOTE = 'Device: header, portrait, LCD and meters. Bar: a rectangle t
 	'Console: a big LCD readout, meters with segmented power and a row of status lamps. Gauge: a round bezel that fills with health. '..
 	'Tape: a meter over a tick scale. Printed: a spec sheet with HP and PWR legends. '..
 	'Only Device has a portrait. Picking a shape sets the frame to its natural size.'
-local PORTRAITS = {{'default', 'Default'}, {'model', '3D'}, {'texture', '2D'}, {'class', 'Class'}, {'off', 'None'}}
+local PORTRAITS = {{'default', 'Default'}, {'model', '3D'}, {'texture', '2D'}, {'class', 'Class'}, {'matrix', 'LED avatar'},
+	{'monogram', 'Monogram'}, {'ring', 'Round avatar'}, {'glyph', 'Class avatar'}, {'key', 'Key avatar'}, {'off', 'None'}}
 local METERS = {{'default', 'Default'}, {'dots', 'Dots'}, {'pill', 'Pill'}, {'bar', 'Bar'}}
-local TRACK_FRAME = {{'default', 'Page default'}, {'housing', 'Housing'}, {'screen', 'Black'}, {'dim', 'Dim fill'}, {'clear', 'None'}}
+local TRACK_FRAME = {{'default', 'Page default'}, {'housing', 'Housing'}, {'screen', 'Black'}, {'dim', 'Dim fill'}, {'custom', 'Custom'},
+	{'clear', 'None'}}
 -- Health colors: the key color, SPEC-01's lamps and swatches, class, reaction, by health, custom.
 local function HealthColors(withDefault)
 	local items = {}
 	if withDefault then items[1] = {'default', 'Page default'} end
 	for _, item in ipairs({{'accent', 'Key color'}, {'ledGreen', 'Lamp green'}, {'ledBlue', 'Lamp blue'}, {'amber', 'Amber'},
-		{'screen', 'Screen amber'}, {'class', 'Class and reaction'}, {'reaction', 'Reaction'}, {'gradient', 'By health'}}) do
+		{'screen', 'Screen amber'}, {'class', 'Class and reaction'}, {'reaction', 'Reaction'}, {'gradient', 'By health'},
+		{'gradient2', 'Two-color gradient'}}) do
 		items[#items + 1] = item
 	end
 	for _, name in ipairs(Kit.accentOrder or {}) do
@@ -3443,11 +3860,21 @@ local function FrameCards(info)
 		{'slider', 'Width', P('width'), 32, 320, 2, nil, format = Int},
 		{'slider', 'Height', P('height'), 12, 110, 1, nil, format = Int},
 		{'slider', 'Scale', P('scale'), 0.5, 2, 0.05, 'On top of the page\'s scale.', format = Percent},
-		{'segmented', 'Portrait', P('portrait'), items = PORTRAITS, disabled = NotDevice},
+		{'dropdown', 'Portrait', P('portrait'), items = PORTRAITS, disabled = NotDevice,
+			note = 'LED avatar: SPEC-01\'s avatar, a glyph lit from the name behind a round lens. Monogram: initials on the lens. '..
+			'Round, class and key avatars: the portrait or class icon in a ringed lens or on a key. None collapses the box.'},
 		{'segmented', 'Meters', P('barStyle'), items = METERS, reload = true},
 		{'dropdown', 'Health texture', P('healthTexture'), items = function() return UI.BarLooks.FillItems(true) end, since = '0.5.1'},
 		{'dropdown', 'Health color', P('healthColor'), items = COLORS},
 		{'color', 'Custom health color', P('healthCustom'), hidden = function() return Get('healthColor') ~= 'custom' end},
+		{'segmented', 'Gradient colors', P('healthStops'), items = {{'page', 'Page\'s'}, {'own', 'This frame\'s'}}, since = '0.5.1',
+			hidden = function() return Get('healthColor') ~= 'gradient2' end},
+		{'color', 'Gradient start', P('healthStart'), since = '0.5.1',
+			hidden = function() return Get('healthColor') ~= 'gradient2' or Get('healthStops') ~= 'own' end},
+		{'color', 'Gradient end', P('healthEnd'), since = '0.5.1',
+			hidden = function() return Get('healthColor') ~= 'gradient2' or Get('healthStops') ~= 'own' end},
+		{'segmented', 'Gradient direction', P('healthDirection'), items = {{'horizontal', 'Along'}, {'vertical', 'Up'}}, since = '0.5.1',
+			hidden = function() return Get('healthColor') ~= 'gradient2' or Get('healthStops') ~= 'own' end},
 		{'slider', 'Health meter height', P('healthHeight'), 2, 16, 1, nil, format = Int},
 	}
 	if info.power then
@@ -3558,13 +3985,65 @@ local cards = {
 	{title = 'Defaults', rows = {
 		{'dropdown', 'Health color', 'unitframes.healthColor', items = HealthColors(false),
 			note = 'For frames left on Page default. Lamp green, lamp blue and amber are SPEC-01\'s own lamps; the swatches are its six key colors.'},
-		{'segmented', 'Portrait', 'unitframes.portrait', items = {{'model', '3D'}, {'texture', '2D'}}, note = 'For player and target left on Default.'},
+		{'dropdown', 'Portrait', 'unitframes.portrait', items = {{'model', '3D'}, {'texture', '2D'}, {'class', 'Class'}, {'matrix', 'LED avatar'},
+			{'monogram', 'Monogram'}, {'ring', 'Round avatar'}, {'glyph', 'Class avatar'}, {'key', 'Key avatar'}},
+			note = 'For player and target left on Default.'},
+		{'segmented', 'Avatar ring', 'unitframes.avatarRing', items = {{'reaction', 'Reaction'}, {'class', 'Class'}, {'key', 'Key color'}},
+			since = '0.5.1', note = 'The colored ring between an avatar\'s bezel and its lens.'},
+		{'switch', 'Presence lamp', 'unitframes.avatarStatus', 'On an avatar\'s rim: green online, red in combat, amber away, unlit when dead or offline.',
+			since = '0.5.1'},
 		{'switch', 'Cast bars', 'unitframes.castbar', 'Player and target, on the client\'s own timing.', reload = true},
 		{'switch', 'Auras', 'unitframes.auras', 'Every frame\'s auras at once; each frame has its own below.'},
 		{'switch', 'Party frames', 'unitframes.party', 'Compact devices for party members.', reload = true},
 		{'switch', 'Target arrival', 'unitframes.arrive', 'A new target fades in, its bars glide up and the portrait settles.'},
 		{'switch', 'Combat sweep', 'unitframes.combatSweep', 'A light along each frame as combat starts and ends; off while the combat cue is on.'},
 		{'switch', 'Aura timer lines', 'unitframes.auraLines', 'A thin line over each aura key runs down with its time left.', since = '0.5.0'},
+	}},
+	{title = 'Colors', rows = {
+		{'note', 'Health color modes, including the two-color gradient, are under Defaults and on each frame. These are the colors those modes and the rest of the frame use.'},
+		{'header', 'Health gradient'},
+		{'color', 'Start', 'unitframes.healthStart', 'Where the fill begins (left, or the bottom).', since = '0.5.1'},
+		{'color', 'End', 'unitframes.healthEnd', 'Where the fill ends (its edge, or the top).', since = '0.5.1'},
+		{'segmented', 'Direction', 'unitframes.healthDirection', items = {{'horizontal', 'Along the bar'}, {'vertical', 'Up the bar'}}, since = '0.5.1'},
+		{'header', 'Power'},
+		{'segmented', 'Power colors', 'unitframes.powerMode', items = {{'custom', 'Per type'}, {'blizzard', 'Game'}, {'key', 'Key color'}},
+			since = '0.5.1', note = 'Per type: the colors below, one for each kind of power.'},
+		{'color', 'Mana', 'unitframes.powerColors.MANA', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Rage', 'unitframes.powerColors.RAGE', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Energy', 'unitframes.powerColors.ENERGY', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Focus', 'unitframes.powerColors.FOCUS', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Runic power', 'unitframes.powerColors.RUNIC_POWER', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Astral power', 'unitframes.powerColors.LUNAR_POWER', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Maelstrom', 'unitframes.powerColors.MAELSTROM', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Insanity', 'unitframes.powerColors.INSANITY', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Fury', 'unitframes.powerColors.FURY', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Pain', 'unitframes.powerColors.PAIN', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Essence', 'unitframes.powerColors.ESSENCE', since = '0.5.1', hidden = function() return DB().powerMode ~= 'custom' end},
+		{'color', 'Other', 'unitframes.powerColors.OTHER', 'Any other kind of power.', since = '0.5.1',
+			hidden = function() return DB().powerMode ~= 'custom' end},
+		{'switch', 'Power gradient', 'unitframes.powerGradient', 'From a darker shade of the color to the color itself.', since = '0.5.1'},
+		{'segmented', 'Power direction', 'unitframes.powerDirection', items = {{'horizontal', 'Along the bar'}, {'vertical', 'Up the bar'}},
+			since = '0.5.1', hidden = function() return not DB().powerGradient end},
+		{'header', 'Cast bars'},
+		{'segmented', 'Cast colors', 'unitframes.castMode', items = {{'key', 'Key color'}, {'custom', 'Custom'}}, since = '0.5.1',
+			note = 'Also used by the boss and arena cast bars.'},
+		{'color', 'Casting', 'unitframes.castColors.cast', since = '0.5.1', hidden = function() return DB().castMode ~= 'custom' end},
+		{'color', 'Channeling', 'unitframes.castColors.channel', since = '0.5.1', hidden = function() return DB().castMode ~= 'custom' end},
+		{'color', 'Can\'t interrupt', 'unitframes.castColors.locked', since = '0.5.1', hidden = function() return DB().castMode ~= 'custom' end},
+		{'color', 'Interrupted', 'unitframes.castColors.interrupted', since = '0.5.1', hidden = function() return DB().castMode ~= 'custom' end},
+		{'header', 'Track'},
+		{'color', 'Track color', 'unitframes.trackColor', 'Used when the Textures card\'s track is Custom.', since = '0.5.1'},
+		{'slider', 'Track opacity', 'unitframes.trackAlpha', 0, 1, 0.05, nil, format = Percent, since = '0.5.1'},
+		{'header', 'Text and housing'},
+		{'segmented', 'Name color', 'unitframes.nameColor', items = {{'default', 'Default'}, {'class', 'Class'}, {'custom', 'Custom'}}, since = '0.5.1'},
+		{'color', 'Custom name color', 'unitframes.nameCustom', since = '0.5.1', hidden = function() return DB().nameColor ~= 'custom' end},
+		{'segmented', 'Digits and level', 'unitframes.textColor', items = {{'default', 'Default'}, {'custom', 'Custom'}}, since = '0.5.1'},
+		{'color', 'Custom text color', 'unitframes.textCustom', since = '0.5.1', hidden = function() return DB().textColor ~= 'custom' end},
+		{'segmented', 'Housing', 'unitframes.housing', items = {{'default', 'Theme'}, {'custom', 'Custom tint'}}, since = '0.5.1',
+			note = 'The unit frames\' own housing color, over the theme\'s finish.'},
+		{'color', 'Housing color', 'unitframes.housingColor', since = '0.5.1', hidden = function() return DB().housing ~= 'custom' end},
+		{'slider', 'Housing opacity', 'unitframes.housingAlpha', 0.2, 1, 0.05, nil, format = Percent, since = '0.5.1',
+			hidden = function() return DB().housing ~= 'custom' end},
 	}},
 	{title = 'Power', rows = {
 		{'segmented', 'Motion', 'unitframes.powerMotion', items = {{'off', 'Off'}, {'scan', 'Scan line'}, {'spark', 'Spark'}, {'pulse', 'Pulse'}},

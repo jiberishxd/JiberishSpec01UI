@@ -28,7 +28,8 @@ local module = UI:RegisterModule('group', {})
 -- defaults:begin
 UI:RegisterDefaults('group', {
 	partyAsRaid = false, hideBlizzard = true,
-	healthColor = 'class', customColor = {0.18, 0.62, 0.37},
+	healthColor = 'class', customColor = {0.18, 0.62, 0.37}, -- 'class' | 'reaction' | 'accent' | 'custom' | 'gradient2'
+	healthStart = {0.10, 0.45, 0.28}, healthEnd = {0.47, 0.88, 0.45}, healthDirection = 'horizontal',
 	-- Fill looks, as on the unit frames: 'flat' | 'solid' | 'gloss' | 'gradient' | 'glass' | 'striped' | 'lsm:<name>';
 	-- the track: 'default' (housing) | 'screen' | 'dim' | 'clear'.
 	healthTexture = 'flat', powerTexture = 'flat', castTexture = 'flat', track = 'default',
@@ -178,14 +179,52 @@ local function ClassColor(unit)
 	return Kit:RGB('lamp')
 end
 
+local PowerColorOf -- the game's power colors, below
+
+local function ReactionColor(unit)
+	local ok, r, g, b = pcall(function()
+		local reaction = UnitReaction(unit, 'player')
+		local color = not IsSecret(reaction) and reaction and FACTION_BAR_COLORS and FACTION_BAR_COLORS[reaction]
+		if color then return color.r, color.g, color.b end
+	end)
+	if ok and not IsSecret(r) and r then return r, g, b end
+	return Kit:RGB('lamp')
+end
+
 local function HealthColor(unit)
 	local mode = DB().healthColor
 	if mode == 'accent' then return Kit:RGB('lamp') end
 	if mode == 'custom' then return RGB(DB().customColor) end
+	if mode == 'reaction' then return ReactionColor(unit) end
+	if mode == 'gradient2' then return RGB(DB().healthEnd) end
 	return ClassColor(unit)
 end
 
-local function PowerColor(unit)
+-- Health on a meter: one color, or the two-color gradient set on the fill
+-- texture itself (shared with the unit frames), never read from the value.
+local function PaintHealth(bar, unit)
+	local db, colors = DB(), UI.UnitColors
+	if db.healthColor == 'gradient2' and colors and colors.FillGradient then
+		colors.FillGradient(bar, db.healthDirection, db.healthStart, db.healthEnd)
+	else
+		bar:SetStatusBarColor(HealthColor(unit))
+	end
+end
+
+-- Power and cast colors follow the unit frames' Colors card when it is there.
+local function PaintPower(bar, unit)
+	local colors = UI.UnitColors
+	if colors and colors.PaintPower then return colors.PaintPower(bar, unit) end
+	bar:SetStatusBarColor(PowerColorOf(unit))
+end
+
+local function CastColor(kind, fallback)
+	local colors = UI.UnitColors
+	if colors and colors.CastColor then return colors.CastColor(kind) end
+	return Kit:RGB(fallback)
+end
+
+function PowerColorOf(unit)
 	local ok, r, g, b = pcall(function()
 		local _, token = UnitPowerType(unit)
 		local color = token and PowerBarColor and PowerBarColor[token]
@@ -407,7 +446,7 @@ local function UpdateHealth(cell)
 	cell.health:SetValue(UnitHealth(unit), SMOOTH)
 	local dead = UnitIsDeadOrGhost(unit)
 	if not IsSecret(dead) and dead then cell.health:SetStatusBarColor(0.45, 0.45, 0.42)
-	else cell.health:SetStatusBarColor(HealthColor(unit)) end
+	else PaintHealth(cell.health, unit) end
 	-- Status: dead, offline or away first, else the health percent if asked.
 	local text = ''
 	local connected = UnitIsConnected(unit)
@@ -431,7 +470,7 @@ local function UpdatePower(cell)
 	if not show then return end
 	cell.power:SetMinMaxValues(0, UnitPowerMax(cell.unit))
 	cell.power:SetValue(UnitPower(cell.unit), SMOOTH)
-	cell.power:SetStatusBarColor(PowerColor(cell.unit))
+	PaintPower(cell.power, cell.unit)
 end
 
 local function UpdatePrediction(cell)
@@ -967,7 +1006,7 @@ local function CastStrip(device, unit)
 		else name, _, texture, _, _, _, _, notInterruptible = UnitCastingInfo(unit) end
 		cast.label:SetText(name)
 		cast.icon:SetTexture(texture)
-		bar:SetStatusBarColor(Kit:RGB('amber'))
+		bar:SetStatusBarColor(CastColor(channel and 'channel' or 'cast', 'amber'))
 		-- A secret "can't interrupt" greys the fill without being tested.
 		if IsSecret(notInterruptible) then
 			cast.shield:Show()
@@ -1003,7 +1042,7 @@ local function CastStrip(device, unit)
 		end
 		if failed then
 			cast.shield:Hide()
-			bar:SetStatusBarColor(Kit:RGB('red'))
+			bar:SetStatusBarColor(CastColor('interrupted', 'red'))
 			cast.label:SetText(failed)
 			C_Timer.After(0.6, Out)
 		else
@@ -1057,7 +1096,8 @@ local function UpdateDeviceHealth(device)
 	local unit = device.unit
 	device.health:SetMinMaxValues(0, UnitHealthMax(unit))
 	device.health:SetValue(UnitHealth(unit), SMOOTH)
-	device.health:SetStatusBarColor(device.kind == 'arena' and ClassColor(unit) or Kit:RGB('lamp'))
+	if device.kind == 'arena' and DB().healthColor ~= 'gradient2' then device.health:SetStatusBarColor(ClassColor(unit))
+	else PaintHealth(device.health, unit) end
 	SetHealthDigits(device.digits, unit)
 end
 
@@ -1065,7 +1105,7 @@ local function UpdateDevicePower(device)
 	local unit = device.unit
 	device.power:SetMinMaxValues(0, UnitPowerMax(unit))
 	device.power:SetValue(UnitPower(unit), SMOOTH)
-	device.power:SetStatusBarColor(PowerColor(unit))
+	PaintPower(device.power, unit)
 end
 
 local function UpdateDeviceName(device)
@@ -1538,7 +1578,13 @@ UI:RegisterPage('group', {title = 'Raid, boss, arena', order = 16, cards = {
 	{title = 'Raid up to 20', rows = RaidRows('small')},
 	{title = 'Raid of 21 to 40', rows = RaidRows('large')},
 	{title = 'Health', rows = {
-		{'dropdown', 'Health color', 'group.healthColor', items = {{'class', 'Class'}, {'accent', 'Key color'}, {'custom', 'Custom'}}},
+		{'dropdown', 'Health color', 'group.healthColor', items = {{'class', 'Class'}, {'reaction', 'Reaction'}, {'accent', 'Key color'},
+			{'custom', 'Custom'}, {'gradient2', 'Two-color gradient'}}},
+		{'color', 'Gradient start', 'group.healthStart', since = '0.5.1', hidden = function() return DB().healthColor ~= 'gradient2' end},
+		{'color', 'Gradient end', 'group.healthEnd', since = '0.5.1', hidden = function() return DB().healthColor ~= 'gradient2' end},
+		{'segmented', 'Gradient direction', 'group.healthDirection', items = {{'horizontal', 'Along'}, {'vertical', 'Up'}}, since = '0.5.1',
+			hidden = function() return DB().healthColor ~= 'gradient2' end},
+		{'note', 'Power and cast colors follow the Colors card on the Unit frames page.'},
 		{'color', 'Custom color', 'group.customColor', 'Used when health color is Custom.', hidden = NotCustom},
 		{'switch', 'Fade out of range', 'group.rangeFade', 'Members beyond 40 yards dim.'},
 		{'slider', 'Out of range opacity', 'group.rangeAlpha', 0.1, 1, 0.05, nil, format = Percent, disabled = NoRange},
