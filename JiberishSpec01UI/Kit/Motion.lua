@@ -293,9 +293,19 @@ function Kit:Caret(edit, opts)
 	edit:HookScript('OnCursorChanged', function(self, x, y, width, height)
 		if IsSecret(x) or IsSecret(y) or IsSecret(height) then return end
 		local size = select(2, self:GetFont()) or 12
+		-- The cursor's x and y are measured inside the text area, which sits
+		-- within the box's text insets; a single line is centred vertically.
+		local left, _, top = 0, 0, 0
+		if self.GetTextInsets then left, _, top = self:GetTextInsets() end
+		left, top = left or 0, top or 0
+		local blockHeight = floor(size * 1.1 + 0.5)
 		block:ClearAllPoints()
-		block:SetPoint('TOPLEFT', self, 'TOPLEFT', x or 0, y or 0)
-		block:SetSize(max(width or 0, size * 0.6), max(height or 0, size * 1.15))
+		if self.IsMultiLine and self:IsMultiLine() then
+			block:SetPoint('TOPLEFT', self, 'TOPLEFT', left + (x or 0), (y or 0) - top)
+		else
+			block:SetPoint('LEFT', self, 'LEFT', left + (x or 0), 0)
+		end
+		block:SetSize(max(1, floor(size * 0.6 + 0.5)), blockHeight)
 		if self:HasFocus() then Run() end
 	end)
 	edit:HookScript('OnEditFocusGained', Run)
