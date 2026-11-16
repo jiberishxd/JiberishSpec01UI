@@ -26,6 +26,21 @@ UI:RegisterDefaults('appearance', {
 	fade = {enable = false, alpha = 0.25, openWorld = false,
 		console = true, unitframes = true, minimap = false, chat = true, objectives = false, buffs = true},
 })
+-- Interface colors: each override replaces its tokens while its switch is on
+-- (Kit:RGB). The colors saved here are the reference's own, a starting point.
+UI:RegisterDefaults('colors', {
+	housingOn = false, housing = {r = 0.984, g = 0.984, b = 0.98},
+	screenOn = false, screen = {r = 0, g = 0, b = 0},
+	lcdOn = false, lcd = {r = 0.761, g = 0.765, b = 0.741},
+	lcdInkOn = false, lcdInk = {r = 0.078, g = 0.078, b = 0.075},
+	lampOn = false, lamp = {r = 1, g = 0.702, b = 0.278},
+	inkOn = false, ink = {r = 0.114, g = 0.114, b = 0.110},
+	dimOn = false, dim = {r = 0.561, g = 0.553, b = 0.529},
+	screenTextOn = false, screenText = {r = 0.949, g = 0.949, b = 0.933},
+	edgeOn = false, edge = {r = 0.326, g = 0.310, b = 0.275},
+	gradient = false,
+	gradientColors = {from = {r = 1, g = 1, b = 1, a = 0.10}, to = {r = 0.33, g = 0.31, b = 0.27, a = 0.10}, dir = 'VERTICAL'},
+})
 -- Per-area typefaces ('__inherit' follows the interface's) and size multipliers.
 UI:RegisterDefaults('fonts', {
 	unitframes = '__inherit', nameplates = '__inherit', chat = '__inherit', keys = '__inherit', numbers = '__inherit', windows = '__inherit',
@@ -138,6 +153,52 @@ UI:RegisterPage('theme', {title = 'Theme', order = 2,
 		{'switch', 'Chat', 'appearance.fade.chat'},
 		{'switch', 'Objectives', 'appearance.fade.objectives'},
 		{'switch', 'Buffs', 'appearance.fade.buffs'},
+	}},
+}})
+
+-- The Colors page ---------------------------------------------------------------
+-- The key color and every interface color, each set on the CX-1 color instrument.
+local OVERRIDE_ROWS = {
+	{'housing', 'Housing', 'The body of every device: Paper\'s off-white or Graphite\'s charcoal.'},
+	{'edge', 'Edges', 'Housing outlines and printed hairlines.'},
+	{'screen', 'Screens', 'The black glass behind displays and dark panels.'},
+	{'screenText', 'Screen text', 'Text and readouts on black glass.'},
+	{'lcd', 'LCD glass', 'The gray reflective LCD windows.'},
+	{'lcdInk', 'LCD print', 'Digits and text on LCDs.'},
+	{'lamp', 'Lamps', 'Lit LEDs, pointers and lamps (otherwise the key color).'},
+	{'ink', 'Text', 'Printed text on housings.'},
+	{'dim', 'Dim text', 'Legends, captions and secondary labels.'},
+}
+
+local colorRows = {
+	{'dropdown', 'Key color', 'accent', items = ACCENTS, note = 'Primary keys, lamps and lit dots. The six are the reference\'s.'},
+	{'color', 'Custom key', 'customAccent', 'Used when the key color is Custom.',
+		hidden = function() return UI.db.accent ~= 'custom' end},
+}
+for _, entry in ipairs(OVERRIDE_ROWS) do
+	local key = entry[1]
+	colorRows[#colorRows + 1] = {'switch', entry[2], 'colors.'..key..'On', entry[3], since = '0.5.1'}
+	colorRows[#colorRows + 1] = {'color', entry[2]..' color', 'colors.'..key,
+		hidden = function() return not UI.db.colors[key..'On'] end}
+end
+
+local function ResetColors()
+	for _, entry in ipairs(OVERRIDE_ROWS) do UI.db.colors[entry[1]..'On'] = false end
+	UI.db.colors.gradient = false
+	Kit:Apply()
+	UI:Print('Interface colors back to the finish\'s own.')
+end
+
+UI:RegisterPage('colors', {title = 'Colors', order = 2.05, since = '0.5.1', cards = {
+	{title = 'Interface colors', rows = colorRows},
+	{title = 'Gradient', rows = {
+		{'switch', 'Housing gradient', 'colors.gradient', 'A soft wash over every housing, lighter at the top and darker at the foot by default.', since = '0.5.1'},
+		{'color', 'Gradient', 'colors.gradientColors', 'Two stops and a direction. Alpha sets how strong each end is.',
+			hidden = function() return not UI.db.colors.gradient end},
+	}},
+	{title = 'Colors', rows = {
+		{'button', 'Interface colors', 'Reset', ResetColors, 'Every override off; the finish\'s own colors return.'},
+		{'note', 'Every color opens the CX-1 color instrument: turn the hue ring, set lightness, chroma and hue (or red, green and blue) on the encoders, type a hex code on the LCD, or pick a key, class or recent color. Changes show as you make them; Cancel puts the old color back.'},
 	}},
 }})
 

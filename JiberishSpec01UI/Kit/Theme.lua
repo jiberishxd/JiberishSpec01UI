@@ -57,6 +57,7 @@ Kit.shared = {
 	dark = Hex('1b1b19'), darkEdge = Hex('2e2e2b'), darkLip = Hex('000000'), darkInk = Hex('f2f2ee'), darkDim = Hex('9a9a94'),
 	glass = Hex('0d0d0c'), green = Hex('2f9e5f'), blue = Hex('4aa3ff'), amber = Hex('ffa800'), red = Hex('ff3b30'),
 	screenAccent = Hex('ffb347'), ledGreen = Hex('2fbf6a'), ledBlue = Hex('4a8cff'),
+	screenFill = {0, 0, 0}, -- the black of screens, apart from black itself so it can be retinted
 	white = {1, 1, 1}, black = {0, 0, 0},
 	screenInk = Hex('141413'), screenDim = Hex('5c5d58'), -- text on the always-gray toast glass
 }
@@ -133,9 +134,34 @@ end
 
 local ACCENT_TOKENS = {accent = 'key', accentInk = 'ink', lamp = 'lamp', onAccent = 'on', accentLip = 'edge'}
 
+-- Interface colors (the Theme page's Colors card, saved under db.colors): each
+-- override, while switched on, replaces these tokens on every finish.
+local OVERRIDES = {panel = 'housing', dark = 'housing', glass = 'screen', screenFill = 'screen', lcd = 'lcd',
+	lcdInk = 'lcdInk', lamp = 'lamp', ink = 'ink', dim = 'dim', darkInk = 'screenText', hair = 'edge', line = 'edge',
+	edgeOverride = 'edge'}
+Kit.COLOR_OVERRIDES = OVERRIDES
+
+local function Override(token)
+	local key = OVERRIDES[token]
+	if not key then return nil end
+	local db = UI.db and UI.db.colors
+	if type(db) ~= 'table' or not db[key..'On'] then return nil end
+	local color = db[key]
+	if type(color) ~= 'table' then return nil end
+	return color.r or color[1] or 1, color.g or color[2] or 1, color.b or color[3] or 1
+end
+
+-- Whether an interface color override is on (for parts that choose a token by it).
+function Kit:Overridden(key)
+	local db = UI.db and UI.db.colors
+	return type(db) == 'table' and db[key..'On'] and type(db[key]) == 'table' or false
+end
+
 -- Resolve a palette token. Unknown tokens fall back to ink so a typo is visible.
 function Kit:RGB(token)
 	if type(token) == 'table' then return token[1], token[2], token[3] end
+	local r, g, b = Override(token)
+	if r then return Soften(token, r, g, b) end
 	local role = ACCENT_TOKENS[token]
 	if role then
 		local color = self:AccentRoles()[role]
@@ -726,7 +752,7 @@ Kit.SURFACES = {
 	-- The gray LCD is recessed: shaded under its top edge, lit along its foot.
 	lcd = {fill = 'lcd', edge = 'black', edgeAlpha = 0.28, lit = 0.22, shade = 0.75, recessed = true},
 	glass = {fill = 'glass', edge = 'black', edgeAlpha = 1, lit = 0.08, shade = 0},
-	screen = {fill = 'black', edge = 'black', edgeAlpha = 1, lit = 0.05, shade = 0},
+	screen = {fill = 'screenFill', edge = 'black', edgeAlpha = 1, lit = 0.05, shade = 0},
 }
 
 local function SlicedTexture(owner, file, layer, sublevel, margin)
@@ -767,6 +793,10 @@ function Kit:FitShell(shell)
 	self:Place(shell.edge, owner, 0, 0, 0, 0)
 	ScaleTo(shell.fill, inner / SHELL_ART_RADIUS)
 	self:Place(shell.fill, owner, -border, -border, -border, -border)
+	if shell.tint then
+		ScaleTo(shell.tint, inner / SHELL_ART_RADIUS)
+		self:Place(shell.tint, owner, -border, -border, -border, -border)
+	end
 	-- A wall shows only on a paper housing; the shadow then starts under it.
 	local wall = 0
 	if shell.wall then
@@ -805,7 +835,33 @@ function Kit:PaintShell(shell)
 	local surface = self.SURFACES[name] or self.SURFACES.paper
 	local alpha = opts.alpha or (name == 'paper' or name == 'dark') and (self:DB().housingAlpha or 0.95) or 1
 	self:Tint(shell.fill, opts.fill or surface.fill, alpha)
-	self:Tint(shell.edge, opts.edge or surface.edge, surface.edgeAlpha * min(1, alpha + 0.05))
+	-- An edge color override recolors housing edges too (at least half strength, so it shows).
+	local housing = name == 'paper' or name == 'dark'
+	if not opts.edge and housing and self:Overridden('edge') then
+		self:Tint(shell.edge, 'edgeOverride', max(surface.edgeAlpha, 0.5) * min(1, alpha + 0.05))
+	else
+		self:Tint(shell.edge, opts.edge or surface.edge, surface.edgeAlpha * min(1, alpha + 0.05))
+	end
+	-- The interface gradient on housings: a top-to-bottom (or across) wash over the fill.
+	if shell.tint then
+		local colors = UI.db and UI.db.colors
+		local gradient = housing and type(colors) == 'table' and colors.gradient and colors.gradientColors
+		if type(gradient) == 'table' and type(gradient.from) == 'table' and type(gradient.to) == 'table' then
+			local from, to = gradient.from, gradient.to
+			local fr, fg, fb, fa = from.r or from[1] or 1, from.g or from[2] or 1, from.b or from[3] or 1, from.a or from[4] or 1
+			local tr, tg, tb, ta = to.r or to[1] or 1, to.g or to[2] or 1, to.b or to[3] or 1, to.a or to[4] or 1
+			shell.tint:SetVertexColor(1, 1, 1, 1)
+			if gradient.dir == 'HORIZONTAL' then
+				shell.tint:SetGradient('HORIZONTAL', CreateColor(fr, fg, fb, fa * alpha), CreateColor(tr, tg, tb, ta * alpha))
+			else
+				-- A vertical gradient's first color is its bottom.
+				shell.tint:SetGradient('VERTICAL', CreateColor(tr, tg, tb, ta * alpha), CreateColor(fr, fg, fb, fa * alpha))
+			end
+			shell.tint:Show()
+		else
+			shell.tint:Hide()
+		end
+	end
 	if surface.recessed then
 		-- Sunk into the panel: dark under the top edge, a white catch-light at the foot.
 		shell.lit:SetColorTexture(0, 0, 0, surface.lit * alpha)
@@ -851,8 +907,11 @@ function Kit:Shell(owner, opts)
 	if opts.wall then shell.wall = SlicedTexture(shell, 'shell', 'BACKGROUND', -7, SHELL_SLICE) end
 	shell.edge = SlicedTexture(shell, 'shell', 'BACKGROUND', -6, SHELL_SLICE)
 	shell.fill = SlicedTexture(shell, 'shell', 'BACKGROUND', -5, SHELL_SLICE)
-	shell.lit = shell:CreateTexture(nil, 'BACKGROUND', nil, -4)
-	shell.shade = shell:CreateTexture(nil, 'BACKGROUND', nil, -4)
+	-- The interface gradient (Theme → Colors), over the fill, in the fill's shape.
+	shell.tint = SlicedTexture(shell, 'shell', 'BACKGROUND', -4, SHELL_SLICE)
+	shell.tint:Hide()
+	shell.lit = shell:CreateTexture(nil, 'BACKGROUND', nil, -3)
+	shell.shade = shell:CreateTexture(nil, 'BACKGROUND', nil, -3)
 	shells[shell] = true
 	owner:HookScript('OnSizeChanged', function() Kit:FitShell(shell) end)
 	self:PaintShell(shell)
