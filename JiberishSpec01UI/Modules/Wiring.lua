@@ -1,35 +1,42 @@
 -- Wiring: circuit traces between the interface's devices, so every part reads
 -- as one board.
 --
---   * Traces: hairlines routed with right-angle elbows between two devices,
---     with square solder pads where a trace meets an edge and at each elbow:
---     player to target, target to its target, player to pet, the unit frames to
---     the console, the aura timeline to the player, the swing timer to the console.
---   * Rails: a baseline along the bottom of the screen (and optionally the top)
---     with risers up into every device that sits near it, like a backplane.
---   * States: idle traces are dim ink. A new target draws its trace in from the
---     player with a lit packet at the head, then holds it in the target's
---     reaction color (hostile red, friendly green, neutral amber); losing the
---     target pulls it back. In combat the target and console traces turn red
---     and a packet runs along them every few seconds; leaving combat sends one
---     green packet down every trace before they dim again.
+--   * Traces are two-tone, so they read on light and dark ground alike: a dark
+--     casing under a lit core, routed with right-angle elbows between two
+--     devices. Each end has a keyed connector plug at the device's edge and a
+--     round LED in a dark ring; each elbow is a square pad with a lit edge. A
+--     small printed label names the link (UF-1 · UF-2). Idle traces can run as
+--     fine dashes, like a ribbon cable, and go solid when they carry a signal.
+--   * Links: player to target, target to its target, player to pet or focus,
+--     unit frames to the console, the aura timeline to the player, the game's
+--     swing timers to the console.
+--   * Rails: a bus along the bottom of the screen (and optionally the top) with
+--     risers up into every device that sits near it, like a backplane.
+--   * States: a new target draws its trace in from the player with a lit
+--     capsule at its head, then holds it lit in the target's reaction color
+--     (hostile red, friendly green, neutral amber) and its LEDs on; losing the
+--     target pulls the trace back. While a target is held, a quiet packet runs
+--     along its trace every few seconds. In combat the target and console traces
+--     turn red and carry a packet every few seconds; leaving combat sends one
+--     green packet down every trace. Each LED blinks as a packet arrives.
 --
 -- Everything is drawn on one frame under the devices, from our own frames'
--- geometry (the game's swing timers are read guarded). Paths are worked out
--- again only when something moves, resizes, shows or hides; nothing runs per
--- frame except a running animation.
+-- geometry (the game's swing timers are read guarded). A link is drawn only
+-- while both of its ends are on screen. Paths are worked out again only when
+-- something moves, resizes, shows or hides; nothing runs per frame except a
+-- running animation.
 local _, UI = ...
 local Kit = UI.Kit
 
 local CreateFrame, UIParent = CreateFrame, UIParent
-local max, min, abs = math.max, math.min, math.abs
+local max, min, abs, floor = math.max, math.min, math.abs, math.floor
 
 local module = UI:RegisterModule('wiring', {always = true})
 
 -- defaults:begin
 UI:RegisterDefaults('wiring', {enable = true, style = 'traces', target = true, tot = true, pet = true, focus = false,
-	console = true, timeline = true, swing = true, topRail = false, thickness = 1, opacity = 0.35, pulses = true,
-	speed = 700})
+	console = true, timeline = true, swing = true, topRail = false, thickness = 2, opacity = 0.85, pulses = true,
+	speed = 700, casing = true, nodes = true, labels = true, dashed = true, ambient = true})
 -- defaults:end
 
 local function DB() return UI.db.wiring end
@@ -55,8 +62,7 @@ local function Px(n) return UI.Pixel.Px(root, n) end
 local function Rect(frame)
 	if type(frame) ~= 'table' or not frame.GetRect then return nil end
 	if frame.IsForbidden and frame:IsForbidden() then return nil end
-	local shown = Plain(frame.IsVisible, frame)
-	if not shown then return nil end
+	if not Plain(frame.IsVisible, frame) then return nil end
 	local alpha = Plain(frame.GetEffectiveAlpha or frame.GetAlpha, frame)
 	if type(alpha) == 'number' and alpha < 0.05 then return nil end
 	local ok, left, bottom, width, height = pcall(frame.GetRect, frame)
@@ -81,8 +87,8 @@ local function Watch(frame)
 end
 
 -- Two rectangles joined with right-angle runs: out of the facing sides, an
--- elbow halfway between. nil when they overlap.
-local GAP = 4
+-- elbow halfway between. nil when they overlap or nearly touch.
+local GAP = 10
 local function Route(a, b)
 	local acx, acy = (a.l + a.r) / 2, (a.b + a.t) / 2
 	local bcx, bcy = (b.l + b.r) / 2, (b.b + b.t) / 2
@@ -95,7 +101,7 @@ local function Route(a, b)
 	sx, sy, ex, ey = Snap(sx), Snap(sy), Snap(ex), Snap(ey)
 	if across then
 		-- Keep the run level where the two sides overlap vertically.
-		local low, high = max(a.b, b.b) + 3, min(a.t, b.t) - 3
+		local low, high = max(a.b, b.b) + 6, min(a.t, b.t) - 6
 		if low <= high then
 			local y = Snap(min(max((acy + bcy) / 2, low), high))
 			return {{sx, y}, {ex, y}}
@@ -103,7 +109,7 @@ local function Route(a, b)
 		local mx = Snap((sx + ex) / 2)
 		return {{sx, sy}, {mx, sy}, {mx, ey}, {ex, ey}}
 	end
-	local low, high = max(a.l, b.l) + 3, min(a.r, b.r) - 3
+	local low, high = max(a.l, b.l) + 6, min(a.r, b.r) - 6
 	if low <= high then
 		local x = Snap(min(max((acx + bcx) / 2, low), high))
 		return {{x, sy}, {x, ey}}
@@ -112,11 +118,61 @@ local function Route(a, b)
 	return {{sx, sy}, {sx, my}, {ex, my}, {ex, ey}}
 end
 
+-- Parts ---------------------------------------------------------------------------------
+-- Pieces are made as a wire first needs them and kept for reuse.
+local function Line(list, index, sublevel)
+	local line = list[index]
+	if not line then
+		line = root:CreateLine(nil, 'ARTWORK', nil, sublevel)
+		line:SetColorTexture(1, 1, 1, 1)
+		list[index] = line
+	end
+	return line
+end
+
+local function Square(list, index, sublevel)
+	local square = list[index]
+	if not square then
+		square = root:CreateTexture(nil, 'OVERLAY', nil, sublevel)
+		square:SetColorTexture(1, 1, 1, 1)
+		list[index] = square
+	end
+	return square
+end
+
+-- An end node: a dark ring, a lamp and its glow.
+local function Node(wire, index)
+	local node = wire.ends[index]
+	if node then return node end
+	node = {}
+	node.ring = Kit:Texture(root, 'circle', 'OVERLAY', 3)
+	node.ring:SetVertexColor(0, 0, 0, 0.75)
+	node.lamp = Kit:Texture(root, 'circle', 'OVERLAY', 5)
+	node.glow = Kit:Texture(root, 'glow', 'OVERLAY', 4)
+	node.glow:SetBlendMode('ADD')
+	node.plug = root:CreateTexture(nil, 'OVERLAY', nil, 2)
+	node.plug:SetColorTexture(1, 1, 1, 1)
+	node.key = root:CreateTexture(nil, 'OVERLAY', nil, 3)
+	node.key:SetColorTexture(1, 1, 1, 1)
+	wire.ends[index] = node
+	return node
+end
+
+local function HideNode(node)
+	for _, part in pairs(node) do if type(part) == 'table' and part.Hide then part:Hide() end end
+end
+
 -- Wires --------------------------------------------------------------------------------
+local LABELS = {
+	target = 'UF-1 · UF-2', tot = 'UF-2 · UF-3', pet = 'UF-1 · PET', focus = 'UF-1 · FOC',
+	['console.player'] = 'UF-1 · CX-1', ['console.target'] = 'UF-2 · CX-1', timeline = 'UF-1 · TL-1', rail = 'BUS',
+}
+
 local function Wire(key)
 	local wire = wires[key]
 	if wire then return wire end
-	wire = {key = key, lines = {}, nodes = {}, fraction = 1, token = 'rule', alpha = 0.35, shown = false}
+	wire = {key = key, casing = {}, core = {}, dashes = {}, pads = {}, lits = {}, ends = {}, fraction = 1,
+		token = 'darkInk', alpha = 0.85, active = false, shown = false}
 	wires[key] = wire
 	return wire
 end
@@ -152,53 +208,165 @@ local function PointAt(wire, distance)
 	return points[#points][1], points[#points][2]
 end
 
+-- The unit direction of the segment at one end, pointing out of the device.
+local function Outward(wire, atEnd)
+	local points = wire.points
+	local a, b
+	if atEnd then a, b = points[#points], points[#points - 1] else a, b = points[1], points[2] end
+	local dx, dy = b[1] - a[1], b[2] - a[2]
+	local length = abs(dx) + abs(dy)
+	if length <= 0 then return 1, 0 end
+	return dx / length, dy / length
+end
+
 local function Paint(wire)
+	local db = DB()
 	local r, g, b = Kit:RGB(wire.token)
-	for _, line in ipairs(wire.lines) do line:SetVertexColor(r, g, b, wire.alpha) end
-	for _, node in ipairs(wire.nodes) do node:SetVertexColor(r, g, b, min(1, wire.alpha * 1.5)) end
+	for _, line in ipairs(wire.core) do line:SetVertexColor(r, g, b, wire.alpha) end
+	for _, line in ipairs(wire.dashes) do line:SetVertexColor(r, g, b, wire.alpha) end
+	for _, line in ipairs(wire.casing) do line:SetVertexColor(0, 0, 0, db.casing and 0.55 or 0) end
+	for _, pad in ipairs(wire.pads) do pad:SetVertexColor(0.04, 0.04, 0.04, 0.85) end
+	for _, lit in ipairs(wire.lits) do lit:SetVertexColor(r, g, b, 0.7) end
+	local ir, ig, ib = Kit:RGB('darkInk')
+	for _, node in ipairs(wire.ends) do
+		node.plug:SetVertexColor(0.06, 0.06, 0.06, 0.9)
+		node.key:SetVertexColor(ir, ig, ib, 0.55)
+		if wire.active then
+			node.lamp:SetVertexColor(r, g, b, 1)
+			node.glow:SetVertexColor(r, g, b, 0.75)
+		else
+			local lr, lg, lb = Kit:RGB('ledOff')
+			node.lamp:SetVertexColor(lr, lg, lb, 1)
+			node.glow:SetVertexColor(r, g, b, 0)
+		end
+	end
+	if wire.label then Kit:Tint(wire.label, wire.active and wire.token or 'legend', wire.active and 0.95 or 0.8) end
+end
+
+-- One run drawn as fine dashes along it.
+local DASH, SPACE = 4, 3
+local function Dashes(wire, used, ax, ay, bx, by, thickness)
+	local length = abs(bx - ax) + abs(by - ay)
+	if length <= 0 then return used end
+	local dash, space = Px(DASH), Px(SPACE)
+	local dx, dy = (bx - ax) / length, (by - ay) / length
+	local at = 0
+	while at < length do
+		local stop = min(at + dash, length)
+		used = used + 1
+		local line = Line(wire.dashes, used, 2)
+		line:SetThickness(thickness)
+		line:SetStartPoint('BOTTOMLEFT', root, Snap(ax + dx * at), Snap(ay + dy * at))
+		line:SetEndPoint('BOTTOMLEFT', root, Snap(ax + dx * stop), Snap(ay + dy * stop))
+		line:Show()
+		at = stop + space
+	end
+	return used
 end
 
 -- Lay the wire out up to its drawn fraction (from its start).
 local function Draw(wire)
+	local db = DB()
 	local points = wire.points
 	local count = points and wire.shown and #points or 0
 	local visible = count > 0 and wire.fraction * wire.total or 0
-	local thickness = Px(max(1, DB().thickness or 1))
-	local pad = Px(3)
-	for index = 1, max(count - 1, #wire.lines) do
-		local line = wire.lines[index]
+	local core = Px(max(1, db.thickness or 2))
+	local casing = core + Px(2)
+	local dashed = db.dashed and not wire.active and wire.fraction >= 1
+	local dashUsed = 0
+	for index = 1, max(count - 1, #wire.core) do
+		local coreLine, caseLine = wire.core[index], wire.casing[index]
 		if index < count and visible > wire.cum[index] then
-			if not line then
-				line = root:CreateLine(nil, 'ARTWORK')
-				line:SetColorTexture(1, 1, 1, 1)
-				wire.lines[index] = line
-			end
 			local a = points[index]
 			local x, y = PointAt(wire, min(visible, wire.cum[index + 1]))
-			line:SetThickness(thickness)
-			line:SetStartPoint('BOTTOMLEFT', root, a[1], a[2])
-			line:SetEndPoint('BOTTOMLEFT', root, x, y)
-			line:Show()
-		elseif line then
-			line:Hide()
+			caseLine = Line(wire.casing, index, 0)
+			caseLine:SetThickness(casing)
+			caseLine:SetStartPoint('BOTTOMLEFT', root, a[1], a[2])
+			caseLine:SetEndPoint('BOTTOMLEFT', root, x, y)
+			caseLine:Show()
+			if dashed then
+				if coreLine then coreLine:Hide() end
+				dashUsed = Dashes(wire, dashUsed, a[1], a[2], x, y, core)
+			else
+				coreLine = Line(wire.core, index, 1)
+				coreLine:SetThickness(core)
+				coreLine:SetStartPoint('BOTTOMLEFT', root, a[1], a[2])
+				coreLine:SetEndPoint('BOTTOMLEFT', root, x, y)
+				coreLine:Show()
+			end
+		else
+			if coreLine then coreLine:Hide() end
+			if caseLine then caseLine:Hide() end
 		end
 	end
-	for index = 1, max(count, #wire.nodes) do
-		local node = wire.nodes[index]
-		local reached = index <= count and (visible >= wire.cum[index] - 0.01) and (index < count or wire.fraction >= 1)
-		if reached then
-			if not node then
-				node = root:CreateTexture(nil, 'ARTWORK', nil, 2)
-				node:SetColorTexture(1, 1, 1, 1)
-				wire.nodes[index] = node
+	for index = dashUsed + 1, #wire.dashes do wire.dashes[index]:Hide() end
+	-- Elbow pads: a dark square with a lit edge along its top.
+	local padSize, elbows = Px(5), 0
+	if db.nodes then
+		for index = 2, count - 1 do
+			if visible >= wire.cum[index] then
+				elbows = elbows + 1
+				local pad, lit = Square(wire.pads, elbows, 4), Square(wire.lits, elbows, 5)
+				pad:SetSize(padSize, padSize)
+				pad:ClearAllPoints()
+				pad:SetPoint('CENTER', root, 'BOTTOMLEFT', points[index][1], points[index][2])
+				lit:SetSize(padSize, Px(1))
+				lit:ClearAllPoints()
+				lit:SetPoint('TOP', pad, 'TOP')
+				pad:Show(); lit:Show()
 			end
-			node:SetSize(pad, pad)
-			node:ClearAllPoints()
-			node:SetPoint('CENTER', root, 'BOTTOMLEFT', points[index][1], points[index][2])
-			node:Show()
-		elseif node then
-			node:Hide()
 		end
+	end
+	for index = elbows + 1, #wire.pads do wire.pads[index]:Hide(); wire.lits[index]:Hide() end
+	-- End nodes: a keyed plug at the device's edge and a lamp in a ring just out from it.
+	for index = 1, 2 do
+		local reached = count > 0 and db.nodes and (index == 1 or wire.fraction >= 1)
+		local node = wire.ends[index]
+		if reached then
+			node = Node(wire, index)
+			local point = index == 1 and points[1] or points[count]
+			local ox, oy = Outward(wire, index == 2)
+			local plugLength, plugWidth = Px(7), Px(5)
+			local across = abs(ox) > abs(oy)
+			node.plug:SetSize(across and plugLength or plugWidth, across and plugWidth or plugLength)
+			node.plug:ClearAllPoints()
+			node.plug:SetPoint('CENTER', root, 'BOTTOMLEFT', point[1] + ox * plugLength / 2, point[2] + oy * plugLength / 2)
+			node.key:SetSize(across and Px(2) or Px(1), across and Px(1) or Px(2))
+			node.key:ClearAllPoints()
+			node.key:SetPoint('CENTER', node.plug, 'CENTER')
+			local lx, ly = point[1] + ox * (plugLength + Px(4)), point[2] + oy * (plugLength + Px(4))
+			node.ring:SetSize(Px(9), Px(9))
+			node.ring:ClearAllPoints()
+			node.ring:SetPoint('CENTER', root, 'BOTTOMLEFT', lx, ly)
+			node.lamp:SetSize(Px(5), Px(5))
+			node.lamp:ClearAllPoints()
+			node.lamp:SetPoint('CENTER', node.ring, 'CENTER')
+			node.glow:SetSize(Px(18), Px(18))
+			node.glow:ClearAllPoints()
+			node.glow:SetPoint('CENTER', node.ring, 'CENTER')
+			for _, part in pairs(node) do if type(part) == 'table' and part.Show then part:Show() end end
+		elseif node then
+			HideNode(node)
+		end
+	end
+	-- The printed label, beside the start.
+	local text = db.labels and count > 0 and (LABELS[wire.key] or (wire.key:find('^swing') and 'ST · CX-1'))
+	if text then
+		if not wire.label then wire.label = Kit:Label(root, text, 'legend', 7, true) end
+		wire.label:SetText(text)
+		local ox, oy = Outward(wire, false)
+		local start = points[1]
+		local offset = Px(14)
+		wire.label:ClearAllPoints()
+		if abs(ox) > abs(oy) then
+			wire.label:SetPoint(ox > 0 and 'BOTTOMLEFT' or 'BOTTOMRIGHT', root, 'BOTTOMLEFT', start[1] + ox * offset, start[2] + Px(5))
+		else
+			wire.label:SetPoint('LEFT', root, 'BOTTOMLEFT', start[1] + Px(7), start[2] + oy * offset)
+		end
+		wire.label:SetAlpha(min(1, wire.fraction * 2))
+		wire.label:Show()
+	elseif wire.label then
+		wire.label:Hide()
 	end
 	Paint(wire)
 end
@@ -210,24 +378,37 @@ end
 
 -- Packets --------------------------------------------------------------------------------
 local pool = {}
+local TRAIL = {0.6, 0.35, 0.15}
 local function Packet()
 	local packet = table.remove(pool)
 	if packet then return packet end
-	packet = {}
-	packet.glow = Kit:Texture(root, 'glow', 'OVERLAY', 1)
+	packet = {trail = {}}
+	packet.glow = Kit:Texture(root, 'glow', 'OVERLAY', 6)
 	packet.glow:SetBlendMode('ADD')
-	packet.dot = root:CreateTexture(nil, 'OVERLAY', nil, 3)
-	packet.dot:SetColorTexture(1, 1, 1, 1)
+	packet.head = Kit:Texture(root, 'circle', 'OVERLAY', 7)
+	for index = 1, #TRAIL do packet.trail[index] = Kit:Texture(root, 'circle', 'OVERLAY', 6) end
 	return packet
 end
 
 local function Release(packet)
 	packet.glow:Hide()
-	packet.dot:Hide()
+	packet.head:Hide()
+	for _, dot in ipairs(packet.trail) do dot:Hide() end
 	pool[#pool + 1] = packet
 end
 
--- Send a lit packet along a wire, from one distance to another.
+-- An LED blinks as a packet arrives.
+local function Blink(wire, index)
+	local node = wire.ends[index]
+	if not (node and wire.shown and node.lamp:IsShown()) or Reduced() then return end
+	local r, g, b = Kit:RGB(wire.active and wire.token or 'darkInk')
+	Kit:Animate(node, 0.35, 1, 0, function(value)
+		node.glow:SetVertexColor(r, g, b, 0.2 + 0.8 * value)
+		node.lamp:SetVertexColor(min(1, r + value * 0.5), min(1, g + value * 0.5), min(1, b + value * 0.5), 1)
+	end, function() Paint(wire) end, 'sine')
+end
+
+-- Send a lit capsule with a short trail along a wire, from one distance to another.
 local function Pulse(wire, token, from, to, done)
 	if not (wire.points and wire.shown) or Reduced() or not DB().pulses then
 		if done then done() end
@@ -236,30 +417,44 @@ local function Pulse(wire, token, from, to, done)
 	from, to = from or 0, to or wire.total
 	local packet = Packet()
 	local r, g, b = Kit:RGB(token)
-	local size = Px(16)
-	packet.glow:SetSize(size, size)
+	local headSize, glowSize = Px(7), Px(22)
+	packet.glow:SetSize(glowSize, glowSize)
 	packet.glow:SetVertexColor(r, g, b, 0.9)
-	packet.dot:SetSize(Px(3), Px(3))
-	packet.dot:SetVertexColor(min(1, r + 0.4), min(1, g + 0.4), min(1, b + 0.4), 1)
-	packet.glow:Show()
-	packet.dot:Show()
-	local duration = max(0.18, abs(to - from) / max(DB().speed or 700, 50))
+	packet.head:SetSize(headSize, headSize)
+	packet.head:SetVertexColor(min(1, r + 0.45), min(1, g + 0.45), min(1, b + 0.45), 1)
+	for index, dot in ipairs(packet.trail) do
+		local size = Px(6 - index)
+		dot:SetSize(size, size)
+		dot:SetVertexColor(r, g, b, TRAIL[index])
+	end
+	local direction = to >= from and 1 or -1
+	local spacing = Px(5)
+	local duration = max(0.2, abs(to - from) / max(DB().speed or 700, 50))
 	Kit:Animate(packet, duration, 0, 1, function(value, progress)
-		local x, y = PointAt(wire, from + (to - from) * value)
-		packet.glow:ClearAllPoints()
-		packet.glow:SetPoint('CENTER', root, 'BOTTOMLEFT', x, y)
-		packet.dot:ClearAllPoints()
-		packet.dot:SetPoint('CENTER', root, 'BOTTOMLEFT', x, y)
-		local fade = progress < 0.1 and progress / 0.1 or (progress > 0.85 and (1 - progress) / 0.15 or 1)
-		packet.glow:SetAlpha(fade)
-		packet.dot:SetAlpha(fade)
+		local distance = from + (to - from) * value
+		local fade = progress < 0.08 and progress / 0.08 or (progress > 0.9 and (1 - progress) / 0.1 or 1)
+		local x, y = PointAt(wire, distance)
+		for _, region in ipairs({packet.glow, packet.head}) do
+			region:ClearAllPoints()
+			region:SetPoint('CENTER', root, 'BOTTOMLEFT', x, y)
+			region:SetAlpha(fade)
+			region:Show()
+		end
+		for index, dot in ipairs(packet.trail) do
+			local tx, ty = PointAt(wire, distance - direction * spacing * index)
+			dot:ClearAllPoints()
+			dot:SetPoint('CENTER', root, 'BOTTOMLEFT', tx, ty)
+			dot:SetAlpha(fade)
+			dot:Show()
+		end
 	end, function()
 		Release(packet)
+		Blink(wire, direction > 0 and 2 or 1)
 		if done then done() end
 	end, 'inout')
 end
 
--- Connections ----------------------------------------------------------------------------
+-- Links -----------------------------------------------------------------------------------
 local function Movers()
 	local byKey = {}
 	for _, entry in ipairs(UI.GetMovers and UI:GetMovers() or {}) do byKey[entry.key] = entry end
@@ -276,25 +471,37 @@ local function Reaction()
 	return 'amber'
 end
 
--- Each connection: its key, its setting, and its two frames (or nil).
+-- A game swing timer counts only while it is timing (or idling visibly with a weapon).
+local function Swinging(frame)
+	if type(frame) ~= 'table' then return false end
+	local has = Plain(frame.HasSwingTimer, frame)
+	return has ~= false
+end
+
+-- Each link: its key and its two frames, only while both ends mean something.
 local SWING = {'SwingTimerMainHandFrame', 'SwingTimerOffHandFrame', 'SwingTimerRangedFrame'}
-local function Connections(byKey)
+local function Links(byKey)
 	local db = DB()
 	local function Frame(key) return byKey[key] and byKey[key].frame end
 	local list = {}
 	local function Add(key, on, a, b) if on and a and b then list[#list + 1] = {key = key, a = a, b = b} end end
 	local player, target = Frame('uf.player'), Frame('uf.target')
+	local hasTarget = Exists('target')
 	local bothDocked = Docked('uf.player') and Docked('uf.target')
-	Add('target', db.target and Exists('target') and not bothDocked, player, target)
-	Add('tot', db.tot and Exists('targettarget'), target, Frame('uf.targettarget'))
+	Add('target', db.target and hasTarget and not bothDocked, player, target)
+	Add('tot', db.tot and hasTarget and Exists('targettarget'), target, Frame('uf.targettarget'))
 	Add('pet', db.pet and Exists('pet'), player, Frame('uf.pet'))
 	Add('focus', db.focus and Exists('focus'), player, Frame('uf.focus'))
 	local console = Frame('ab.console')
 	Add('console.player', db.console and not Docked('uf.player'), player, console)
-	Add('console.target', db.console and Exists('target') and not Docked('uf.target'), target, console)
-	Add('timeline', db.timeline, player, Frame('tl.player'))
+	Add('console.target', db.console and hasTarget and not Docked('uf.target'), target, console)
+	local timeline = UI.db.timeline
+	Add('timeline', db.timeline and type(timeline) == 'table' and timeline.enable, player, Frame('tl.player'))
 	if db.swing then
-		for _, name in ipairs(SWING) do Add('swing.'..name, true, _G[name], console) end
+		for _, name in ipairs(SWING) do
+			local frame = _G[name]
+			Add('swing.'..name, Swinging(frame), frame, console)
+		end
 	end
 	return list
 end
@@ -317,32 +524,31 @@ local function Rails(byKey, list)
 			if rect then
 				local near = below and rect.b < height * 0.3 or (not below and rect.t > height * 0.7)
 				local gap = below and rect.b - y or y - rect.t
-				if near and gap > Px(2) then
+				if near and gap > Px(12) then
 					local x = Snap((rect.l + rect.r) / 2)
-					list[#list + 1] = {key = railKey..'.'..device.key, points = {{x, y}, {x, below and Snap(rect.b) or Snap(rect.t)}}}
+					list[#list + 1] = {key = railKey..'.'..device.key, points = {{x, below and Snap(rect.b) or Snap(rect.t)}, {x, y}}}
 					any = true
 				end
 			end
 		end
-		if any then list[#list + 1] = {key = railKey, points = {{Snap(edge * 2), y}, {Snap(width - edge * 2), y}}, rail = true} end
+		if any then list[#list + 1] = {key = railKey, points = {{Snap(edge * 2), y}, {Snap(width - edge * 2), y}}} end
 	end
-	Rail('rail', Snap(edge), true)
-	if db.topRail then Rail('rail.top', Snap(height - edge), false) end
+	Rail('rail', Snap(edge * 2), true)
+	if db.topRail then Rail('rail.top', Snap(height - edge * 2), false) end
 end
 
--- Colors for a wire in the current state.
+-- State: which wires carry a signal, and in what color.
 local LIVE = {target = true, ['console.player'] = true, ['console.target'] = true}
 local function Restyle(wire)
 	local db = DB()
-	local idle = db.opacity or 0.35
-	local lit = min(1, idle + 0.45)
-	wire.token, wire.alpha = 'rule', idle
+	local idle = db.opacity or 0.85
+	wire.token, wire.alpha, wire.active = 'darkInk', idle, false
 	if fighting and (LIVE[wire.key] or wire.key == 'rail') then
-		wire.token, wire.alpha = 'red', wire.key == 'rail' and min(1, idle + 0.15) or lit
+		wire.token, wire.alpha, wire.active = 'red', 1, true
 	elseif wire.key == 'target' or wire.key == 'tot' or wire.key == 'console.target' then
-		wire.token, wire.alpha = Reaction(), lit
+		wire.token, wire.alpha, wire.active = Reaction(), 1, true
 	end
-	Paint(wire)
+	Draw(wire)
 end
 
 -- Work out every path again and draw them.
@@ -354,12 +560,12 @@ local function Rebuild()
 		local byKey = Movers()
 		local style = db.style or 'traces'
 		if style ~= 'rails' then
-			for _, connection in ipairs(Connections(byKey)) do
-				Watch(connection.a)
-				Watch(connection.b)
-				local a, b = Rect(connection.a), Rect(connection.b)
+			for _, link in ipairs(Links(byKey)) do
+				Watch(link.a)
+				Watch(link.b)
+				local a, b = Rect(link.a), Rect(link.b)
 				local points = a and b and Route(a, b)
-				if points then live[connection.key] = points end
+				if points then live[link.key] = points end
 			end
 		end
 		if style ~= 'traces' then
@@ -370,11 +576,12 @@ local function Rebuild()
 	end
 	for key, points in pairs(live) do
 		local wire = Wire(key)
-		SetPath(wire, points)
-		wire.shown = wire.points ~= nil
-		if not Kit:Animating(wire) then wire.fraction = 1 end
-		Restyle(wire)
-		Draw(wire)
+		if not wire.retracting then
+			SetPath(wire, points)
+			wire.shown = wire.points ~= nil
+			if not Kit:Animating(wire) then wire.fraction = 1 end
+			Restyle(wire)
+		end
 	end
 	for key, wire in pairs(wires) do
 		if not live[key] and wire.shown and not wire.retracting then Hide(wire) end
@@ -392,10 +599,26 @@ function Queue()
 end
 
 -- Events ---------------------------------------------------------------------------------
+local ambient
+local function Ambient()
+	if ambient then ambient:Cancel(); ambient = nil end
+	if not (DB().ambient and DB().enable) or Reduced() then return end
+	ambient = C_Timer.NewTicker(4, function()
+		if fighting then return end
+		for _, key in ipairs({'target', 'tot'}) do
+			local wire = wires[key]
+			if wire and wire.shown and not wire.retracting and not Kit:Animating(wire) then
+				UI:Safe(Pulse, wire, wire.token)
+			end
+		end
+	end)
+end
+
 -- A new target draws its trace in from the player; a lost one pulls it back.
 local function TargetChanged()
 	local wire = wires.target
 	if Exists('target') then
+		if wire then wire.retracting = nil end
 		Rebuild()
 		wire = wires.target
 		if wire and wire.shown then
@@ -413,11 +636,14 @@ local function TargetChanged()
 			Draw(wire)
 		end, function()
 			wire.retracting = nil
-			Hide(wire)
 			wire.fraction = 1
+			Hide(wire)
 			Rebuild()
 		end, 'cubic')
+		-- The other target links have no target to point at any more.
+		for _, key in ipairs({'tot', 'console.target'}) do if wires[key] and wires[key].shown then Hide(wires[key]) end end
 	else
+		if wire then wire.retracting = nil end
 		Rebuild()
 	end
 end
@@ -445,6 +671,13 @@ local function CombatChanged(entering)
 end
 
 function module:Enable()
+	-- 0.5.2: the first build saved faint traces (1 px at 35%); move once to the new look.
+	local saved = UI.db.wiring
+	if type(saved) == 'table' and not saved.upgraded then
+		if saved.opacity and saved.opacity <= 0.35 then saved.opacity = 0.85 end
+		if saved.thickness and saved.thickness < 2 then saved.thickness = 2 end
+		saved.upgraded = 1
+	end
 	root = CreateFrame('Frame', 'JiberishSpec01Wiring', UIParent)
 	root:SetAllPoints()
 	root:SetFrameStrata('BACKGROUND')
@@ -467,17 +700,31 @@ function module:Enable()
 			C_Timer.After(1, Queue)
 		else Queue() end
 	end)
+	-- The swing timers show and hide as weapons swing; follow them.
+	for _, name in ipairs(SWING) do
+		local frame = _G[name]
+		if type(frame) == 'table' then
+			for _, method in ipairs({'ResetSwingTimer', 'ClearSwingTimer', 'UpdateShownState'}) do
+				if type(frame[method]) == 'function' then hooksecurefunc(frame, method, function() Queue() end) end
+			end
+		end
+	end
 	if UI.OnMoversChanged then UI:OnMoversChanged(function() Queue() end) end
 	if UI.Pixel and UI.Pixel.OnChange then UI.Pixel.OnChange(function() Queue() end) end
 	Kit:OnRefresh(function() for _, wire in pairs(wires) do if wire.shown then Restyle(wire) end end end)
+	Ambient()
 	Queue()
+	self.ready = true
 end
 
 function module:Refresh()
+	if not self.ready then return end
+	Ambient()
+	for _, wire in pairs(wires) do if wire.shown then Restyle(wire) end end
 	Queue()
 end
 
--- Previews for the page: a target arriving, and a fight starting and ending.
+-- Previews for the page: a packet down every trace, and a fight starting and ending.
 function module:Preview(kind)
 	if not root then return end
 	if kind == 'combat' then
@@ -485,35 +732,44 @@ function module:Preview(kind)
 		CombatChanged(true)
 		C_Timer.After(3.6, function() if not InCombatLockdown() then CombatChanged(false) end end)
 	else
-		for _, wire in pairs(wires) do if wire.shown then Pulse(wire, 'lamp') end end
+		for _, wire in pairs(wires) do if wire.shown then Pulse(wire, wire.active and wire.token or 'lamp') end end
 	end
 end
 
 -- Hub -----------------------------------------------------------------------------------
 local function Off() return not DB().enable end
 local function Percent(value) return format('%d%%', value * 100 + 0.5) end
-local function Whole(value) return format('%d', value + 0.5) end
+local function Whole(value) return format('%d', floor(value + 0.5)) end
 UI:RegisterPage('wiring', {title = 'Wiring', order = 4.25, cards = {
 	{title = 'Wiring', rows = {
-		{'switch', 'Wiring', 'wiring.enable', 'Hairline traces join the interface\'s devices, so every part reads as one board.', since = '0.5.2'},
+		{'switch', 'Wiring', 'wiring.enable', 'Two-tone traces join the interface\'s devices, so every part reads as one board.', since = '0.5.2'},
 		{'segmented', 'Style', 'wiring.style', items = {{'traces', 'Traces'}, {'rails', 'Rails'}, {'both', 'Both'}},
-			note = 'Traces join devices to each other. Rails run a baseline along the screen edge with a riser into each device near it.',
+			note = 'Traces join devices to each other. Rails run a bus along the screen edge with a riser into each device near it.',
 			disabled = Off, since = '0.5.2'},
-		{'switch', 'Pulses', 'wiring.pulses', 'A lit packet runs along a trace when something happens: a new target, a fight starting or ending.', disabled = Off, since = '0.5.2'},
-		{'slider', 'Line', 'wiring.thickness', 1, 2, 1, 'Width in screen pixels.', format = Whole, disabled = Off, since = '0.5.2'},
-		{'slider', 'Opacity', 'wiring.opacity', 0.1, 0.8, 0.05, 'How strongly idle traces show; lit ones are brighter.', format = Percent, disabled = Off, since = '0.5.2'},
-		{'slider', 'Packet speed', 'wiring.speed', 200, 1600, 50, nil, format = Whole, disabled = Off, since = '0.5.2'},
-		{'button', 'Preview', 'Target', function() module:Preview('target') end, 'A packet down every trace.'},
+		{'slider', 'Line', 'wiring.thickness', 1, 3, 1, 'Width of the lit core in screen pixels.', format = Whole, disabled = Off, since = '0.5.2'},
+		{'slider', 'Opacity', 'wiring.opacity', 0.3, 1, 0.05, 'How strongly idle traces show; traces carrying a signal are full.', format = Percent, disabled = Off, since = '0.5.2'},
+		{'button', 'Preview', 'Packets', function() module:Preview('target') end, 'A packet down every trace.'},
 		{'button', 'Preview', 'Fight', function() module:Preview('combat') end, 'A fight starting, then ending a few seconds later.'},
 	}},
-	{title = 'Traces', rows = {
+	{title = 'Look', rows = {
+		{'switch', 'Casing', 'wiring.casing', 'A dark edge under the lit core, so traces read on bright ground.', disabled = Off, since = '0.5.2'},
+		{'switch', 'Nodes', 'wiring.nodes', 'Keyed plugs and lamps at each end, square pads at each elbow.', disabled = Off, since = '0.5.2'},
+		{'switch', 'Labels', 'wiring.labels', 'A small printed name for each link, such as UF-1 · UF-2.', disabled = Off, since = '0.5.2'},
+		{'switch', 'Dashed when idle', 'wiring.dashed', 'Idle traces run as fine dashes, like a ribbon cable, and go solid when they carry a signal.', disabled = Off, since = '0.5.2'},
+	}},
+	{title = 'Signals', rows = {
+		{'switch', 'Pulses', 'wiring.pulses', 'A lit capsule runs along a trace when something happens: a new target, a fight starting or ending.', disabled = Off, since = '0.5.2'},
+		{'switch', 'Ambient packets', 'wiring.ambient', 'While you hold a target, a quiet packet runs along its trace every few seconds.', disabled = Off, since = '0.5.2'},
+		{'slider', 'Packet speed', 'wiring.speed', 200, 1600, 50, nil, format = Whole, disabled = Off, since = '0.5.2'},
+	}},
+	{title = 'Links', rows = {
 		{'switch', 'Player and target', 'wiring.target', 'Drawn while you have a target and the frames aren\'t both docked in the console.', disabled = Off, since = '0.5.2'},
 		{'switch', 'Target of target', 'wiring.tot', nil, disabled = Off, since = '0.5.2'},
 		{'switch', 'Pet', 'wiring.pet', nil, disabled = Off, since = '0.5.2'},
 		{'switch', 'Focus', 'wiring.focus', nil, disabled = Off, since = '0.5.2'},
 		{'switch', 'Unit frames to console', 'wiring.console', 'When a unit frame isn\'t docked in the console.', disabled = Off, since = '0.5.2'},
-		{'switch', 'Aura timeline', 'wiring.timeline', nil, disabled = Off, since = '0.5.2'},
-		{'switch', 'Swing timers', 'wiring.swing', nil, disabled = Off, since = '0.5.2'},
-		{'switch', 'Top rail', 'wiring.topRail', 'A second rail along the top edge, for the minimap and info panel.', disabled = Off, since = '0.5.2'},
+		{'switch', 'Aura timeline', 'wiring.timeline', 'Player frame to the aura timeline, while the timeline is on.', disabled = Off, since = '0.5.2'},
+		{'switch', 'Swing timers', 'wiring.swing', 'Only while a swing timer is timing.', disabled = Off, since = '0.5.2'},
+		{'switch', 'Top rail', 'wiring.topRail', 'A second bus along the top edge, for the minimap and info panel.', disabled = Off, since = '0.5.2'},
 	}},
 }})
