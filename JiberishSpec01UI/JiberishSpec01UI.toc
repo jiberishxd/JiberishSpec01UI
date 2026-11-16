@@ -52,5 +52,6 @@ Modules\Timeline.lua
 Modules\SwingTimer.lua
 Modules\CooldownManager.lua
 Modules\CombatCue.lua
+Modules\Wiring.lua
 Modules\Notifications.lua
 Modules\QoL.lua
