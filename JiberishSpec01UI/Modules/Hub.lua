@@ -13,6 +13,11 @@ local floor, max, min = math.floor, math.max, math.min
 
 local hub
 local pages, pageOrder = {}, {}
+
+-- defaults:begin
+UI:RegisterDefaults('hub', {page = 'overview', advanced = false, describe = false, seen = {}, collapsed = {},
+	expanded = {}, group = false})
+-- defaults:end
 local SIDEBAR, CONTENT_COLUMNS = 156, 4
 
 -- page: {title, order, build(content) -> height} or {title, order, cards = {{title, rows}}}
@@ -94,8 +99,18 @@ function UI:NeedsReload()
 end
 
 -- Rows -----------------------------------------------------------------------
-local ROW_HEIGHT = {switch = 34, segmented = 40, slider = 46, button = 38, color = 34, dropdown = 38, input = 42, note = 0, header = 24}
+-- Each row is a label column on the left and a control column on the right.
+-- Labels are one line; a row's long description lives behind an info mark
+-- (hover the label or the mark), unless "Descriptions" is on in the header,
+-- which adds one dim, truncated line under the label. A control too wide to
+-- share the line (a long segmented picker) drops under its label instead.
+-- Every height is measured after widths are set, so nothing can overlap.
+local ROW_HEIGHT = {switch = 30, segmented = 34, slider = 46, button = 34, color = 30, dropdown = 34, input = 36, note = 0, header = 24}
 local NOTE_INDEX = {switch = 4, slider = 7, button = 5, color = 4, input = 4}
+local CARD_ROWS = 6 -- settings shown per card before "More options" (Advanced shows all)
+
+local function HubDB() return UI.db.hub end
+local function Advanced() return HubDB().advanced and true or false end
 
 local function NoteOf(row)
 	local index = NOTE_INDEX[row[1]]
@@ -149,41 +164,98 @@ local function Lockable(control, label, row)
 	end
 end
 
-local function BuildRow(card, row, y, width)
+-- A wrapped note card for the hub's hovers (the kit's tooltip is one line).
+local noteTip
+local function ShowNote(anchor, title, text)
+	if not text or text == '' then return end
+	if not noteTip then
+		noteTip = Kit:Panel(Kit:Root(), {radius = 4, fill = 'glass', border = false, shadow = 0.5})
+		noteTip:SetFrameStrata('TOOLTIP')
+		noteTip.title = Kit:Label(noteTip, '', 'darkInk', 8, true)
+		noteTip.title:SetPoint('TOPLEFT', 10, -9)
+		noteTip.text = Kit:Text(noteTip, '', 9, 'darkInk')
+		noteTip.text:SetJustifyH('LEFT')
+		noteTip.text:SetSpacing(2)
+	end
+	local width = 260
+	noteTip.title:SetText(title and strupper(title) or '')
+	noteTip.text:SetWidth(width - 20)
+	noteTip.text:SetText(text)
+	noteTip.text:ClearAllPoints()
+	if title and title ~= '' then
+		noteTip.text:SetPoint('TOPLEFT', noteTip.title, 'BOTTOMLEFT', 0, -5)
+	else
+		noteTip.text:SetPoint('TOPLEFT', 10, -9)
+	end
+	local height = noteTip.text:GetStringHeight() + 20 + ((title and title ~= '') and 14 or 0)
+	noteTip:SetSize(width, height)
+	noteTip:ClearAllPoints()
+	noteTip:SetPoint('BOTTOMLEFT', anchor, 'TOPLEFT', 0, 6)
+	noteTip:Show()
+	Kit:Animate(noteTip, 0.1, 0, 1, function(alpha) noteTip:SetAlpha(alpha) end)
+end
+local function HideNote() if noteTip then noteTip:Hide() end end
+
+-- A frame over some text that shows the full note on hover.
+local function Hover(parent, title, text)
+	local hit = CreateFrame('Frame', nil, parent)
+	hit:EnableMouse(true)
+	hit:SetScript('OnEnter', function(self) ShowNote(self, title, text) end)
+	hit:SetScript('OnLeave', HideNote)
+	return hit
+end
+
+-- The first line of a paragraph.
+local function FirstLine(text)
+	return (text:match('^([^\n]*)') or text):gsub('%s+$', '')
+end
+
+local function Note(card, row, y, width, full)
+	local text = row[2] or ''
+	local note = Kit:Text(card.body, '', 9, 'dim')
+	note:SetPoint('TOPLEFT', 0, -y)
+	note:SetWidth(width)
+	note:SetJustifyH('LEFT')
+	if full then
+		note:SetText(text)
+		note:SetWordWrap(true)
+		return max(note:GetStringHeight(), 10) + 10
+	end
+	-- One dim line; the rest on hover.
+	local line = FirstLine(text)
+	note:SetWordWrap(false)
+	note:SetText(line)
+	if line ~= text or note:GetStringWidth() > width + 1 then
+		local hit = Hover(card.body, card.title and card.title:GetText(), text)
+		hit:SetAllPoints(note)
+		local more = Kit:Icon(card.body, 'more', 9, 'dim')
+		more:SetPoint('LEFT', note, 'LEFT', min(note:GetStringWidth(), width) + 4, 0)
+		note:SetWidth(width - 14)
+	end
+	return 18
+end
+
+local function Header(card, row, y)
+	local text = Kit:Label(card.body, row[2], 'dim', 8, true)
+	text:SetPoint('TOPLEFT', 0, -y - 6)
+	local rule = Kit:Solid(card.body, 'line')
+	rule:SetHeight(1)
+	rule:SetPoint('LEFT', text, 'RIGHT', 8, 0)
+	rule:SetPoint('RIGHT', card.body, 'RIGHT', 0, 0)
+	return ROW_HEIGHT.header
+end
+
+-- New in this version, and the page not opened since: a small key-color lamp.
+local function ShowsNew(page, row)
+	return UI:IsNew(row.since) and not (HubDB().seen or {})[page.key]
+end
+
+local function Control(card, row, width)
 	local kind = row[1]
-	if kind == 'note' then
-		local text = Kit:Text(card.body, row[2], 9, 'dim')
-		text:SetPoint('TOPLEFT', 0, -y)
-		text:SetWidth(width)
-		text:SetJustifyH('LEFT')
-		return max(text:GetStringHeight(), 10) + 10
-	elseif kind == 'header' then
-		local text = Kit:Label(card.body, row[2], 'dim', 8, true)
-		text:SetPoint('TOPLEFT', 0, -y - 6)
-		local rule = Kit:Solid(card.body, 'line')
-		rule:SetHeight(1)
-		rule:SetPoint('LEFT', text, 'RIGHT', 8, 0)
-		rule:SetPoint('RIGHT', card.body, 'RIGHT', 0, 0)
-		return ROW_HEIGHT.header
-	end
-	local label = Kit:Label(card.body, row[2] or '', 'ink', 9)
-	local left = 0
-	if UI:IsNew(row.since) then
-		local badge = Kit:Label(card.body, 'New', 'onAccent', 7, true)
-		local chip = Kit:Solid(card.body, 'accent', 'BACKGROUND')
-		badge:SetPoint('TOPLEFT', 4, -y - 1)
-		chip:SetPoint('TOPLEFT', badge, 'TOPLEFT', -3, 2)
-		chip:SetPoint('BOTTOMRIGHT', badge, 'BOTTOMRIGHT', 3, -2)
-		left = badge:GetStringWidth() + 12
-	end
-	label:SetPoint('TOPLEFT', left, -y)
-	local noteText = NoteOf(row)
-	local controlWidth = 0
 	local control
 	if kind == 'switch' then
 		control = Kit:Switch(card.body, {labels = false, checked = Get(row) and true or false,
 			onChange = function(value, self) Changed(row, value, self) end})
-		control:SetPoint('TOPRIGHT', -2, -y)
 		control.refresh = function() control:SetValue(Get(row) and true or false) end
 	elseif kind == 'segmented' then
 		local values, names, current = {}, {}, 1
@@ -191,9 +263,10 @@ local function BuildRow(card, row, y, width)
 			values[index], names[index] = item[1], item[2]
 			if item[1] == Get(row) then current = index end
 		end
-		control = Kit:Segmented(card.body, {items = names, width = min(66 * #names, width * 0.62), value = current,
+		local longest = 0
+		for _, name in ipairs(names) do longest = max(longest, #tostring(name)) end
+		control = Kit:Segmented(card.body, {items = names, width = min(max(longest * 7 + 22, 52) * #names, width), value = current,
 			onChange = function(index, self) Changed(row, values[index], self) end})
-		control:SetPoint('TOPRIGHT', 0, -y + 2)
 		control.refresh = function()
 			local value = Get(row)
 			for index, item in ipairs(values) do
@@ -202,29 +275,25 @@ local function BuildRow(card, row, y, width)
 		end
 	elseif kind == 'slider' then
 		control = Kit:Slider(card.body, {label = '', min = row[4], max = row[5], step = row[6], value = Get(row),
-			width = width * 0.48, ticks = 10, format = row.format,
+			width = floor(width * 0.48), ticks = 10, format = row.format,
 			onChange = function(value, self) Changed(row, value, self) end})
-		control:SetPoint('TOPRIGHT', 0, -y + 12)
 		control.refresh = function() control:SetValue(Get(row)) end
+		control.lift = 12 -- its own (empty) label line sits above the track
 	elseif kind == 'button' then
 		control = Kit:Button(card.body, {text = row[3], width = max(80, #row[3] * 8 + 28), height = 26})
-		control:SetPoint('TOPRIGHT', 0, -y + 2)
 		control.onClick = function() UI:Safe(row[4], control) end
 	elseif kind == 'color' then
 		control = Kit:ColorSwatch(card.body, {value = Get(row), onChange = function(value, self) Changed(row, value, self) end})
-		control:SetPoint('TOPRIGHT', -2, -y + 2)
 		control.refresh = function() control:SetValue(Get(row)) end
 	elseif kind == 'dropdown' then
-		control = Kit:Dropdown(card.body, {items = Items(row), value = Get(row), width = min(170, width * 0.5),
+		control = Kit:Dropdown(card.body, {items = Items(row), value = Get(row), width = min(170, floor(width * 0.48)),
 			onChange = function(value, self) Changed(row, value, self) end})
-		control:SetPoint('TOPRIGHT', 0, -y + 2)
 		control.refresh = function()
 			if type(row.items) == 'function' then control:SetItems(Items(row)) end
 			control:SetValue(Get(row))
 		end
 	elseif kind == 'input' then
-		control = Kit:TextField(card.body, {width = min(170, width * 0.5), value = Get(row) or ''})
-		control:SetPoint('TOPRIGHT', 0, -y + 4)
+		control = Kit:TextField(card.body, {width = min(170, floor(width * 0.48)), value = Get(row) or ''})
 		local function Commit()
 			-- Escape lets go of the field without saving.
 			if control.cancelled then control.cancelled = nil return end
@@ -245,25 +314,70 @@ local function BuildRow(card, row, y, width)
 		control.refresh = function()
 			if not control.edit:HasFocus() then control:SetValue(Get(row) or '') end
 		end
-	else
-		label:SetText(strupper(tostring(row[2] or kind)))
+	end
+	return control
+end
+
+local function BuildRow(card, row, y, width, page)
+	local kind = row[1]
+	if kind == 'note' then return Note(card, row, y, width, card.fullNotes) end
+	if kind == 'header' then return Header(card, row, y) end
+	local control = Control(card, row, width)
+	if not control then
+		local label = Kit:Label(card.body, strupper(tostring(row[2] or kind)), 'ink', 9)
+		label:SetPoint('TOPLEFT', 0, -y)
 		return 20
 	end
-	controlWidth = control:GetWidth()
+	local controlWidth = control:GetWidth()
+	local stacked = controlWidth > width * 0.56
+	local labelWidth = stacked and width or (width - controlWidth - 14)
+	local noteText = NoteOf(row)
+	-- The label column: a NEW lamp, the label (one line), the info mark.
+	local left = 0
+	if ShowsNew(page, row) then
+		local lamp = Kit:Led(card.body, 4, true)
+		lamp:SetPoint('TOPLEFT', 0, -y - 4)
+		left = 9
+	end
+	local label = Kit:Label(card.body, row[2] or '', 'ink', 9)
+	label:SetPoint('TOPLEFT', left, -y)
+	label:SetJustifyH('LEFT')
+	label:SetWordWrap(false)
+	local infoRoom = noteText and 14 or 0
+	label:SetWidth(max(labelWidth - left - infoRoom, 20))
+	if noteText then
+		local textWidth = min(label:GetStringWidth(), label:GetWidth())
+		local info = Kit:Icon(card.body, 'info', 9, 'dim')
+		info:SetPoint('LEFT', label, 'LEFT', textWidth + 5, 0)
+		local hit = Hover(card.body, row[2], noteText)
+		hit:SetPoint('TOPLEFT', label, 'TOPLEFT', -2, 2)
+		hit:SetPoint('BOTTOMRIGHT', info, 'BOTTOMRIGHT', 2, -2)
+	end
+	local textHeight = 12
+	if noteText and HubDB().describe then
+		local line = Kit:Text(card.body, FirstLine(noteText), 9, 'dim')
+		line:SetPoint('TOPLEFT', left, -y - 14)
+		line:SetWidth(max(labelWidth - left, 20))
+		line:SetJustifyH('LEFT')
+		line:SetWordWrap(false)
+		textHeight = 26
+	end
+	-- The control column.
+	local height
+	control:ClearAllPoints()
+	if stacked then
+		local top = y + textHeight + 4
+		control:SetPoint('TOPRIGHT', card.body, 'TOPRIGHT', 0, -top + (control.lift or 0))
+		height = textHeight + 4 + ROW_HEIGHT[kind]
+	else
+		local nudge = (kind == 'switch' or kind == 'color' or kind == 'slider') and 0 or 2
+		control:SetPoint('TOPRIGHT', card.body, 'TOPRIGHT', kind == 'switch' and -2 or 0, -y + nudge + (control.lift or 0))
+		height = max(ROW_HEIGHT[kind], textHeight + 10)
+	end
 	Lockable(control, label, row)
 	if control.refresh and row.disabled then control.refresh() end
-	label:SetPoint('TOPRIGHT', card.body, 'TOPRIGHT', -controlWidth - 10, -y)
-	label:SetJustifyH('LEFT')
 	card.controls[#card.controls + 1] = control
-	if noteText then
-		local note = Kit:Text(card.body, noteText, 9, 'dim')
-		note:SetPoint('TOPLEFT', 0, -y - 13)
-		note:SetPoint('TOPRIGHT', card.body, 'TOPRIGHT', -controlWidth - 10, -y - 13)
-		note:SetJustifyH('LEFT')
-		note:SetWordWrap(true)
-		return max(ROW_HEIGHT[kind], 15 + note:GetStringHeight() + 10)
-	end
-	return ROW_HEIGHT[kind]
+	return height
 end
 
 -- Which rows are hidden right now, as one string; a change rebuilds the page.
@@ -277,20 +391,83 @@ local function HiddenSignature(page)
 	return table.concat(marks)
 end
 
+local RebuildPage
+
+-- Card state, per page and card: collapsed, or showing every option.
+local function CardState(page, index)
+	local db = HubDB()
+	local id = page.key..':'..index
+	return db.collapsed[id], db.expanded[id], id
+end
+
+local function Expander(card, y, width, text, onClick)
+	local key = Kit:Key(card.body, {text = text, width = min(width, #text * 7 + 34), height = 22, textSize = 8})
+	key:SetPoint('TOPLEFT', 0, -y - 4)
+	key.onClick = onClick
+	return 32
+end
+
 local function BuildCards(content, page)
 	local cards = {}
 	local span = page.span or 2
 	local width = span * Kit.COLUMN + (span - 1) * Kit.GAP
+	local advanced = Advanced()
 	page.controls = {}
 	page.hiddenSignature = HiddenSignature(page)
 	for index, spec in ipairs(page.cards) do
 		local card = Kit.CardShell(content, index, spec.title, width, 200)
 		card.span, card.controls = span, {}
+		local collapsed, expanded, id = CardState(page, index)
+		-- Preview cards keep their notes whole: they reserve room for a live sample.
+		card.fullNotes = advanced or (type(spec.title) == 'string' and strupper(spec.title) == 'PREVIEW')
+		-- The header folds the card; a chevron shows which way.
+		local fold = CreateFrame('Button', nil, card)
+		fold:SetPoint('TOPLEFT', 4, -4)
+		fold:SetPoint('TOPRIGHT', -4, -4)
+		fold:SetHeight(20)
+		fold.chevron = Kit:Icon(card, collapsed and 'chevron-right' or 'chevron-down', 9, 'dim')
+		fold.chevron:SetPoint('TOPRIGHT', -12, -10)
+		card.rule:SetWidth(max(card.rule:GetWidth() - 18, 1))
+		fold:SetScript('OnClick', function()
+			Kit:Play(collapsed and 'latch-down' or 'latch-up')
+			HubDB().collapsed[id] = not collapsed or nil
+			RebuildPage(page)
+		end)
+		fold:SetScript('OnEnter', function() Kit:Tint(fold.chevron, 'ink') end)
+		fold:SetScript('OnLeave', function() Kit:Tint(fold.chevron, 'dim') end)
 		local y = 0
-		for _, row in ipairs(spec.rows) do
-			if not Test(row.hidden) then y = y + BuildRow(card, row, y, width - 24) end
+		if not collapsed then
+			local bodyWidth = width - 24
+			local shown, skipped = 0, 0
+			for _, row in ipairs(spec.rows) do
+				if not Test(row.hidden) then
+					local setting = row[1] ~= 'note' and row[1] ~= 'header'
+					if advanced or expanded or shown < CARD_ROWS or (not setting and skipped == 0) then
+						if setting then shown = shown + 1 end
+						y = y + BuildRow(card, row, y, bodyWidth, page)
+					else
+						if setting then skipped = skipped + 1 end
+					end
+				end
+			end
+			if skipped > 0 then
+				y = y + Expander(card, y, bodyWidth, format('More options (%d)', skipped), function()
+					Kit:Play('down')
+					HubDB().expanded[id] = true
+					RebuildPage(page)
+				end)
+			elseif expanded and not advanced then
+				y = y + Expander(card, y, bodyWidth, 'Fewer options', function()
+					Kit:Play('up')
+					HubDB().expanded[id] = nil
+					RebuildPage(page)
+				end)
+			end
+			card:SetHeight(28 + y + 10)
+		else
+			card.body:Hide()
+			card:SetHeight(34)
 		end
-		card:SetHeight(28 + y + 10)
 		cards[#cards + 1] = card
 		for _, control in ipairs(card.controls) do page.controls[#page.controls + 1] = control end
 	end
@@ -299,7 +476,7 @@ local function BuildCards(content, page)
 end
 
 -- Window ------------------------------------------------------------------------
-local Search, ClearSearch
+local Search, ClearSearch, GroupOf, BuildNav
 
 local function HideAreas(except)
 	for _, other in pairs(pages) do
@@ -350,10 +527,16 @@ local function SelectPage(key)
 		if control.refresh then pcall(control.refresh) end
 	end
 	hub.heading:SetText(strupper(page.title))
+	-- NEW marks show until a page has been opened once.
+	if not UI.db.hub.seen[key] then
+		UI.db.hub.seen[key] = true
+		hub.navDirty = true
+	end
+	if hub.navGroup ~= nil and hub.navGroup ~= GroupOf(key) then BuildNav() end
 end
 
 -- A page whose hidden rows changed is built again (its old frames stay hidden).
-local function RebuildPage(page)
+function RebuildPage(page)
 	if not page.area then return end
 	local scroll = page.area.offset
 	page.area:Hide()
@@ -375,12 +558,16 @@ local function SearchEntries()
 		local page = pages[key]
 		if not page.hidden then
 			entries[#entries + 1] = {page = key, label = page.title, where = 'Section', new = PageIsNew(page)}
-			for _, card in ipairs(page.cards or {}) do
+			for cardIndex, card in ipairs(page.cards or {}) do
+				local setting = 0
 				for _, row in ipairs(card.rows or {}) do
 					local kind = row[1]
-					if kind ~= 'header' and not Test(row.hidden) and type(row[2]) == 'string' then
-						entries[#entries + 1] = {page = key, label = row[2], note = kind ~= 'note' and NoteOf(row) or nil,
-							where = page.title..'  /  '..(card.title or ''), new = UI:IsNew(row.since), isNote = kind == 'note'}
+					local hidden = Test(row.hidden)
+					if kind ~= 'header' and kind ~= 'note' and not hidden then setting = setting + 1 end
+					if kind ~= 'header' and not hidden and type(row[2]) == 'string' then
+						entries[#entries + 1] = {page = key, label = kind == 'note' and FirstLine(row[2]) or row[2],
+							note = kind ~= 'note' and NoteOf(row) or nil, where = page.title..'  /  '..(card.title or ''),
+							new = UI:IsNew(row.since), isNote = kind == 'note', card = cardIndex, setting = setting}
 					end
 				end
 			end
@@ -419,7 +606,28 @@ local function ResultRow(parent)
 	row:SetScript('OnLeave', function(self) self.back:SetAlpha(0) end)
 	row:SetScript('OnClick', function(self)
 		Kit:Play('down')
+		local entry, page = self.entry, pages[self.pageKey]
+		-- Open the card the setting is in, and its extra options if it is past them.
+		if entry and entry.card and page and page.cards then
+			local id = page.key..':'..entry.card
+			local db = UI.db.hub
+			local changed = db.collapsed[id] or (not db.advanced and entry.setting > CARD_ROWS and not db.expanded[id])
+			db.collapsed[id] = nil
+			if not db.advanced and entry.setting > CARD_ROWS then db.expanded[id] = true end
+			if changed and page.area then
+				page.area:Hide()
+				if page.onHide then page.onHide(page.area) end
+				page.area, page.controls = nil, nil
+			end
+		end
 		SelectPage(self.pageKey)
+		-- Scroll to the card and light it.
+		local card = entry and entry.card and page and page.cardFrames and page.cardFrames[entry.card]
+		if card and page.area then
+			local top, cardTop = page.area.content:GetTop(), card:GetTop()
+			if top and cardTop then page.area:ScrollTo(max(0, top - cardTop - 8)) end
+			if Kit.Flash then Kit:Flash(card, {token = 'lamp', alpha = 0.35, duration = 0.6}) end
+		end
 	end)
 	return row
 end
@@ -461,7 +669,7 @@ function Search(query)
 			row = ResultRow(area.content)
 			area.rows[index] = row
 		end
-		row.pageKey = entry.page
+		row.pageKey, row.entry = entry.page, entry
 		row:ClearAllPoints()
 		row:SetPoint('TOPLEFT', 8, -8 - (index - 1) * RESULT_HEIGHT)
 		row:SetWidth(width - 16)
@@ -488,48 +696,134 @@ function ClearSearch()
 end
 
 -- Sidebar ------------------------------------------------------------------------------
-local NAV_TOP = 110
-local function BuildNav()
-	for _, entry in pairs(hub.nav or {}) do entry:Hide() end
-	hub.nav = {}
-	local shown = {}
-	for _, key in ipairs(pageOrder) do
-		if not pages[key].hidden then shown[#shown + 1] = key end
+-- Pages are grouped into a few sections. One section is open at a time (the
+-- current page's, or the one last clicked); the others fold to their headers.
+local GROUPS = {
+	{'general', 'General', {'overview', 'setup', 'theme', 'fonts', 'motion', 'sounds', 'combatcue'}},
+	{'layout', 'Layout', {'layout', 'profiles'}},
+	{'frames', 'Frames', {'unitframes', 'group', 'nameplates', 'navbar'}},
+	{'bars', 'Bars and auras', {'actionbars', 'buffs', 'timeline', 'cooldowns', 'swingtimer'}},
+	{'interface', 'Interface', {'minimap', 'chat', 'windows', 'bags', 'objectives', 'infopanel', 'meters', 'banners',
+		'notifications', 'qol'}},
+	{'extras', 'Extras', {'components', 'about'}},
+}
+local GROUP_OF = {}
+for _, group in ipairs(GROUPS) do
+	for _, key in ipairs(group[3]) do GROUP_OF[key] = group[1] end
+end
+
+-- A page no section names falls into Interface.
+function GroupOf(key) return GROUP_OF[key] or 'interface' end
+
+local NAV_TOP, NAV_ROW, NAV_HEAD = 106, 20, 22
+
+local function NavEntry(key, page)
+	local entry = CreateFrame('Button', nil, hub)
+	entry:SetSize(SIDEBAR - 20, NAV_ROW - 2)
+	entry.led = Kit:Led(entry, 5, false)
+	entry.led:SetPoint('LEFT', 8, 0)
+	entry.label = Kit:Label(entry, page.title, 'dim', 9)
+	entry.label:SetPoint('LEFT', 20, 0)
+	entry.label:SetPoint('RIGHT', -14, 0)
+	entry.label:SetJustifyH('LEFT')
+	entry.label:SetWordWrap(false)
+	entry.status = Kit:Led(entry, 4, false)
+	entry.status:SetPoint('RIGHT', -2, 0)
+	entry.status:Hide()
+	if PageIsNew(page) and not UI.db.hub.seen[key] then
+		entry.new = Kit:Led(entry, 3, true)
+		entry.new:SetPoint('RIGHT', -8, 0)
 	end
-	local gaps = 0
-	for _, key in ipairs(shown) do if pages[key].gap then gaps = gaps + 1 end end
-	local step = min(26, floor((hub:GetHeight() - NAV_TOP - 18 - gaps * 10) / max(#shown, 1)))
-	local y, row = -NAV_TOP, 0
-	for _, key in ipairs(shown) do
+	entry:SetScript('OnEnter', function(self) Kit:Tint(self.label, 'ink') end)
+	entry:SetScript('OnLeave', function(self)
+		if UI.db.hub.page ~= key or hub.searching then Kit:Tint(self.label, 'dim') end
+	end)
+	entry:SetScript('OnClick', function()
+		if UI.db.hub.page == key and not hub.searching then return end
+		Kit:Play('tick')
+		SelectPage(key)
+	end)
+	return entry
+end
+
+local function NavHeader(group, open)
+	local head = CreateFrame('Button', nil, hub)
+	head:SetSize(SIDEBAR - 20, NAV_HEAD)
+	head.label = Kit:Label(head, group[2], open and 'ink' or 'dim', 8, true)
+	head.label:SetPoint('LEFT', 2, 0)
+	head.chevron = Kit:Icon(head, open and 'chevron-down' or 'chevron-right', 8, 'dim')
+	head.chevron:SetPoint('RIGHT', -2, 0)
+	head:SetScript('OnEnter', function(self) Kit:Tint(self.label, 'ink') end)
+	head:SetScript('OnLeave', function(self) if not open then Kit:Tint(self.label, 'dim') end end)
+	head:SetScript('OnClick', function()
+		Kit:Play(open and 'latch-up' or 'latch-down')
+		UI.db.hub.group = not open and group[1] or false
+		hub.navOpenOverride = true
+		BuildNav()
+	end)
+	return head
+end
+
+function BuildNav()
+	for _, entry in pairs(hub.nav or {}) do entry:Hide() end
+	for _, head in ipairs(hub.navHeads or {}) do head:Hide() end
+	hub.nav, hub.navHeads = {}, {}
+	-- Which pages exist, by section, in page order.
+	local members = {}
+	for _, key in ipairs(pageOrder) do
 		local page = pages[key]
-		if page.gap then y = y - 10 end
-		local entry = CreateFrame('Button', nil, hub)
-		entry:SetSize(SIDEBAR - 20, step - 2)
-		entry:SetPoint('TOPLEFT', Kit.PAD + 4, y - row * step)
-		row = row + 1
-		entry.led = Kit:Led(entry, 5, false)
-		entry.led:SetPoint('LEFT', 2, 0)
-		entry.label = Kit:Label(entry, page.title, 'dim', 9)
-		entry.label:SetPoint('LEFT', 14, 0)
-		entry.status = Kit:Led(entry, 4, false)
-		entry.status:SetPoint('RIGHT', -2, 0)
-		entry.status:Hide()
-		if PageIsNew(page) then
-			entry.new = Kit:Label(entry, 'New', 'accentInk', 7, true)
-			entry.new:SetPoint('RIGHT', -10, 0)
+		if not page.hidden then
+			local group = GroupOf(key)
+			members[group] = members[group] or {}
+			table.insert(members[group], key)
 		end
-		entry:SetScript('OnEnter', function(self) Kit:Tint(self.label, 'ink') end)
-		entry:SetScript('OnLeave', function(self)
-			if UI.db.hub.page ~= key or hub.searching then Kit:Tint(self.label, 'dim') end
-		end)
-		entry:SetScript('OnClick', function()
-			if UI.db.hub.page == key and not hub.searching then return end
-			Kit:Play('tick')
-			SelectPage(key)
-		end)
-		hub.nav[key] = entry
+	end
+	-- The open section: the one last clicked, else the current page's.
+	local current = GroupOf(UI.db.hub.page or 'overview')
+	local open = UI.db.hub.group
+	if not hub.navOpenOverride or open == nil then open = current end
+	hub.navOpenOverride = nil
+	hub.navGroup = open or false
+	local y = -NAV_TOP
+	for _, group in ipairs(GROUPS) do
+		local list = members[group[1]]
+		if list then
+			local isOpen = open == group[1]
+			local head = NavHeader(group, isOpen)
+			head:SetPoint('TOPLEFT', Kit.PAD + 4, y)
+			hub.navHeads[#hub.navHeads + 1] = head
+			y = y - NAV_HEAD
+			for _, key in ipairs(list) do
+				-- Every page has an entry (the tour points at one); folded ones stay hidden.
+				local entry = NavEntry(key, pages[key])
+				entry:SetPoint('TOPLEFT', Kit.PAD + 4, y)
+				entry:SetShown(isOpen)
+				if isOpen then y = y - NAV_ROW end
+				hub.nav[key] = entry
+			end
+			y = y - 4
+		end
+	end
+	-- Paint the current page's lamp.
+	for pageKey, entry in pairs(hub.nav) do
+		local selected = pageKey == UI.db.hub.page and not hub.searching
+		Kit:SetLed(entry.led, selected)
+		Kit:Tint(entry.label, selected and 'ink' or 'dim')
 	end
 	hub.navDirty = nil
+end
+
+-- Header toggles: Advanced shows every option and whole notes; Descriptions adds a
+-- line under each label. Built pages are rebuilt the next time they show.
+local function ForgetPages()
+	for _, page in pairs(pages) do
+		if page.area and page.cards then
+			page.area:Hide()
+			if page.onHide then page.onHide(page.area) end
+			page.area, page.controls = nil, nil
+		end
+	end
+	if hub:IsShown() and not hub.searching then SelectPage(UI.db.hub.page) end
 end
 
 local function Build()
@@ -593,6 +887,23 @@ local function Build()
 	hub.reload.onClick = function() ReloadUI() end
 	Kit:AttachTooltip(hub.reload, 'Style changes apply after a reload')
 	hub.reload:SetShown(UI.reloadPending and true or false)
+	-- How much each page shows: every option (Advanced), and a line of description.
+	hub.advanced = Kit:Key(hub, {text = 'Advanced', width = 92, height = 20, textSize = 8, toggle = true,
+		checked = UI.db.hub.advanced and true or false})
+	hub.advanced:SetPoint('TOPRIGHT', -Kit.PAD, -40)
+	hub.advanced.onClick = function(self)
+		UI.db.hub.advanced = self.checked and true or false
+		ForgetPages()
+	end
+	Kit:AttachTooltip(hub.advanced, 'Every option and whole notes')
+	hub.describe = Kit:Key(hub, {text = 'Descriptions', width = 108, height = 20, textSize = 8, toggle = true,
+		checked = UI.db.hub.describe and true or false})
+	hub.describe:SetPoint('RIGHT', hub.advanced, 'LEFT', -8, 0)
+	hub.describe.onClick = function(self)
+		UI.db.hub.describe = self.checked and true or false
+		ForgetPages()
+	end
+	Kit:AttachTooltip(hub.describe, 'A line under each setting')
 
 	-- Sidebar: a search field over the reference's nav items (a lamp and a printed label).
 	local divider = Kit:Solid(hub, 'line')
