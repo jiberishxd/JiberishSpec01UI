@@ -39,7 +39,7 @@ local max, min, abs, floor = math.max, math.min, math.abs, math.floor
 local module = UI:RegisterModule('wiring', {always = true})
 
 -- defaults:begin
-UI:RegisterDefaults('wiring', {enable = true, style = 'traces', target = true, tot = true, pet = true, focus = false,
+UI:RegisterDefaults('wiring', {enable = false, style = 'traces', target = true, tot = true, pet = true, focus = false,
 	console = true, timeline = false, swing = true, topRail = false, thickness = 2, opacity = 0.85, pulses = true,
 	speed = 700, casing = true, nodes = true, labels = true, dashed = false, ambient = true,
 	chassis = true, chassisDensity = 'standard', chassisBottom = true, chassisTop = false, chassisLeft = true,
@@ -943,6 +943,11 @@ function module:Enable()
 	-- 0.5.2: the chassis joins the board; the timeline trace and dashed idle traces go off. Once.
 	if type(saved) == 'table' and not saved.chassisMoved then
 		saved.chassis, saved.timeline, saved.dashed, saved.chassisMoved = true, false, false, true
+	end
+	-- 0.5.2: in game the traces read as stray lines rather than hardware; off
+	-- for everyone once, until a better design replaces them.
+	if type(saved) == 'table' and not saved.offMoved then
+		saved.enable, saved.offMoved = false, true
 	end
 	root = CreateFrame('Frame', 'JiberishSpec01Wiring', UIParent)
 	root:SetAllPoints()
