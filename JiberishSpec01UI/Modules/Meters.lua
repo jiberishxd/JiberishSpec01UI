@@ -23,6 +23,9 @@ UI:RegisterDefaults('meters', {
 	details = true, detailsBase = true, blizzard = true, skada = true, recount = true,
 	dock = false, dockWidth = 320, dockHeight = 220, dockWindows = 1,
 	own = false, ownType = 'damage', ownSession = 'current', ownRows = 8, ownWidth = 250,
+	-- The game's own meter.
+	blizzHeader = true, blizzFill = 'class', blizzRanks = true, blizzRate = false, blizzMotion = true,
+	blizzSounds = true, blizzTopBlip = false,
 	-- Details window ids that already got the flat base skin once; after that the
 	-- player's own skin choice stays.
 	baseApplied = {},
@@ -180,38 +183,214 @@ local function WaitForDetails()
 end
 
 -- Blizzard's damage meter -------------------------------------------------------------------
+-- Every session window (an Edit Mode system: never moved or reparented) becomes
+-- a DM-1 device in place: a dark housing with a printed header above it (lamp,
+-- DM-1, the meter's name), the session timer on an LCD, the type, session and
+-- settings dropdowns as SPEC-01 keys, a hairline scroll bar and a grip glyph.
+-- Each pooled row gets its own meter under the game's bar: the game's fill is
+-- hidden and its values and color are copied across as they are set (secret
+-- or not, they only go to setters), so the fill glides; the class icon sits on
+-- a small key with its rank printed on it, and the player's row lights a lamp.
+-- Everything we add lives in side tables.
 local blizzardWindows = setmetatable({}, {__mode = 'k'})
 local dressedText = setmetatable({}, {__mode = 'k'})
+local rowParts = setmetatable({}, {__mode = 'k'})   -- entry -> our pieces
+local windowParts = setmetatable({}, {__mode = 'k'}) -- session window -> header pieces
+local INTERP = Enum and Enum.StatusBarInterpolation
 
-local function Plex(region, size, bold)
+local function Plex(region, size, bold, role)
 	if Forbidden(region) or dressedText[region] or not (region.IsObjectType and region:IsObjectType('FontString')) then return end
 	dressedText[region] = true
 	local _, current = region:GetFont()
 	current = Plain(current)
-	Kit:Font(region, size or (current and floor(current + 0.5)) or DB().fontSize, '', bold)
-	region:SetShadowOffset(1, -1)
-	region:SetShadowColor(0, 0, 0, 0.6)
+	Kit:Font(region, size or (current and floor(current + 0.5)) or DB().fontSize, 'OUTLINE', bold, role)
+	region:SetShadowOffset(0, 0)
 end
 
-local function StyleEntry(entry)
-	if Forbidden(entry) then return end
+local function Motion() return DB().blizzMotion and not Kit:Reduced() end
+local function Interp() return Motion() and Kit:Smooth() or (INTERP and INTERP.Immediate) end
+local function Sound(name) if DB().blizzSounds then Kit:Play(name) end end
+
+-- Fade every texture on a Blizzard frame (its art), keeping the ones in `keep`.
+local function FadeArt(frame, keep)
+	if Forbidden(frame) then return end
+	for _, region in ipairs({frame:GetRegions()}) do
+		if region.IsObjectType and region:IsObjectType('Texture') and not (keep and keep[region]) then region:SetAlpha(0) end
+	end
+end
+
+-- A SPEC-01 key behind a Blizzard button, with an optional glyph over it.
+local keyed = setmetatable({}, {__mode = 'k'})
+local function DressKey(button, icon, size)
+	if Forbidden(button) or keyed[button] then return keyed[button] end
+	FadeArt(button)
+	local key = CreateFrame('Frame', nil, button)
+	key:SetAllPoints()
+	key:SetFrameLevel(max(button:GetFrameLevel() - 1, 0))
+	key:EnableMouse(false)
+	key.skin = Kit:Skin(key, 'key', 'BACKGROUND', 0)
+	key.skin.kitMaxCorner = 5
+	if icon then
+		key.top = CreateFrame('Frame', nil, button)
+		key.top:SetAllPoints()
+		key.top:SetFrameLevel(button:GetFrameLevel() + 2)
+		key.top:EnableMouse(false)
+		key.icon = Kit:Icon(key.top, icon, size or 10, 'ink')
+		key.icon:SetPoint('CENTER')
+	end
+	button:HookScript('OnEnter', function() key.skin:SetAlpha(0.85) end)
+	button:HookScript('OnLeave', function() key.skin:SetAlpha(1) end)
+	if button.HasScript and button:HasScript('OnMouseDown') then
+		button:HookScript('OnMouseDown', function() Kit:SetSprite(key.skin, 'key-down'); Sound('tick') end)
+		button:HookScript('OnMouseUp', function() Kit:SetSprite(key.skin, 'key') end)
+	end
+	keyed[button] = key
+	return key
+end
+
+-- Rows ----------------------------------------------------------------------------------------
+local function FillFor(parts)
+	if DB().bar == 'flat' then Kit:Unperforate(parts.bar) else Kit:Perforate(parts.bar, 'black', 'darkEdge') end
+	parts.bar:SetStatusBarTexture(Kit.media..'bar-flat.tga')
+end
+
+-- Key color is set directly (not through Kit:Tint), so a theme repaint never
+-- recolors a bar that follows the game's class colors.
+local function KeyColor(parts)
+	if DB().blizzFill == 'key' then parts.bar:SetStatusBarColor(Kit:RGB('lamp')) end
+end
+
+local function DressRow(entry)
+	if Forbidden(entry) or rowParts[entry] then return rowParts[entry] end
 	local bar = entry.StatusBar
-	if bar and not Forbidden(bar) then
-		local fill = bar.GetStatusBarTexture and bar:GetStatusBarTexture()
-		if fill then fill:SetTexture(BarFile()) end
-		local back = bar.Background
-		if back and back.SetColorTexture then
-			back:SetColorTexture(1, 1, 1, 1)
-			Kit:Tint(back, 'glass', 0.85)
+	if not bar or Forbidden(bar) or not bar.GetStatusBarTexture then return end
+	local parts = {}
+	rowParts[entry] = parts
+	-- Our meter sits under the game's bar, whose fill and background are hidden;
+	-- the game's text stays on top.
+	parts.bar = CreateFrame('StatusBar', nil, entry)
+	parts.bar:SetAllPoints(bar)
+	parts.bar:SetFrameLevel(max(bar:GetFrameLevel() - 1, 0))
+	parts.bar:SetMinMaxValues(0, 1)
+	parts.track = parts.bar:CreateTexture(nil, 'BACKGROUND', nil, -2)
+	parts.track:SetAllPoints()
+	parts.track:SetColorTexture(1, 1, 1, 1)
+	Kit:Tint(parts.track, 'glass', 0.9)
+	FillFor(parts)
+	-- A faint lit line along the fill's top edge.
+	parts.edge = parts.bar:CreateTexture(nil, 'OVERLAY', nil, 5)
+	parts.edge:SetColorTexture(1, 1, 1, 1)
+	parts.edge:SetPoint('TOPLEFT', parts.bar:GetStatusBarTexture() or parts.bar, 'TOPLEFT')
+	parts.edge:SetPoint('TOPRIGHT', parts.bar:GetStatusBarTexture() or parts.bar, 'TOPRIGHT')
+	parts.edge:SetHeight(UI.Pixel.Px(parts.bar, 1))
+	parts.edge:SetAlpha(0.3)
+	local fill = bar:GetStatusBarTexture()
+	if fill then fill:SetAlpha(0) end
+	if bar.Background then bar.Background:SetAlpha(0) end
+	if bar.BackgroundEdge then bar.BackgroundEdge:SetAlpha(0) end
+	-- Copy the game's values and color across as it sets them.
+	local function Copy()
+		local ok, low, high = pcall(bar.GetMinMaxValues, bar)
+		if ok then pcall(parts.bar.SetMinMaxValues, parts.bar, low, high) end
+		local okValue, value = pcall(bar.GetValue, bar)
+		if okValue then pcall(parts.bar.SetValue, parts.bar, value, INTERP and INTERP.Immediate) end
+		local okColor, r, g, b = pcall(bar.GetStatusBarColor, bar)
+		if okColor and DB().blizzFill ~= 'key' then pcall(parts.bar.SetStatusBarColor, parts.bar, r, g, b, 1) end
+		KeyColor(parts)
+	end
+	hooksecurefunc(bar, 'SetMinMaxValues', function(_, low, high) pcall(parts.bar.SetMinMaxValues, parts.bar, low, high) end)
+	hooksecurefunc(bar, 'SetValue', function(_, value) pcall(parts.bar.SetValue, parts.bar, value, Interp()) end)
+	hooksecurefunc(bar, 'SetStatusBarColor', function(_, r, g, b)
+		if DB().blizzFill ~= 'key' then pcall(parts.bar.SetStatusBarColor, parts.bar, r, g, b, 1) end
+	end)
+	if fill and fill.SetVertexColor then
+		hooksecurefunc(fill, 'SetVertexColor', function(_, r, g, b)
+			if DB().blizzFill ~= 'key' then pcall(parts.bar.SetStatusBarColor, parts.bar, r, g, b, 1) end
+		end)
+	end
+	parts.copy = Copy
+	Copy()
+	-- Type: the name in Plex, the figures in the numbers face.
+	for _, holder in ipairs({bar, entry}) do
+		for _, region in ipairs({holder:GetRegions()}) do
+			if region.IsObjectType and region:IsObjectType('FontString') then
+				local justify = region:GetJustifyH()
+				local value = justify == 'RIGHT'
+				Plex(region, DB().fontSize, value, value and 'numbers' or nil)
+				if value and not parts.value then parts.value = region end
+			end
 		end
-		if bar.BackgroundEdge then bar.BackgroundEdge:SetAlpha(0) end
-		for _, region in ipairs({bar:GetRegions()}) do Plex(region, DB().fontSize) end
 	end
-	if entry.Icon and entry.Icon.SetTexCoord and not dressedText[entry.Icon] then
-		dressedText[entry.Icon] = true
-		entry.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	-- The icon on a small charcoal key, cropped, with its rank printed on it.
+	local icon = entry.Icon
+	if icon and icon.SetTexCoord then
+		icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		parts.iconKey = entry:CreateTexture(nil, 'BACKGROUND', nil, -3)
+		parts.iconKey:SetColorTexture(1, 1, 1, 1)
+		Kit:Tint(parts.iconKey, 'black', 0.9)
+		parts.iconKey:SetPoint('TOPLEFT', icon, 'TOPLEFT', -1, 1)
+		parts.iconKey:SetPoint('BOTTOMRIGHT', icon, 'BOTTOMRIGHT', 1, -1)
 	end
-	for _, region in ipairs({entry:GetRegions()}) do Plex(region, DB().fontSize) end
+	parts.top = CreateFrame('Frame', nil, entry)
+	parts.top:SetAllPoints()
+	parts.top:SetFrameLevel(entry:GetFrameLevel() + 6)
+	parts.top:EnableMouse(false)
+	parts.rank = Kit:Text(parts.top, '', 7, 'darkInk', true)
+	Kit:Font(parts.rank, 7, 'OUTLINE', true, 'numbers')
+	if icon then parts.rank:SetPoint('BOTTOMRIGHT', icon, 'BOTTOMRIGHT', 1, -1) else parts.rank:SetPoint('LEFT', 2, 0) end
+	parts.lamp = Kit:Led(parts.top, 4, true)
+	if icon then parts.lamp:SetPoint('TOPLEFT', icon, 'TOPLEFT', -1, 1) else parts.lamp:SetPoint('RIGHT', -2, 0) end
+	Kit:ShowLed(parts.lamp, false)
+	-- Per second, dim, just before the game's figure.
+	parts.rate = Kit:Text(parts.top, '', 8, 'darkDim', false, true)
+	Kit:Font(parts.rate, 8, 'OUTLINE', false, 'numbers')
+	if parts.value then parts.rate:SetPoint('RIGHT', parts.value, 'LEFT', -5, 0) else parts.rate:SetPoint('RIGHT', bar, 'RIGHT', -60, 0) end
+	-- A row arriving fades in.
+	entry:HookScript('OnShow', function(self)
+		if not Motion() then return end
+		self:SetAlpha(0)
+		Kit:FadeTo(self, 1, 'FAST')
+	end)
+	return parts
+end
+
+-- What the row shows now: rank, the player's lamp, per second.
+local function FillRow(entry, data, rank, isLocal)
+	local parts = DressRow(entry)
+	if not parts then return end
+	parts.rank:SetText(rank and tostring(rank) or '')
+	parts.rank:SetShown(DB().blizzRanks and rank ~= nil)
+	local mine = isLocal
+	if mine == nil and type(data) == 'table' then mine = data.isLocalPlayer end
+	if IsSecret(mine) and parts.lamp.SetAlphaFromBoolean then
+		Kit:ShowLed(parts.lamp, true)
+		parts.lamp:SetAlphaFromBoolean(mine, 1, 0)
+	else
+		Kit:ShowLed(parts.lamp, mine == true)
+		parts.lamp:SetAlpha(1)
+	end
+	local rate
+	if type(data) == 'table' then rate = data.amountPerSecond end
+	-- The figure may be secret: tested only for being there, then formatted by the game.
+	if DB().blizzRate and AbbreviateNumbers and (IsSecret(rate) or rate ~= nil) then
+		pcall(function() parts.rate:SetText(AbbreviateNumbers(rate)) end)
+		parts.rate:Show()
+	else
+		parts.rate:Hide()
+	end
+	KeyColor(parts)
+	return mine
+end
+
+-- The top spot: a quiet blip when you take it, at most every 20 s.
+local lastTop, lastBlip = {}, 0
+local function TopSpot(box, mine)
+	local now = mine == true
+	if now and not lastTop[box] and DB().blizzTopBlip and GetTime() - lastBlip > 20 then
+		lastBlip = GetTime()
+		Sound('blip')
+	end
+	lastTop[box] = now
 end
 
 local restyle = {} -- one function per hooked list, to repaint its rows after a setting changes
@@ -219,17 +398,60 @@ local function HookScrollBox(owner)
 	local box = owner and owner.GetScrollBox and owner:GetScrollBox()
 	if not box or blizzardWindows[box] then return end
 	blizzardWindows[box] = true
-	local function Each() if box.ForEachFrame then box:ForEachFrame(StyleEntry) end end
-	restyle[#restyle + 1] = Each
+	local function Each()
+		if not box.ForEachFrame then return end
+		local order = 0
+		box:ForEachFrame(function(frame, data)
+			order = order + 1
+			local rank = order
+			if box.FindElementDataIndex and data ~= nil then
+				local ok, index = pcall(box.FindElementDataIndex, box, data)
+				if ok and type(index) == 'number' and not IsSecret(index) then rank = index end
+			end
+			local ok, mine = pcall(FillRow, frame, data, rank)
+			if ok and rank == 1 and not IsSecret(mine) then TopSpot(box, mine) end
+		end)
+	end
+	restyle[#restyle + 1] = function()
+		for _, parts in pairs(rowParts) do FillFor(parts); UI:Safe(parts.copy) end
+		Each()
+	end
 	if type(box.Update) == 'function' then hooksecurefunc(box, 'Update', Each) end
 	Each()
+	-- The scroll bar: a hairline track with a small pill thumb; its arrows go.
+	local scroll = owner.GetScrollBar and owner:GetScrollBar()
+	if scroll and not Forbidden(scroll) and not blizzardWindows[scroll] then
+		blizzardWindows[scroll] = true
+		for _, arrow in ipairs({scroll.Back, scroll.Forward}) do if arrow then FadeArt(arrow) end end
+		local track = scroll.Track
+		if track and not Forbidden(track) then
+			FadeArt(track)
+			local line = track:CreateTexture(nil, 'BACKGROUND')
+			line:SetColorTexture(1, 1, 1, 1)
+			Kit:Tint(line, 'darkEdge', 0.9)
+			line:SetPoint('TOP')
+			line:SetPoint('BOTTOM')
+			line:SetWidth(UI.Pixel.Px(track, 1))
+			local thumb = track.Thumb
+			if thumb and not Forbidden(thumb) then
+				FadeArt(thumb)
+				local pill = thumb:CreateTexture(nil, 'ARTWORK')
+				pill:SetTexture(Kit.media..'round-3.tga')
+				Kit:Tint(pill, 'darkDim', 0.9)
+				pill:SetPoint('TOP')
+				pill:SetPoint('BOTTOM')
+				pill:SetWidth(4)
+			end
+		end
+	end
 end
 
+-- Windows --------------------------------------------------------------------------------------
 -- Edit Mode sets the window's background opacity on its Background texture;
 -- the housing follows it. The texture itself is emptied, not faded, so that
 -- opacity setting keeps its meaning.
-local function Behind(window, background)
-	local housing = Housing(window, {left = 2, right = 2, top = 2, bottom = 2}, window)
+local function Behind(window, background, top)
+	local housing = Housing(window, {left = 2, right = 2, top = top or 2, bottom = 2}, window)
 	if background and background.SetTexture and not blizzardWindows[background] then
 		blizzardWindows[background] = true
 		local alpha = Plain(background:GetAlpha())
@@ -242,15 +464,89 @@ local function Behind(window, background)
 	return housing
 end
 
+local HEADER_ROW = 16
+
+-- The printed header above the window: lamp, DM-1, the meter's name.
+local function Header(window, housing)
+	local parts = windowParts[window]
+	if parts then return parts end
+	parts = {}
+	windowParts[window] = parts
+	parts.strip = CreateFrame('Frame', nil, housing)
+	parts.strip:SetPoint('TOPLEFT', housing, 'TOPLEFT', 8, -3)
+	parts.strip:SetPoint('TOPRIGHT', housing, 'TOPRIGHT', -8, -3)
+	parts.strip:SetHeight(HEADER_ROW - 4)
+	parts.lamp = Kit:Led(parts.strip, 5, false)
+	parts.lamp:SetPoint('LEFT', 0, 0)
+	parts.model = Kit:Label(parts.strip, 'DM-1', 'darkInk', 8, true)
+	parts.model:SetPoint('LEFT', parts.lamp, 'RIGHT', 5, 0)
+	parts.title = Kit:Label(parts.strip, 'Damage meter', 'darkDim', 8)
+	parts.title:SetPoint('LEFT', parts.model, 'RIGHT', 5, 0)
+	parts.rule = parts.strip:CreateTexture(nil, 'ARTWORK')
+	parts.rule:SetColorTexture(1, 1, 1, 1)
+	Kit:Tint(parts.rule, 'darkEdge', 0.8)
+	parts.rule:SetPoint('LEFT', parts.title, 'RIGHT', 6, 0)
+	parts.rule:SetPoint('RIGHT', parts.strip, 'RIGHT', 0, 0)
+	parts.rule:SetHeight(UI.Pixel.Px(parts.strip, 1))
+	return parts
+end
+
+local function TimerPanel(window)
+	local timer = window.SessionTimer
+	if not timer or Forbidden(timer) or blizzardWindows[timer] then return end
+	blizzardWindows[timer] = true
+	Plex(timer, DB().fontSize, true, 'numbers')
+	Kit:Tint(timer, 'lcdInk')
+	local panel = Kit:LCDPanel(window, {radius = 3})
+	panel:SetFrameLevel(max(window:GetFrameLevel() - 1, 0))
+	Kit:Relevel(panel)
+	panel:SetPoint('TOPLEFT', timer, 'TOPLEFT', -4, 3)
+	panel:SetPoint('BOTTOMRIGHT', timer, 'BOTTOMRIGHT', 4, -3)
+end
+
 local function StyleSessionWindow(window)
 	if Forbidden(window) or blizzardWindows[window] then return end
 	blizzardWindows[window] = true
+	local device = DB().blizzHeader
 	if window.Header and window.Header.SetAlpha then window.Header:SetAlpha(0) end
 	local container = window.MinimizeContainer
-	Behind(window, container and container.Background)
-	Plex(window.SessionTimer, DB().fontSize, true)
+	local housing = Behind(window, container and container.Background, device and HEADER_ROW + 2 or 2)
+	if device then Header(window, housing) end
+	TimerPanel(window)
+	-- Dropdowns and keys.
 	local typeDropdown = window.DamageMeterTypeDropdown
-	if typeDropdown then Plex(typeDropdown.TypeName, DB().fontSize, true) end
+	if typeDropdown then
+		DressKey(typeDropdown, 'chevron-down', 9)
+		Plex(typeDropdown.TypeName, DB().fontSize, true)
+	end
+	local session = window.SessionDropdown
+	if session then
+		DressKey(session)
+		for _, region in ipairs({session:GetRegions()}) do Plex(region, DB().fontSize - 1, true) end
+		if session.ResetButton then
+			DressKey(session.ResetButton, 'trash', 9)
+			session.ResetButton:HookScript('OnClick', function() Sound('latch-up') end)
+		end
+	end
+	if window.SettingsDropdown then DressKey(window.SettingsDropdown, 'more', 10) end
+	local minimize = window.MinimizeButton
+	if minimize then
+		local key = DressKey(minimize, window.isMinimized and 'chevron-down' or 'chevron-up', 9)
+		if key and type(window.SetMinimized) == 'function' then
+			hooksecurefunc(window, 'SetMinimized', function(_, collapsed)
+				if key.icon then Kit:SetIcon(key.icon, collapsed and 'chevron-down' or 'chevron-up') end
+				FadeArt(minimize)
+			end)
+		end
+	end
+	-- The grip.
+	local grip = container and container.ResizeButton
+	if grip and not Forbidden(grip) and not keyed[grip] then
+		keyed[grip] = true
+		FadeArt(grip)
+		local glyph = Kit:Icon(grip, 'grip', 11, 'darkDim')
+		glyph:SetPoint('CENTER')
+	end
 	HookScrollBox(window)
 	local source = container and container.SourceWindow
 	if source and not Forbidden(source) then
@@ -260,7 +556,7 @@ local function StyleSessionWindow(window)
 	if type(window.ShowLocalPlayerEntry) == 'function' then
 		hooksecurefunc(window, 'ShowLocalPlayerEntry', function(self)
 			local entry = self.MinimizeContainer and self.MinimizeContainer.LocalPlayerEntry
-			if entry then UI:Safe(StyleEntry, entry) end
+			if entry then UI:Safe(FillRow, entry, nil, nil, true) end
 		end)
 	end
 end
@@ -269,6 +565,20 @@ local function StyleBlizzard()
 	local meter = _G.DamageMeter
 	if Forbidden(meter) or type(meter.ForEachSessionWindow) ~= 'function' then return end
 	meter:ForEachSessionWindow(function(window) UI:Safe(StyleSessionWindow, window) end)
+end
+
+-- A fight starting sweeps every header lamp on; a reset flashes them.
+local function Lamps(state)
+	for _, parts in pairs(windowParts) do
+		if state == 'fight' then
+			Kit:SetLed(parts.lamp, true, 'red')
+			if Motion() then Kit:Flash(parts.strip, {token = 'red', alpha = 0.45}) end
+		elseif state == 'reset' then
+			if Motion() then Kit:Flash(parts.strip, {token = 'lamp', alpha = 0.5}) end
+		else
+			Kit:SetLed(parts.lamp, false)
+		end
+	end
 end
 
 local blizzardHooked
@@ -280,6 +590,15 @@ local function HookBlizzard()
 		blizzardHooked = true
 		-- New session windows are styled a frame later, outside Blizzard's own call.
 		hooksecurefunc(meter, 'SetupSessionWindow', function() C_Timer.After(0, StyleBlizzard) end)
+		local events = CreateFrame('Frame')
+		for _, event in ipairs({'PLAYER_REGEN_DISABLED', 'PLAYER_REGEN_ENABLED', 'DAMAGE_METER_RESET'}) do
+			pcall(events.RegisterEvent, events, event)
+		end
+		events:SetScript('OnEvent', function(_, event)
+			if event == 'PLAYER_REGEN_DISABLED' then Lamps('fight')
+			elseif event == 'PLAYER_REGEN_ENABLED' then Lamps('off')
+			else Lamps('reset'); Sound('latch-up') end
+		end)
 	end
 	StyleBlizzard()
 end
@@ -607,7 +926,8 @@ local signature
 local function Signature()
 	local db = DB()
 	return strjoin(',', tostringall(db.bar, db.barHeight, db.fontSize, db.classColors, db.details, db.detailsBase, db.dock,
-		db.dockWidth, db.dockHeight, db.dockWindows, db.ownType, db.ownSession, db.ownRows, db.ownWidth, Kit:DB().finish,
+		db.dockWidth, db.dockHeight, db.dockWindows, db.ownType, db.ownSession, db.ownRows, db.ownWidth, db.blizzFill,
+		db.blizzRanks, db.blizzRate, Kit:DB().finish,
 		Kit:DB().accent))
 end
 
@@ -641,6 +961,15 @@ UI:RegisterPage('meters', {title = 'Damage meters', order = 18, cards = {
 		{'switch', 'Blizzard meter', 'meters.blizzard', 'The game\'s own damage meter windows. Edit Mode places them.', reload = true},
 		{'switch', 'Skada', 'meters.skada', nil, reload = true},
 		{'switch', 'Recount', 'meters.recount', nil, reload = true},
+	}},
+	{title = 'Game meter', rows = {
+		{'switch', 'Device header', 'meters.blizzHeader', 'A printed DM-1 header (lamp, model, name) above each window.', reload = true},
+		{'segmented', 'Fill', 'meters.blizzFill', items = {{'class', 'Class'}, {'key', 'Key color'}}},
+		{'switch', 'Ranks', 'meters.blizzRanks', 'Each row\'s place printed on its icon.'},
+		{'switch', 'Per second', 'meters.blizzRate', 'The per-second figure, dim, before the total.'},
+		{'switch', 'Animations', 'meters.blizzMotion', 'Bars glide, new rows fade in, a fight start sweeps the header lamps.'},
+		{'switch', 'Sounds', 'meters.blizzSounds', 'Ticks on the dropdowns, a latch on reset.'},
+		{'switch', 'Top spot blip', 'meters.blizzTopBlip', 'A quiet blip when you take the top spot (at most every 20 s).'},
 	}},
 	{title = 'Dock', rows = {
 		{'switch', 'Dock', 'meters.dock', 'One DM-0 device holding Details windows (and the DM-1 meter). Place it with /spec move.'},

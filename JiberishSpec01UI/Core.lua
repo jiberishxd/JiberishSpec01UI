@@ -226,8 +226,18 @@ SlashCmdList.JIBERISHSPEC = function(input)
 		local lock
 		if command == 'unlock' then lock = false elseif command == 'lock' then lock = true end
 		if UI.ToggleMovers then UI:ToggleMovers(lock) end
+	elseif (command == 'drawer' or command == 'timer' or command == 'volume' or command == 'cpu') and UI.ToggleDrawer then
+		UI:ToggleDrawer(command ~= 'drawer' and command or nil)
+	elseif command == 'calendar' and UI.OpenCalendar then UI:OpenCalendar()
 	elseif command == 'reset' then
 		if UI.ResetMovers then UI:ResetMovers() end
 	elseif UI.ToggleHub then UI:ToggleHub(command ~= '' and command or nil)
 	end
 end
+
+-- Key bindings (Bindings.xml): the drawer and unlock mode.
+BINDING_HEADER_JIBERISHSPEC = 'Jiberish SPEC-01 UI'
+BINDING_NAME_JIBERISHSPEC_DRAWER = 'Open or close the drawer'
+BINDING_NAME_JIBERISHSPEC_UNLOCK = 'Unlock or lock frames'
+function JiberishSpec01_ToggleDrawer() if UI.ToggleDrawer then UI:ToggleDrawer() end end
+function JiberishSpec01_ToggleMovers() if UI.ToggleMovers then UI:ToggleMovers() end end

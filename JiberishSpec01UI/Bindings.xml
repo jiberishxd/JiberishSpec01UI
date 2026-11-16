@@ -1,0 +1,4 @@
+<Bindings>
+	<Binding name="JIBERISHSPEC_DRAWER" header="JIBERISHSPEC" category="ADDONS">JiberishSpec01_ToggleDrawer()</Binding>
+	<Binding name="JIBERISHSPEC_UNLOCK" category="ADDONS">JiberishSpec01_ToggleMovers()</Binding>
+</Bindings>

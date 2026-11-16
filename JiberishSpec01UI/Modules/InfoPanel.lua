@@ -98,12 +98,14 @@ DATA.time = {label = 'Time', ticker = 'clock',
 		Line('Realm time', Clock('realm'))
 		local invites = C_Calendar and C_Calendar.GetNumPendingInvites and Plain(C_Calendar.GetNumPendingInvites())
 		if invites and invites > 0 then Line('Calendar invites', tostring(invites), 0.91, 0.63, 0.07) end
-		Hint('Click: calendar. Right-click: clock and stopwatch.')
+		Hint(UI.OpenCalendar and 'Click: SPEC-01 calendar. Shift-click: game calendar. Right-click: stopwatch.' or 'Click: calendar. Right-click: clock and stopwatch.')
 	end,
 	Click = function(_, button)
 		if button == 'RightButton' then
 			if not _G.TimeManagerFrame and C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, 'Blizzard_TimeManager') end
 			Call('TimeManager_Toggle')
+		elseif UI.OpenCalendar and not IsShiftKeyDown() then
+			UI:OpenCalendar()
 		else
 			Call('ToggleCalendar')
 		end
@@ -1132,6 +1134,8 @@ local function BuildHud()
 		if button == 'RightButton' then
 			if not _G.TimeManagerFrame and C_AddOns and C_AddOns.LoadAddOn then pcall(C_AddOns.LoadAddOn, 'Blizzard_TimeManager') end
 			Call('TimeManager_Toggle')
+		elseif UI.OpenCalendar and not IsShiftKeyDown() then
+			UI:OpenCalendar()
 		else
 			Call('ToggleCalendar')
 		end
