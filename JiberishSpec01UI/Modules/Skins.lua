@@ -484,7 +484,8 @@ local function Tab(tab)
 	else
 		SetFonts(tab, TAB_OFF, TAB_HOT, TAB_ON)
 	end
-	tab:HookScript('OnClick', function()
+	local clickScript = tab.HasScript and tab:HasScript('OnClick') and 'OnClick' or 'OnMouseUp'
+	tab:HookScript(clickScript, function()
 		Sound('tick', 'tab')
 		RepaintTabs()
 	end)

@@ -1647,7 +1647,7 @@ local function WatchAlerts()
 		-- calls Stop, so a click on the button also clears it.
 		if on and button.IsEnabled and not button:IsEnabled() then on = false end
 		alerting[button] = on or nil
-		if on and not clickHooked[button] and button.HookScript then
+		if on and not clickHooked[button] and button.HasScript and button:HasScript('OnClick') then
 			clickHooked[button] = true
 			button:HookScript('OnClick', function(self)
 				if alerting[self] then alerting[self] = nil; UI:Safe(PaintMenuButton, self) end

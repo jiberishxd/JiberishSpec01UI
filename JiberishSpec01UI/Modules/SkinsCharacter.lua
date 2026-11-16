@@ -403,7 +403,9 @@ local function TabKey(tab, icon, opts)
 	-- Hover: the key brightens a touch.
 	tab:HookScript('OnEnter', function() key.skin:SetAlpha(0.85) end)
 	tab:HookScript('OnLeave', function() key.skin:SetAlpha(1) end)
-	tab:HookScript('OnClick', function() P.Sound('tick', 'tab'); RepaintTabKeys() end)
+	-- Some of Forever's side tabs are plain frames that take clicks by mouse-up.
+	local clickScript = tab.HasScript and tab:HasScript('OnClick') and 'OnClick' or 'OnMouseUp'
+	tab:HookScript(clickScript, function() P.Sound('tick', 'tab'); RepaintTabKeys() end)
 	tab:HookScript('OnShow', RepaintTabKeys)
 	tabKeys[tab] = key
 	selectedOf[tab] = opts.selected
@@ -506,7 +508,8 @@ local function PaneToggle(frame)
 	if type(frame.UpdateRightPaneToggleButton) == 'function' then
 		hooksecurefunc(frame, 'UpdateRightPaneToggleButton', function() UI:Safe(Paint) end)
 	end
-	toggle:HookScript('OnClick', function() C_Timer.After(0, function() UI:Safe(Paint) end) end)
+	local clickScript = toggle.HasScript and toggle:HasScript('OnClick') and 'OnClick' or 'OnMouseUp'
+	toggle:HookScript(clickScript, function() C_Timer.After(0, function() UI:Safe(Paint) end) end)
 	Paint()
 end
 
