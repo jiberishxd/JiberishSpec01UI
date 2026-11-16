@@ -573,27 +573,21 @@ local function KnownLasting(id, spellID)
 	return false
 end
 
--- One aura as an item. Timed auras ride the line (longer ones wait at its far
--- end). An aura that lasts until cancelled (a seal, an aura, a form), or one
--- the game won't time, is pinned past the far end. When whether it lasts
--- forever is a secret, the item carries both and the answer picks by alpha.
+-- One aura as an item, or nil. Only timed auras are kept: one that lasts until
+-- cancelled (a seal, an aura, a form), or that the game won't time, never
+-- shows. A timed one longer than the line is kept too, but rides beyond the
+-- line's clipped end until its time left drops onto the line. When whether it
+-- lasts forever is a secret, that answer hides the key by alpha.
 local function AuraItem(data, harmful)
 	local length = data.duration
 	local id, spellID = data.auraInstanceID, data.spellId
 	if Blocked(spellID) then return nil end
-	local item = {icon = data.icon, kind = harmful and 'harm' or 'help'}
-	item.auraID, item.apps = id, data.applications
-	if not IsSecret(id) then item.identity = id end
 	local plainLength = not IsSecret(length)
 	if plainLength and (not length or length <= 0) then
 		RememberLasting(id, spellID)
-		item.pinned = true
-		return item
+		return nil
 	end
-	if not plainLength and KnownLasting(id, spellID) then
-		item.pinned = true
-		return item
-	end
+	if not plainLength and KnownLasting(id, spellID) then return nil end
 	-- The optional cap on long buffs (0, the default, keeps them all).
 	local longest = DB().longBuffs or 0
 	if not harmful and longest > 0 then
@@ -604,6 +598,9 @@ local function AuraItem(data, harmful)
 			return nil
 		end
 	end
+	local item = {icon = data.icon, kind = harmful and 'harm' or 'help'}
+	item.auraID, item.apps = id, data.applications
+	if not IsSecret(id) then item.identity = id end
 	-- The duration object; a secret instance ID is passed on untested.
 	if C_UnitAuras.GetAuraDuration and (IsSecret(id) or id ~= nil) then
 		local ok, duration = pcall(C_UnitAuras.GetAuraDuration, 'player', id)
@@ -612,22 +609,20 @@ local function AuraItem(data, harmful)
 	if item.duration and not plainLength and item.duration.IsZero then
 		local okZero, zero = pcall(item.duration.IsZero, item.duration)
 		if okZero then
-			if IsSecret(zero) then
-				item.zeroFlag, item.hasZero = zero, true
-			elseif zero then
-				item.duration, item.pinned = nil, true
-				return item
-			end
+			if IsSecret(zero) then item.zeroFlag, item.hasZero = zero, true
+			elseif zero then return nil end
 		end
 	end
+	local expires = data.expirationTime
 	if not item.duration then
-		local expires = data.expirationTime
-		if IsSecret(expires) or not plainLength or not expires or expires <= 0 then
-			-- Can't be timed: shown pinned rather than dropped.
-			item.pinned = true
-			return item
-		end
+		if IsSecret(expires) or not plainLength or not expires or expires <= 0 then return nil end
 		item.expires, item.length = expires, length
+	end
+	-- Whether it is on the line now, where that can be read: soon, later or unknown.
+	if plainLength and not IsSecret(expires) and type(expires) == 'number' and expires > 0 then
+		item.later = (expires - GetTime()) > max(DB().maxTime or 60, 1)
+	else
+		item.unknown = true
 	end
 	return item
 end
@@ -661,8 +656,6 @@ local function CooldownItem(spellID)
 			if IsSecret(zero) then item.zeroFlag, item.hasZero = zero, true elseif zero then return nil end
 		end
 	end
-	-- A cooldown that isn't running is simply not shown: never pinned.
-	item.noPin = true
 	-- Unknown whether it runs at all: it shows only if it does, and doesn't use up a slot.
 	item.uncounted = item.hasActive or item.hasZero
 	if not item.duration then
@@ -674,16 +667,19 @@ local function CooldownItem(spellID)
 end
 
 -- Every aura and cooldown is read in its own protected call, so one that
--- errors can't take the others off the line.
+-- errors can't take the others off the line. What is on the line (or may be)
+-- comes first, then cooldowns, then auras still waiting beyond the line, so
+-- slots go to what can be seen.
 local function Collect()
 	local items, db = {}, DB()
 	local limit = db.maxEntries or 12
+	local counted = 0
 	local function Add(item)
-		if item then items[#items + 1] = item end
+		if not item or counted >= limit then return end
+		items[#items + 1] = item
+		if not item.uncounted then counted = counted + 1 end
 	end
-	-- Every aura is read before any is dropped, and timed ones come first, so a
-	-- fresh short buff is never crowded out by long or lasting ones.
-	local timed, maybe, pinned = {}, {}, {}
+	local now, later = {}, {}
 	local function Scan(filter, harmful)
 		for index = 1, 40 do
 			local ok, data = pcall(C_UnitAuras.GetAuraDataByIndex, 'player', index, filter)
@@ -692,7 +688,7 @@ local function Collect()
 			if not built then
 				if geterrorhandler then geterrorhandler()(item) end
 			elseif item then
-				local list = item.pinned and pinned or (item.hasZero and maybe or timed)
+				local list = item.later and later or now
 				list[#list + 1] = item
 			end
 		end
@@ -701,25 +697,15 @@ local function Collect()
 		if db.buffs ~= 'off' then Scan(db.buffs == 'all' and 'HELPFUL' or 'HELPFUL|PLAYER', false) end
 		if db.debuffs then Scan('HARMFUL', true) end
 	end
-	for _, list in ipairs({timed, maybe, pinned}) do
-		for _, item in ipairs(list) do
-			if #items >= limit then break end
-			Add(item)
-		end
-	end
+	for _, item in ipairs(now) do Add(item) end
 	if db.cooldowns then
-		local counted = #items
 		for _, spellID in ipairs(ActionSpells()) do
 			if counted >= limit then break end
 			local built, item = pcall(CooldownItem, spellID)
-			if built and item then
-				Add(item)
-				if not item.uncounted then counted = counted + 1 end
-			elseif not built and geterrorhandler then
-				geterrorhandler()(item)
-			end
+			if built then Add(item) elseif geterrorhandler then geterrorhandler()(item) end
 		end
 	end
+	for _, item in ipairs(later) do Add(item) end
 	return items
 end
 

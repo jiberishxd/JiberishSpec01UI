@@ -29,6 +29,7 @@ local FRAMES = {
 	{name = 'SwingTimerRangedFrame', slot = 'Ranged', token = 'amber'},
 }
 local FLAT = [[Interface\Buttons\WHITE8X8]]
+local LEGENDS = {MainHand = 'Main hand', OffHand = 'Off hand', Ranged = 'Ranged'}
 
 local parts = setmetatable({}, {__mode = 'k'}) -- Blizzard frame -> our pieces
 
@@ -75,7 +76,15 @@ local function Paint(frame)
 	else
 		r, g, b = Kit:RGB(Token(own.entry))
 	end
-	bar:SetStatusBarColor(r, g, b, 1)
+	-- A lit glass fill: the color deepens toward the bottom, with a bright top edge.
+	bar:SetStatusBarColor(1, 1, 1, 1)
+	fill = bar:GetStatusBarTexture()
+	if fill and fill.SetGradient and CreateColor then
+		fill:SetGradient('VERTICAL', CreateColor(r * 0.55, g * 0.55, b * 0.55, 1), CreateColor(r * 0.92, g * 0.92, b * 0.92, 1))
+	elseif fill then
+		fill:SetVertexColor(r * 0.85, g * 0.85, b * 0.85, 1)
+	end
+	own.sheen:SetVertexColor(1, 1, 1)
 	own.spark:SetVertexColor(r, g, b)
 	own.glow:SetVertexColor(r, g, b)
 	own.spark:SetShown(db.spark and true or false)
@@ -83,16 +92,25 @@ local function Paint(frame)
 	for _, tick in ipairs(own.ticks) do tick:SetShown(db.ticks and true or false) end
 	own.lamp:SetVertexColor(r, g, b)
 	own.lamp:SetAlpha(out and 0.35 or 1)
+	Kit:Tint(own.legend, out and 'red' or 'darkDim')
+	-- The game re-shows some of its art as it updates.
+	own.strip()
 end
 
--- Hide the game's art: every texture on the frame and the bar but the fill.
-local function Strip(frame, bar)
+-- Hide the game's art: every texture on the frame, the bar and any of their
+-- child frames (the end caps and borders), but the fill and our own pieces.
+local function Strip(frame, bar, mine)
 	local fill = bar:GetStatusBarTexture()
-	for _, holder in ipairs({frame, bar}) do
+	local function Walk(holder, depth)
+		if mine[holder] then return end
 		for _, region in ipairs({holder:GetRegions()}) do
-			if Is(region, 'Texture') and region ~= fill then region:SetAlpha(0) end
+			if Is(region, 'Texture') and region ~= fill and not mine[region] then region:SetAlpha(0) end
+		end
+		if depth < 3 then
+			for _, child in ipairs({holder:GetChildren()}) do Walk(child, depth + 1) end
 		end
 	end
+	Walk(frame, 0)
 end
 
 local function Skin(entry)
@@ -101,13 +119,15 @@ local function Skin(entry)
 	if frame.IsForbidden and frame:IsForbidden() then return end
 	local bar = frame.StatusBar
 	if not Is(bar, 'StatusBar') then return end
-	Strip(frame, bar)
 	local own = {entry = entry, bar = bar}
+	local mine = setmetatable({}, {__mode = 'k'})
+	own.strip = function() Strip(frame, bar, mine) end
 	parts[frame] = own
-	-- Housing around the whole frame, a black screen behind the bar.
+	-- Housing around the whole frame with a printed header row (lamp, slot,
+	-- time) above a black screen that holds the bar.
 	own.housing = CreateFrame('Frame', nil, frame)
-	own.housing:SetPoint('TOPLEFT', bar, 'TOPLEFT', -4, 4)
-	own.housing:SetPoint('BOTTOMRIGHT', bar, 'BOTTOMRIGHT', 4, -4)
+	own.housing:SetPoint('TOPLEFT', bar, 'TOPLEFT', -5, 15)
+	own.housing:SetPoint('BOTTOMRIGHT', bar, 'BOTTOMRIGHT', 5, -5)
 	own.housing:SetFrameLevel(math.max(bar:GetFrameLevel() - 2, 0))
 	Kit:Shell(own.housing, {surface = 'glass', radius = 5, alpha = 0.9})
 	own.screen = CreateFrame('Frame', nil, frame)
@@ -115,6 +135,7 @@ local function Skin(entry)
 	own.screen:SetPoint('BOTTOMRIGHT', bar, 'BOTTOMRIGHT', 1, -1)
 	own.screen:SetFrameLevel(math.max(bar:GetFrameLevel() - 1, 0))
 	Kit:Shell(own.screen, {surface = 'screen', radius = 2, shadow = false})
+	mine[own.housing], mine[own.screen] = true, true
 	-- Quarter ticks over the fill, like the scale under SPEC-01's slider.
 	own.ticks = {}
 	for index = 1, 3 do
@@ -152,21 +173,32 @@ local function Skin(entry)
 	own.glow:SetPoint('BOTTOMRIGHT', fill, 'BOTTOMRIGHT', 6, -5)
 	own.glow:SetBlendMode('ADD')
 	own.glow:SetAlpha(0.6)
-	-- A slot lamp on the housing's left edge.
+	-- The glass sheen: a faint lit line along the fill's top edge.
+	own.sheen = bar:CreateTexture(nil, 'OVERLAY', nil, 0)
+	own.sheen:SetTexture(FLAT)
+	own.sheen:SetPoint('TOPLEFT', fill, 'TOPLEFT', 0, 0)
+	own.sheen:SetPoint('TOPRIGHT', fill, 'TOPRIGHT', 0, 0)
+	own.sheen:SetHeight(UI.Pixel.Px(bar, 1))
+	own.sheen:SetAlpha(0.35)
+	mine[own.spark], mine[own.glow], mine[own.sheen] = true, true, true
+	for _, tick in ipairs(own.ticks) do mine[tick] = true end
+	-- The header: a slot lamp, the slot printed in small caps, the time on the right.
 	own.lamp = Kit:Texture(own.housing, 'circle', 'OVERLAY', 2)
 	own.lamp:SetSize(4, 4)
-	own.lamp:SetPoint('RIGHT', own.housing, 'LEFT', -3, 0)
-	-- The game's labels in the reference's typeface: slot printed, time on the LCD ink.
-	if Is(bar.TypeLabel, 'FontString') then
-		Kit:Font(bar.TypeLabel, 9, 'OUTLINE', true)
-		Kit:Tint(bar.TypeLabel, 'darkInk')
-		bar.TypeLabel:SetShadowOffset(0, 0)
-	end
+	own.lamp:SetPoint('TOPLEFT', own.housing, 'TOPLEFT', 6, -6)
+	own.legend = Kit:Label(own.housing, LEGENDS[entry.slot] or entry.slot, 'darkDim', 8, true)
+	own.legend:SetPoint('LEFT', own.lamp, 'RIGHT', 5, 0)
+	-- The game's own slot label is replaced by the printed one.
+	if Is(bar.TypeLabel, 'FontString') then bar.TypeLabel:SetAlpha(0) end
 	if Is(bar.TimeLabel, 'FontString') then
-		Kit:Font(bar.TimeLabel, 10, 'OUTLINE', true, 'numbers')
+		Kit:Font(bar.TimeLabel, 9, 'OUTLINE', true, 'numbers')
 		Kit:Tint(bar.TimeLabel, 'screenAccent')
 		bar.TimeLabel:SetShadowOffset(0, 0)
+		bar.TimeLabel:ClearAllPoints()
+		bar.TimeLabel:SetPoint('RIGHT', own.housing, 'TOPRIGHT', -7, -8)
+		bar.TimeLabel:SetJustifyH('RIGHT')
 	end
+	own.strip()
 	-- Repaint after the game's own updates.
 	for _, method in ipairs({'ApplyRangePresentation', 'ResetSwingTimer', 'ClearSwingTimer', 'UpdateShownState',
 		'OnEditModeExit', 'UpdateSystemSettingOpacity'}) do
