@@ -107,6 +107,7 @@ local FRAME_DEFAULTS = {
 	auraGrow = 'right', -- 'right' | 'left'
 	auraPosition = 'below', -- 'below' | 'above' | 'right' | 'left'
 	auraTime = true, auraSwipe = true, stackSize = 10,
+	auraTimeSize = 8, -- the countdown on each aura key, in the reference's mono numbers
 	classPower = true, lampSize = 6,
 	status = 'off', -- status glyph lamps (large frames): 'off' | 'lit' | 'panel'
 }
@@ -150,6 +151,8 @@ UI:RegisterDefaults('unitframes', {
 		dispel = true, targetOutline = true, partyPets = false, partyTargets = false},
 })
 -- defaults:end
+-- Core.lua declares combatSweep = true among the first defaults; it is off now.
+if UI.defaults.unitframes then UI.defaults.unitframes.combatSweep = false end
 
 local function Cfg(frame) return DB().units[frame.key] end
 local function CastCfg(unit) return DB().cast[unit] end
@@ -165,7 +168,7 @@ local SHAPE_SIZES = {
 	square = {large = {76, 76}, medium = {58, 58}, small = {46, 46}},
 	slim = {large = {200, 26}, medium = {164, 24}, small = {124, 22}},
 	lcdstrip = {large = {224, 40}, medium = {176, 34}, small = {128, 30}},
-	console = {large = {224, 66}, medium = {176, 54}, small = {136, 44}},
+	console = {large = {224, 66}, medium = {176, 46}, small = {136, 36}},
 	gauge = {large = {200, 56}, medium = {164, 46}, small = {124, 36}},
 	tape = {large = {224, 46}, medium = {176, 40}, small = {128, 34}},
 	printed = {large = {224, 50}, medium = {176, 44}, small = {136, 36}},
@@ -996,8 +999,8 @@ STATUS_EVENTS = {UNIT_FLAGS = true, UNIT_FACTION = true, PLAYER_UPDATE_RESTING =
 	PLAYER_REGEN_DISABLED = true, PLAYER_REGEN_ENABLED = true}
 
 function StatusMode(frame)
-	if frame.shapeName == 'console' then return 'panel' end
 	if frame.layout.size ~= 'large' then return 'off' end
+	if frame.shapeName == 'console' then return 'panel' end
 	return Cfg(frame).status or 'off'
 end
 
@@ -1213,6 +1216,31 @@ local function BelowOffset(frame)
 	return offset
 end
 
+-- The cooldown's own countdown, small and fitted: mono numbers with an
+-- outline, along the key's foot so a long time ("49m", "1h") stays inside.
+-- The client may re-apply the cooldown's countdown font object, so that object
+-- is ours too: one per size, in the reference's bold mono with an outline.
+local clockFonts = {}
+local function AuraClock(icon, cfg, size)
+	local cooldown = icon.cooldown
+	local fontSize = min(cfg.auraTimeSize or 8, max(6, floor(size * 0.5)))
+	if cooldown.SetCountdownFont and CreateFont then
+		local name = 'JiberishSpec01AuraClock'..fontSize
+		local font = clockFonts[fontSize] or _G[name] or CreateFont(name)
+		font:SetFont(Kit:FontPath(true), fontSize, 'OUTLINE')
+		clockFonts[fontSize] = font
+		pcall(cooldown.SetCountdownFont, cooldown, name)
+	end
+	local text = cooldown.GetCountdownFontString and cooldown:GetCountdownFontString()
+	if not text then return end
+	Kit:Font(text, fontSize, 'OUTLINE', true)
+	text:SetShadowOffset(0, 0)
+	text:ClearAllPoints()
+	text:SetPoint('BOTTOM', icon, 'BOTTOM', 0, 1)
+	text:SetJustifyH('CENTER')
+	text:SetTextColor(1, 1, 1)
+end
+
 local function LayoutAuras(frame)
 	local cfg = Cfg(frame)
 	local count = (DB().auras and cfg.auras) and max(0, min(cfg.auraMax or 8, 40)) or 0
@@ -1226,6 +1254,7 @@ local function LayoutAuras(frame)
 		icon:SetSize(size, size)
 		Kit:Font(icon.count, cfg.stackSize or 10, nil, true)
 		if icon.cooldown.SetHideCountdownNumbers then icon.cooldown:SetHideCountdownNumbers(not cfg.auraTime) end
+		AuraClock(icon, cfg, size)
 		if icon.cooldown.SetDrawSwipe then icon.cooldown:SetDrawSwipe(cfg.auraSwipe and true or false) end
 		local column, row = (index - 1) % perRow, floor((index - 1) / perRow)
 		local x, y = column * (size + gap), row * (size + gap)
@@ -1415,10 +1444,10 @@ local function Sweep(frame, token, duration, peak)
 	end, function() light:SetAlpha(0) end, 'linear')
 end
 
--- The combat cue module traces every SPEC-01 frame itself; then this light stands down.
+-- The combat cue module marks combat itself; while it is on, this light stands down.
 local function CueTraces()
 	local cue = UI.db.combatcue
-	return type(cue) == 'table' and cue.enable and cue.trace and true or false
+	return type(cue) == 'table' and cue.enable and true or false
 end
 
 local function SweepAll(token, duration, peak)
@@ -1768,13 +1797,51 @@ end
 -- The LCD's unlit '888' is shown or hidden by the appearance setting
 -- (Kit:Ghost); it is only printed behind a percentage, where it reads right.
 -- Kept in a block of its own: the main chunk may hold at most 200 locals.
-local LayoutLarge, LayoutCompact, NoPortrait, Gauge, ApplyShell, ResetParts, SHAPE_LAYOUTS
+local LayoutLarge, LayoutCompact, NoPortrait, Gauge, ApplyShell, ResetParts, SHAPE_LAYOUTS, SyncGhost
 do
 local function ShowGhost(frame, cfg)
 	if not frame.ghost then return end
 	frame.ghost:SetText(cfg.healthText == 'percent' and '888' or '')
 	if not Kit.Ghost then frame.ghost:Show() end
 end
+
+-- After every layout: the unlit '888' sits exactly behind the readout, in the
+-- same face and size, right-aligned on the value's own right edge, and never
+-- outlined or shadowed (an outlined ghost reads as garbled digits). It shows
+-- only behind a percentage (three digits at most) set in the monospaced IBM
+-- Plex Mono, where each digit lands on an unlit one; otherwise it is blank.
+function SyncGhost(frame, cfg)
+	local ghost, digits = frame.ghost, frame.digits
+	if not (ghost and digits) then return end
+	local parent = digits:GetParent()
+	local onLcd = (parent == frame.lcd and frame.lcd:IsShown()) or (frame.shapeName == 'lcdstrip' and parent == frame.face)
+	local path, size = digits:GetFont()
+	local mono = type(path) == 'string' and path:find('IBMPlexMono') ~= nil
+	if not (onLcd and mono and size and cfg.healthText == 'percent') then
+		ghost:SetText('')
+		return
+	end
+	if ghost:GetParent() ~= parent then ghost:SetParent(parent) end
+	ghost:SetFont(path, size, '')
+	ghost:SetShadowOffset(0, 0)
+	ghost:SetText('888')
+	ghost:SetJustifyH('RIGHT')
+	ghost:ClearAllPoints()
+	ghost:SetPoint('RIGHT', digits, 'RIGHT', 0, 0)
+	ghost:SetDrawLayer('ARTWORK')
+	digits:SetDrawLayer('OVERLAY')
+	Kit:Tint(ghost, 'lcdGhost')
+end
+
+-- A theme repaint re-applies every registered font, ghosts included: put the
+-- ghosts back behind their readouts once it has run.
+Kit:OnRefresh(function()
+	C_Timer.After(0, function()
+		for _, frame in ipairs(ordered) do
+			if frame.ghost then UI:Safe(SyncGhost, frame, Cfg(frame)) end
+		end
+	end)
+end)
 
 -- Moving a text or lamp between the face, the LCD and the overlay above the
 -- meters. Only this addon's own regions move.
@@ -2180,68 +2247,107 @@ local function PrintHeader(frame, cfg, pad, y, width)
 	return near, far, sign
 end
 
--- Console: a printed header, a big LCD readout on the near side, the meters
--- beside it (power as lit segments) and a row of status glyph lamps under them.
+-- Console: a printed header, an LCD readout on the near side, the meters beside
+-- it (power as lit segments) and, on the player and target, a row of status
+-- glyph lamps under them. Medium and small consoles drop the code, level and
+-- lamps and give the readout and meters the room.
 local function LayoutConsole(frame, cfg)
 	local width, height = cfg.width, cfg.height
-	local pad = 7
-	local near, far, sign = PrintHeader(frame, cfg, pad, -4, width)
-	local top = cfg.header and 19 or 7
-	local statusRow = 9
-	local bodyHeight = max(14, height - top - statusRow - 10)
+	local size = frame.layout.size
+	local large = size == 'large'
+	local pad = large and 7 or 5
+	local near, far, sign = PrintHeader(frame, cfg, pad, large and -4 or -3, width)
+	local nameSize = cfg.nameSize or (large and 10 or 9)
+	local top = cfg.header and (large and 19 or nameSize + 7) or pad
+	local statusRow = large and 9 or 0
+	local bottom = large and statusRow + 9 or pad
+	local bodyHeight = max(12, height - top - bottom)
 	local lcd = frame.lcd
 	Put(frame.digits, lcd)
-	Put(frame.ghost, lcd)
 	lcd:Show()
 	lcd:ClearAllPoints()
-	local lcdWidth = max(40, floor(width * 0.36))
+	-- Wide enough for four digits at the chosen size, and no more than 40% of the frame.
+	local digits = max(9, min(floor(bodyHeight * (large and 0.62 or 0.7)), cfg.digitsSize and cfg.digitsSize + (large and 8 or 2) or 22))
+	local lcdWidth = min(max(floor(digits * 2.6) + 12, 34), floor(width * 0.4))
+	digits = min(digits, floor((lcdWidth - 10) / 2.4))
 	lcd:SetSize(lcdWidth, bodyHeight)
 	lcd:SetPoint('TOP'..near, frame.face, 'TOP'..near, sign * pad, -top)
-	local size = max(9, min(floor(bodyHeight * 0.62), floor((lcdWidth - 10) / 2.2), cfg.digitsSize and cfg.digitsSize + 8 or 22))
-	Kit:Font(frame.digits, size, nil, false)
-	Kit:Font(frame.ghost, size, nil, false)
+	Kit:Font(frame.digits, digits, nil, false)
 	Kit:Tint(frame.digits, 'lcdInk')
-	ShowGhost(frame, cfg)
-	for _, text in ipairs({frame.digits, frame.ghost}) do
-		text:ClearAllPoints()
-		text:SetPoint('RIGHT', lcd, 'RIGHT', -5, 0)
-		text:SetJustifyH('RIGHT')
-	end
+	frame.digits:ClearAllPoints()
+	frame.digits:SetPoint('RIGHT', lcd, 'RIGHT', -5, 0)
+	frame.digits:SetJustifyH('RIGHT')
+	frame.digits:SetWidth(0)
 	local column = max(width - pad * 2 - lcdWidth - 6, 20)
-	local healthTrack = TrackHeight(frame.health, cfg.healthHeight or 6)
+	local healthHeight = cfg.healthHeight or (large and 6 or 5)
+	local powerHeight = frame.power and max(cfg.powerHeight or 3, large and 4 or 3) or 0
+	-- Meters centred on the readout's height.
+	local meters = TrackHeight(frame.health, healthHeight) + (frame.power and TrackHeight(frame.power, powerHeight) + 3 or 0)
+	local offset = max(0, floor((bodyHeight - meters) / 2))
 	frame.health.track:ClearAllPoints()
-	frame.health.track:SetSize(column, healthTrack)
-	frame.health.track:SetPoint('TOP'..near, lcd, 'TOP'..far, sign * 6, 0)
+	frame.health.track:SetSize(column, TrackHeight(frame.health, healthHeight))
+	frame.health.track:SetPoint('TOP'..near, lcd, 'TOP'..far, sign * 6, -offset)
 	if frame.power then
 		frame.power.track:ClearAllPoints()
-		frame.power.track:SetSize(column, TrackHeight(frame.power, max(cfg.powerHeight or 3, 4)))
+		frame.power.track:SetSize(column, TrackHeight(frame.power, powerHeight))
 		frame.power.track:SetPoint('TOPLEFT', frame.health.track, 'BOTTOMLEFT', 0, -3)
 	end
-	PlaceStatus(frame, 'BOTTOM'..near, frame.face, 'BOTTOM'..near, sign * pad, 5, frame.layout.mirror and 'LEFT' or 'RIGHT', statusRow)
+	if large then
+		PlaceStatus(frame, 'BOTTOM'..near, frame.face, 'BOTTOM'..near, sign * pad, 5, frame.layout.mirror and 'LEFT' or 'RIGHT', statusRow)
+	end
 end
 
--- Gauge: a round bezel on the near side whose disc fills with health, the way
--- the reference's knobs sit in their tick rings. It is a native vertical
--- StatusBar under a round mask that mirrors the health meter's own values,
--- so the client fills it, secret or not. Health digits sit in its centre.
+-- Gauge: a round instrument on the near side, built like the minimap's ring
+-- from the 512 px round art so it stays smooth at any size: a black outline, a
+-- charcoal bezel band and a lit inner edge around a dark recessed screen. Health
+-- rises inside it as a dim liquid with a lit surface line; it is a native
+-- vertical StatusBar under the round mask that copies the health meter's own
+-- values, so the client fills it, secret or not. A ring of hairline ticks is
+-- drawn in code in physical pixels (long ones at the quarters), and the
+-- health figure sits in the centre.
+local GAUGE_TICKS, GAUGE_RING = 24, 3
+
+local function Round(parent, layer, sublevel)
+	local texture = parent:CreateTexture(nil, layer or 'BACKGROUND', nil, sublevel or 0)
+	texture:SetTexture(Kit.media..'mask-round.tga')
+	return texture
+end
+
 function Gauge(frame)
 	local gauge = frame.gauge
 	if gauge then return gauge end
 	gauge = CreateFrame('Frame', nil, frame.face)
 	gauge:EnableMouse(false)
-	gauge.ticks = Kit:Texture(gauge, 'knob-ticks', 'BACKGROUND', 0)
-	gauge.ticks:SetPoint('CENTER')
-	gauge.well = Kit:Texture(gauge, 'mask-round', 'BACKGROUND', 1)
-	gauge.well:SetVertexColor(0, 0, 0, 1)
+	gauge.outline = Round(gauge, 'BACKGROUND', -6)
+	gauge.outline:SetVertexColor(0, 0, 0, 0.85)
+	gauge.band = Round(gauge, 'BACKGROUND', -5)
+	gauge.lit = Round(gauge, 'BACKGROUND', -4)
+	gauge.lit:SetVertexColor(1, 1, 1, 0.14)
+	gauge.well = Round(gauge, 'BACKGROUND', -3)
+	gauge.ticks = {}
+	for index = 1, GAUGE_TICKS do
+		local tick = gauge:CreateTexture(nil, 'BACKGROUND', nil, -7)
+		tick:SetColorTexture(1, 1, 1, 1)
+		gauge.ticks[index] = tick
+	end
 	gauge.bar = CreateFrame('StatusBar', nil, gauge)
+	gauge.bar:SetAllPoints(gauge)
 	gauge.bar:SetOrientation('VERTICAL')
 	gauge.bar:SetStatusBarTexture([[Interface\Buttons\WHITE8X8]])
 	gauge.bar:SetMinMaxValues(0, 1)
 	gauge.bar:SetValue(1)
+	gauge.bar:SetAlpha(0.45)
 	local mask = gauge.bar:CreateMaskTexture()
 	mask:SetTexture(Kit.media..'mask-round.tga', 'CLAMPTOBLACKADDITIVE', 'CLAMPTOBLACKADDITIVE')
-	mask:SetAllPoints(gauge.bar)
-	gauge.bar:GetStatusBarTexture():AddMaskTexture(mask)
+	mask:SetAllPoints(gauge)
+	local fill = gauge.bar:GetStatusBarTexture()
+	fill:AddMaskTexture(mask)
+	-- The liquid's surface: a lit hairline on the fill's top edge, inside the mask.
+	gauge.surface = gauge.bar:CreateTexture(nil, 'OVERLAY')
+	gauge.surface:SetColorTexture(1, 1, 1, 1)
+	gauge.surface:SetPoint('TOPLEFT', fill, 'TOPLEFT')
+	gauge.surface:SetPoint('TOPRIGHT', fill, 'TOPRIGHT')
+	gauge.surface:AddMaskTexture(mask)
 	gauge.front = CreateFrame('Frame', nil, gauge)
 	gauge.front:SetAllPoints()
 	gauge.front:SetFrameLevel(gauge.bar:GetFrameLevel() + 2)
@@ -2250,8 +2356,7 @@ function Gauge(frame)
 	gauge.shade:SetAllPoints(gauge)
 	gauge.shade:SetAlpha(0.5)
 	gauge.ring = Kit:Texture(gauge.front, 'bezel-ring', 'OVERLAY', 1)
-	gauge.ring:SetAllPoints(gauge)
-	gauge.ring:SetVertexColor(1, 1, 1, 0.14)
+	gauge.ring:SetVertexColor(1, 1, 1, 0.08)
 	-- Follow the health meter: every value goes straight from setter to setter.
 	local health, bar = frame.health, gauge.bar
 	hooksecurefunc(health, 'SetMinMaxValues', function(_, low, high) pcall(bar.SetMinMaxValues, bar, low, high) end)
@@ -2261,33 +2366,65 @@ function Gauge(frame)
 	return gauge
 end
 
+-- Sizes in physical pixels around a disc of `size` units.
+local function FitGauge(frame, gauge)
+	local Px = UI.Pixel.Px
+	local function Around(texture, n)
+		local inset = Px(gauge, n)
+		texture:ClearAllPoints()
+		texture:SetPoint('TOPLEFT', gauge, 'TOPLEFT', -inset, inset)
+		texture:SetPoint('BOTTOMRIGHT', gauge, 'BOTTOMRIGHT', inset, -inset)
+	end
+	Around(gauge.outline, GAUGE_RING + 1)
+	Around(gauge.band, GAUGE_RING)
+	Around(gauge.lit, 1)
+	Around(gauge.ring, GAUGE_RING)
+	gauge.well:ClearAllPoints()
+	gauge.well:SetAllPoints(gauge)
+	Kit:Tint(gauge.band, 'dark')
+	Kit:Tint(gauge.well, 'glass')
+	gauge.surface:SetHeight(Px(gauge, 1))
+	-- The tick ring, just outside the bezel.
+	local ink = Ink(frame)
+	local px = Px(gauge, 1)
+	local radius = gauge:GetWidth() / 2
+	for index, tick in ipairs(gauge.ticks) do
+		local major = (index - 1) % (GAUGE_TICKS / 4) == 0
+		local length = (major and 4 or 2) * px
+		local angle = pi / 2 - (index - 1) / GAUGE_TICKS * 2 * pi
+		local reach = radius + (GAUGE_RING + 3) * px + length / 2
+		local x = UI.Pixel.Snap(gauge, math.cos(angle) * reach)
+		local y = UI.Pixel.Snap(gauge, sin(angle) * reach)
+		tick:ClearAllPoints()
+		tick:SetSize(px, length)
+		tick:SetPoint('CENTER', gauge, 'CENTER', x, y)
+		if tick.SetRotation then tick:SetRotation(angle - pi / 2) end
+		Kit:Tint(tick, major and ink[1] or ink[2], major and 0.9 or 0.55)
+	end
+end
+
 local function LayoutGauge(frame, cfg)
 	local width, height = cfg.width, cfg.height
 	local pad = 6
 	local mirror = frame.layout.mirror
 	local near, far, sign = mirror and 'RIGHT' or 'LEFT', mirror and 'LEFT' or 'RIGHT', mirror and -1 or 1
 	local gauge = Gauge(frame)
-	local size = max(18, height - 2 * pad)
+	-- Room around the disc for the bezel and the tick ring.
+	local around = UI.Pixel.Px(frame.face, GAUGE_RING + 3 + 4) + 1
+	local size = UI.Pixel.Snap(frame.face, max(16, height - 2 * pad - 2 * around))
 	gauge:Show()
 	gauge:ClearAllPoints()
 	gauge:SetSize(size, size)
-	gauge:SetPoint(near, frame.face, near, sign * pad, 0)
-	gauge.ticks:SetSize(size * 1.28, size * 1.28)
-	Kit:Tint(gauge.ticks, Ink(frame)[2])
-	local inset = max(2, floor(size * 0.08))
-	gauge.bar:ClearAllPoints()
-	gauge.bar:SetPoint('TOPLEFT', inset, -inset)
-	gauge.bar:SetPoint('BOTTOMRIGHT', -inset, inset)
-	gauge.well:ClearAllPoints()
-	gauge.well:SetAllPoints(gauge.bar)
+	gauge:SetPoint(near, frame.face, near, sign * (pad + around), 0)
+	FitGauge(frame, gauge)
 	Put(frame.digits, gauge.front)
-	Kit:Font(frame.digits, max(7, min(floor(size * 0.3), cfg.digitsSize or 13)), 'OUTLINE', true)
-	Kit:Tint(frame.digits, 'white')
+	Kit:Font(frame.digits, max(7, min(floor(size * 0.32), cfg.digitsSize or 13)), 'OUTLINE', true)
+	Kit:Tint(frame.digits, 'darkInk')
 	frame.digits:ClearAllPoints()
 	frame.digits:SetPoint('CENTER', gauge, 'CENTER', 0, 0)
 	frame.digits:SetJustifyH('CENTER')
 	-- The rest beside it: header, then the meters.
-	local left = pad + size + 8
+	local left = pad + size + 2 * around + 6
 	local column = max(width - left - pad, 20)
 	PutLamp(frame, frame.face)
 	Put(frame.nameText, frame.face)
@@ -2513,6 +2650,7 @@ local function Layout(frame)
 		PlaceStatus(frame, mirror and 'BOTTOMLEFT' or 'BOTTOMRIGHT', frame.face, mirror and 'TOPLEFT' or 'TOPRIGHT',
 			mirror and 2 or -2, 3, mirror and 'RIGHT' or 'LEFT')
 	end
+	SyncGhost(frame, cfg)
 	LayoutLamps(frame, cfg)
 	LayoutAuras(frame)
 	LayoutPowerDigits(frame)
@@ -3144,7 +3282,16 @@ UI.Pixel.OnChange(function()
 	end
 end)
 
+-- 0.5.1: the combat cue took over marking combat, so the sweep is off by
+-- default, and switched off once in profiles saved before.
+local function MoveSweep()
+	if DB().sweepMoved then return end
+	DB().combatSweep = false
+	DB().sweepMoved = true
+end
+
 function module:Enable()
+	MoveSweep()
 	-- 0.5.0's gloss switch: off carries over as no motion.
 	if DB().powerGloss == false then DB().powerMotion = 'off' end
 	DB().powerGloss = nil
@@ -3211,6 +3358,7 @@ end
 
 local lastPartyAsRaid
 function module:Refresh()
+	MoveSweep()
 	for _, frame in ipairs(ordered) do
 		UI:Safe(Layout, frame)
 		if frame:IsShown() then UI:Safe(UpdateAll, frame) end
@@ -3360,6 +3508,8 @@ local function FrameCards(info)
 			{'segmented', 'Grow', P('auraGrow'), items = {{'right', 'Rightward'}, {'left', 'Leftward'}},
 				hidden = function() local position = Get('auraPosition') return position == 'right' or position == 'left' end},
 			{'switch', 'Time left', P('auraTime'), 'The client\'s countdown on each key.', disabled = Off},
+			{'slider', 'Time size', P('auraTimeSize'), 6, 14, 1, 'The countdown\'s size; it never grows past half the key.', format = Int,
+				disabled = function() return Off() or not Get('auraTime') end, since = '0.5.1'},
 			{'switch', 'Cooldown swipe', P('auraSwipe'), nil, disabled = Off},
 			{'slider', 'Stack count size', P('stackSize'), 6, 16, 1, nil, format = Int, disabled = Off},
 		}}
@@ -3413,7 +3563,7 @@ local cards = {
 		{'switch', 'Auras', 'unitframes.auras', 'Every frame\'s auras at once; each frame has its own below.'},
 		{'switch', 'Party frames', 'unitframes.party', 'Compact devices for party members.', reload = true},
 		{'switch', 'Target arrival', 'unitframes.arrive', 'A new target fades in, its bars glide up and the portrait settles.'},
-		{'switch', 'Combat sweep', 'unitframes.combatSweep', 'A light runs along each frame as combat starts and ends. Stands down while the combat cue\'s trace is on, which outlines every frame instead.'},
+		{'switch', 'Combat sweep', 'unitframes.combatSweep', 'A light along each frame as combat starts and ends; off while the combat cue is on.'},
 		{'switch', 'Aura timer lines', 'unitframes.auraLines', 'A thin line over each aura key runs down with its time left.', since = '0.5.0'},
 	}},
 	{title = 'Power', rows = {

@@ -24,7 +24,7 @@ local defaults = {
 		windows = 'display', nameplates = 'dots', objectives = 'device', buffs = 'keys', loot = 'device',
 		group = 'device', bags = 'device', infopanel = 'device', meters = 'device'},
 	unitframes = {positions = {}, scale = 1, barStyle = 'dots', healthColor = 'accent', portrait = 'model', party = true, castbar = true,
-		arrive = true, combatSweep = true,
+		arrive = true, combatSweep = false,
 		auras = true, digits = true},
 	-- layout 'console': our own keys in one device along the bottom, with the
 	-- player and target docked into it; 'free': each bar placed on its own.
