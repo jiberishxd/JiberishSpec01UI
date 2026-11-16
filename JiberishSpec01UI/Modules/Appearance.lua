@@ -45,6 +45,9 @@ UI:RegisterDefaults('colors', {
 UI:RegisterDefaults('fonts', {
 	unitframes = '__inherit', nameplates = '__inherit', chat = '__inherit', keys = '__inherit', numbers = '__inherit', windows = '__inherit',
 	unitframesScale = 1, nameplatesScale = 1, chatScale = 1, keysScale = 1, numbersScale = 1, windowsScale = 1,
+	-- Text the game draws in the world, read once as a character loads: names
+	-- over characters and floating combat text ('__keep' leaves the game's).
+	worldNames = '__keep', combatText = '__keep', combatTextScale = 1,
 })
 -- defaults:end
 
@@ -235,6 +238,64 @@ for _, area in ipairs(AREAS) do
 	areaRows[#areaRows + 1] = {'slider', 'Size', 'fonts.'..key..'Scale', 0.7, 1.5, 0.05, nil, format = Percent, since = '0.5.1'}
 end
 
+-- World text -----------------------------------------------------------------------
+-- The game reads these fonts as a character loads, so they are set as early as
+-- the saved settings exist, and a change shows after a relog.
+local function WorldFontPath(choice)
+	if choice == '__default' then return Kit.fonts.bold end
+	if choice == '__numbers' then return [[Fonts\ARIALN.TTF]] end
+	if choice and LibStub then
+		local LSM = LibStub('LibSharedMedia-3.0', true)
+		local path = LSM and LSM:Fetch('font', choice, true)
+		if path then return path end
+	end
+	return nil
+end
+
+local function ApplyWorldFonts()
+	local fonts = UI.db and UI.db.fonts
+	if type(fonts) ~= 'table' then return end
+	local names = fonts.worldNames ~= '__keep' and WorldFontPath(fonts.worldNames)
+	if names then UNIT_NAME_FONT = names end
+	local combat = fonts.combatText ~= '__keep' and WorldFontPath(fonts.combatText)
+	if combat then DAMAGE_TEXT_FONT = combat end
+end
+
+local worldFonts = CreateFrame('Frame')
+worldFonts:RegisterEvent('ADDON_LOADED')
+worldFonts:RegisterEvent('PLAYER_LOGIN')
+worldFonts:SetScript('OnEvent', function(self, event, name)
+	if event == 'ADDON_LOADED' and name ~= UI.name then return end
+	UI:Safe(ApplyWorldFonts)
+	if event == 'PLAYER_LOGIN' then self:UnregisterAllEvents() end
+end)
+
+local function WorldItems()
+	local items = {{'__keep', 'Game default'}}
+	for _, item in ipairs(Kit:FontChoices(false)) do
+		if item[1] ~= '__game' then items[#items + 1] = item end
+	end
+	return items
+end
+
+local function Relog() UI:Print('World text fonts change after a relog (log out to the character list and back in).') end
+
+local worldRows = {
+	{'dropdown', 'Names in the world', 'fonts.worldNames', items = WorldItems, since = '0.5.2',
+		note = 'Names over characters and creatures. The game reads it as a character loads: relog to see a change.',
+		set = function(value) UI.db.fonts.worldNames = value; Relog() end},
+	{'dropdown', 'Combat text', 'fonts.combatText', items = WorldItems, since = '0.5.2',
+		note = 'Floating damage and healing numbers. Read as a character loads: relog to see a change.',
+		set = function(value) UI.db.fonts.combatText = value; Relog() end},
+	{'slider', 'Combat text size', 'fonts.combatTextScale', 0.5, 2.5, 0.1, nil, format = Percent, since = '0.5.2',
+		note = 'The game\'s world text scale. Applies at once.',
+		set = function(value)
+			UI.db.fonts.combatTextScale = value
+			local set = (C_CVar and C_CVar.SetCVar) or SetCVar
+			if set then pcall(set, 'WorldTextScale', value) end
+		end},
+}
+
 local function ResetFonts()
 	local fonts = UI.db.fonts
 	for _, area in ipairs(AREAS) do
@@ -251,6 +312,7 @@ end
 UI:RegisterPage('fonts', {title = 'Fonts', order = 2.1, since = '0.5.1', cards = {
 	{title = 'Interface', rows = fontRows},
 	{title = 'By area', rows = areaRows},
+	{title = 'World text', rows = worldRows},
 	{title = 'Fonts', rows = {
 		{'button', 'Fonts', 'Reset', ResetFonts, 'Every area back to IBM Plex Mono at its own size.'},
 		{'note', 'Fonts from other addons (LibSharedMedia) appear here once those addons are loaded. Text the game itself draws, such as chat messages, follows the Chat page.'},
