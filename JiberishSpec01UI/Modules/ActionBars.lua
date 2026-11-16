@@ -98,6 +98,9 @@ UI:RegisterDefaults('actionbars', {
 	-- The menu and bag keys: SPEC-01 glyphs or the game's art; bag slots show
 	-- the bag's own icon (a glyph only when empty) or always the glyph.
 	menuIcons = 'glyphs', bagIcons = 'glyphs',
+	-- The console's look: SPEC-01 hardware (keys in slots, printed banks, screws,
+	-- page LCD) or the earlier classic look.
+	look = 'hardware',
 	bar1 = BarDefaults(5), bar2 = BarDefaults(5), bar3 = BarDefaults(5), bar4 = BarDefaults(5), bar5 = BarDefaults(5),
 	barPet = BarDefaults(4), barStance = BarDefaults(4),
 })
@@ -138,17 +141,267 @@ local function Sound(down)
 	if db.enable and db.actionbars then Kit:Play(down and 'down' or 'up', true) end
 end
 
+-- The Hardware console look --------------------------------------------------------------
+-- The default look builds the console the way SPEC-01 builds its devices
+-- (devices.css, hardware.css, hardware-field.css in the reference):
+--   * keys sit in holes in the housing: a 2 px dark slot round each cap, with a
+--     lit line under it on light housings;
+--   * the icon sits in a window in the cap, below a printed band that carries
+--     the key's legend in small caps and its state lamp;
+--   * the lamp reads the key's state: lit while active, green when equipped,
+--     red out of range, blue short of power, dark when unusable;
+--   * banks of keys carry a printed legend with a hairline rule after it;
+--   * modules have a screw in each corner and a model plate in the header;
+--   * the console carries a page LCD (with unlit ghost digits) and page lamps,
+--     and the meter along its base has a printed legend and an LCD percent.
+-- 'Classic' keeps the earlier look. Everything here is in one table, so the
+-- file's main chunk stays well under Lua's limit of 200 locals.
+local HW = {}
+function HW.On() return DB().look ~= 'classic' end
+
+-- The slot color (--slot in the reference) and the lit line under it.
+HW.SLOT = {0.149, 0.149, 0.141}
+
+-- Insets of the icon window from the cap's edges: left, top, right, bottom.
+-- Hardware leaves a printed band across the top for the legend and the lamp;
+-- Classic insets all four sides by `even` (the cap's face inset).
+function HW.Window(size, even)
+	if not HW.On() then return even, even, even, even end
+	local inset = tonumber(DB().iconInset)
+	local side = (inset and inset > 0) and Kit:Clamp(floor(inset), 2, floor(size / 3)) or max(4, floor(size * 0.15 + 0.5))
+	local band = max(8, floor(size * 0.27 + 0.5))
+	return side, band, side, max(3, floor(size * 0.12 + 0.5))
+end
+
+-- The icon's texture coordinates, cropped so a window that is not square
+-- shows the middle of the icon without squashing it.
+function HW.Crop(icon, width, height)
+	local low, high = 0.07, 0.93
+	if not (width and height) or width <= 0 or height <= 0 then return icon:SetTexCoord(low, high, low, high) end
+	local span = high - low
+	if width > height then
+		local cut = span * (1 - height / width) / 2
+		icon:SetTexCoord(low, high, low + cut, high - cut)
+	else
+		local cut = span * (1 - width / height) / 2
+		icon:SetTexCoord(low + cut, high - cut, low, high)
+	end
+end
+
+-- The slot round a key: a dark ring 2 px outside the cap, the cap's own shadow
+-- inside it. Drawn on `owner` (the key's back frame), around `around`; round
+-- for a round key.
+function HW.Slot(owner, around, round)
+	local file = round and 'circle' or 'round-6'
+	local slot = Kit:Texture(owner, file, 'BACKGROUND', -7)
+	slot:SetVertexColor(HW.SLOT[1], HW.SLOT[2], HW.SLOT[3], 1)
+	Kit:Place(slot, around, 2, 2, 2, 3)
+	local shine = Kit:Texture(owner, file, 'BACKGROUND', -8)
+	shine:SetVertexColor(1, 1, 1, 0.7)
+	Kit:Place(shine, around, 2, 2, 2, 4)
+	slot.shine = shine
+	return slot
+end
+
+function HW.ShowSlot(slot, shown)
+	if not slot then return end
+	slot:SetShown(shown)
+	-- The lit line under the slot only reads on a light housing.
+	slot.shine:SetShown(shown and Surface() ~= 'dark')
+end
+
+-- The key's lamp from its state. Hardware shows the lamp always (unlit when
+-- there is nothing to say); Classic only while active or equipped.
+function HW.Lamp(key)
+	local lamp = key.lamp
+	if not lamp then return end
+	local show = DB().keyLed ~= false
+	if not HW.On() then
+		if key.on then Kit:SetLed(lamp, true)
+		elseif key.equipped then Kit:SetLed(lamp, true, 'green')
+		else Kit:SetLed(lamp, false) end
+		Kit:ShowLed(lamp, (key.on or key.equipped) and show and true or false)
+		return
+	end
+	if not key.has then
+		Kit:SetLed(lamp, false)
+	elseif key.on then Kit:SetLed(lamp, true)
+	elseif key.outOfRange then Kit:SetLed(lamp, true, 'red')
+	elseif key.usable == false and key.noMana then Kit:SetLed(lamp, true, 'blue')
+	elseif key.equipped then Kit:SetLed(lamp, true, 'green')
+	else Kit:SetLed(lamp, false) end
+	Kit:ShowLed(lamp, show and key.has and true or false)
+end
+
+-- A printed legend with a hairline rule running from it to `width`, as the
+-- reference prints the name over a group of controls.
+function HW.Bank(parent, text)
+	local bank = {}
+	local dark = Surface() == 'dark'
+	bank.label = Kit:Label(parent, text, dark and 'darkDim' or 'dim', 7, true)
+	bank.rule = parent:CreateTexture(nil, 'ARTWORK')
+	bank.rule:SetColorTexture(dark and 1 or 0, dark and 1 or 0, dark and 1 or 0, dark and 0.08 or 0.09)
+	bank.shine = parent:CreateTexture(nil, 'ARTWORK')
+	bank.shine:SetColorTexture(dark and 0 or 1, dark and 0 or 1, dark and 0 or 1, dark and 0.35 or 0.9)
+	return bank
+end
+
+-- Place a bank legend with its top-left at x, y in `parent`, its rule running `width` across.
+function HW.PlaceBank(bank, parent, x, y, width, shown)
+	for _, part in pairs(bank) do part:SetShown(shown and true or false) end
+	if not shown then return end
+	local px = UI.Pixel and UI.Pixel.Px(parent, 1) or 1
+	bank.label:ClearAllPoints()
+	bank.label:SetPoint('TOPLEFT', parent, 'TOPLEFT', x, y)
+	local ruleWidth = max(width - bank.label:GetStringWidth() - 6, 0)
+	bank.rule:ClearAllPoints()
+	bank.rule:SetSize(ruleWidth, px)
+	bank.rule:SetPoint('LEFT', bank.label, 'RIGHT', 6, 0)
+	bank.shine:ClearAllPoints()
+	bank.shine:SetSize(ruleWidth, px)
+	bank.shine:SetPoint('TOPLEFT', bank.rule, 'BOTTOMLEFT', 0, 0)
+end
+HW.BANK_H = 11 -- room a bank legend takes above its keys
+
+-- A small device's printed name, top left, with its rule (pet and stance strips).
+function HW.MiniLegend(device, text)
+	if not HW.On() then return end
+	device.bank = HW.Bank(device, text)
+	local function Place() HW.PlaceBank(device.bank, device, PAD - 2, -5, device:GetWidth() - 2 * PAD + 4, true) end
+	device:HookScript('OnSizeChanged', function() UI:Safe(Place) end)
+	Place()
+end
+
+-- A screw in each corner of a module, as hardware.css draws them, and a
+-- larger model plate in the header.
+function HW.Decorate(device, radius)
+	if not HW.On() then return end
+	local dark = Surface() == 'dark'
+	local inset = max(6, floor((radius or 12) * 0.5 + 0.5))
+	device.screws = device.screws or {}
+	for index, point in ipairs({'TOPLEFT', 'TOPRIGHT', 'BOTTOMLEFT', 'BOTTOMRIGHT'}) do
+		local screw = device.screws[index]
+		if not screw then
+			screw = Kit:Texture(device, 'circle', 'BORDER', 1)
+			screw.slot = device:CreateTexture(nil, 'BORDER', nil, 2)
+			screw.slot:SetColorTexture(0, 0, 0, 1)
+			screw.slot:SetPoint('CENTER', screw, 'CENTER')
+			screw.slot:SetRotation(math.rad(index % 2 == 0 and 45 or -45))
+			device.screws[index] = screw
+		end
+		screw:SetSize(5, 5)
+		screw:ClearAllPoints()
+		local sx = point:find('LEFT') and inset or -inset
+		local sy = point:find('TOP') and -inset or inset
+		screw:SetPoint('CENTER', device, point, sx, sy)
+		if dark then screw:SetVertexColor(0.24, 0.24, 0.23, 1) else screw:SetVertexColor(0.725, 0.725, 0.70, 1) end
+		screw.slot:SetSize(4, 1)
+		screw.slot:SetAlpha(dark and 0.6 or 0.28)
+	end
+	HW.ShowDecor(device, DB().housing ~= false)
+	-- The plate: the lamp moves clear of the corner screw and the model prints larger.
+	if device.lamp and device.model then
+		device.lamp:ClearAllPoints()
+		device.lamp:SetPoint('TOPLEFT', inset + 9, -9)
+		Kit:Font(device.model, 11, nil, false)
+	end
+end
+
+function HW.ShowDecor(device, shown)
+	for _, screw in ipairs(device and device.screws or {}) do
+		screw:SetShown(shown)
+		screw.slot:SetShown(shown)
+	end
+end
+
+-- The page LCD (two digits over unlit '88') and six page lamps, in the
+-- console's header. Paging stays with the secure state driver; this only shows it.
+function HW.BuildPager(console)
+	local pager = CreateFrame('Frame', nil, console)
+	pager:SetSize(90, 14)
+	pager.lcd = Kit:LCDPanel(pager, {radius = 3})
+	pager.lcd:SetSize(26, 14)
+	pager.lcd:SetPoint('RIGHT')
+	pager.ghost = Kit:Text(pager.lcd, '88', 'tiny', 'lcdGhost', true)
+	pager.ghost:SetPoint('RIGHT', -5, 0)
+	pager.digits = Kit:Text(pager.lcd, '01', 'tiny', 'lcdInk', true)
+	pager.digits:SetPoint('RIGHT', -5, 0)
+	pager.lamps = {}
+	for index = 6, 1, -1 do
+		local lamp = Kit:Led(pager, 4, false)
+		lamp:SetPoint('RIGHT', pager.lcd, 'LEFT', -6 - (6 - index) * 7, 0)
+		pager.lamps[index] = lamp
+	end
+	local dark = Surface() == 'dark'
+	pager.label = Kit:Label(pager, 'Page', dark and 'darkDim' or 'dim', 7, true)
+	pager.label:SetPoint('RIGHT', pager.lamps[1], 'LEFT', -5, 0)
+	pager:SetWidth(26 + 6 + 6 * 7 + 5 + pager.label:GetStringWidth())
+	return pager
+end
+
+-- Show a page: 1-6 light their lamp; bonus, vehicle and override pages show
+-- their number on the LCD alone.
+function HW.ShowPage(pager, page)
+	if not pager then return end
+	page = tonumber(page) or 1
+	pager.digits:SetText(format('%02d', page))
+	for index, lamp in ipairs(pager.lamps) do
+		Kit:SetLed(lamp, index == page, page > 6 and 'amber' or nil)
+	end
+	if page > 6 then Kit:SetLed(pager.lamps[1], true, 'amber') end
+end
+
+-- The meter's legend and LCD percent, beside the dots.
+function HW.MeterParts(parent, track)
+	local dark = Surface() == 'dark'
+	track.legend = Kit:Label(parent, 'XP', dark and 'darkDim' or 'dim', 7, true)
+	track.lcd = Kit:LCDPanel(parent, {radius = 3})
+	track.lcd:SetSize(40, 12)
+	track.percent = Kit:Text(track.lcd, '', 'tiny', 'lcdInk', true)
+	track.percent:SetPoint('RIGHT', -4, 0)
+end
+
+-- Place the meter along a device's base: from `left` to `right` (insets), the
+-- legend and LCD outside the dots in the Hardware look.
+function HW.PlaceMeter(track, parent, left, right, bottom, height)
+	local hardware = HW.On() and track.legend ~= nil
+	local legendWidth = hardware and 24 or 0
+	local lcdWidth = hardware and 46 or 0
+	track:ClearAllPoints()
+	track:SetPoint('BOTTOMLEFT', parent, 'BOTTOMLEFT', left + legendWidth, bottom)
+	track:SetPoint('BOTTOMRIGHT', parent, 'BOTTOMRIGHT', -right - lcdWidth, bottom)
+	track:SetHeight(height)
+	if track.legend then
+		local shown = hardware and track:IsShown()
+		track.legend:SetShown(shown)
+		track.lcd:SetShown(shown)
+		track.legend:ClearAllPoints()
+		track.legend:SetPoint('LEFT', parent, 'BOTTOMLEFT', left, bottom + height / 2)
+		track.lcd:ClearAllPoints()
+		track.lcd:SetPoint('RIGHT', parent, 'BOTTOMRIGHT', -right, bottom + height / 2)
+	end
+end
+
+function HW.MeterText(track, legend, percent)
+	if not track.legend then return end
+	track.legend:SetText(legend:upper())
+	track.percent:SetText(percent or '')
+end
+
 -- Key legends -----------------------------------------------------------------------
 -- A bound key printed short, the way a keyboard's legends are.
+local Legend
+do
 local SHORT = {{'ALT%-', 'A'}, {'CTRL%-', 'C'}, {'SHIFT%-', 'S'}, {'META%-', 'M'}, {'MOUSEWHEELUP', 'WU'}, {'MOUSEWHEELDOWN', 'WD'},
 	{'MIDDLEMOUSE', 'M3'}, {'BUTTON', 'M'}, {'NUMPADPLUS', 'N+'}, {'NUMPADMINUS', 'N-'}, {'NUMPADMULTIPLY', 'N*'},
 	{'NUMPADDIVIDE', 'N/'}, {'NUMPADDECIMAL', 'N.'}, {'NUMPAD', 'N'}, {'PAGEUP', 'PU'}, {'PAGEDOWN', 'PD'}, {'SPACE', 'SP'},
 	{'INSERT', 'IN'}, {'DELETE', 'DE'}, {'HOME', 'HO'}, {'CAPSLOCK', 'CL'}, {'BACKSPACE', 'BS'}, {'ENTER', 'EN'}, {'TAB', 'TB'}}
-local function Legend(binding)
+function Legend(binding)
 	if not binding or binding == '' then return '' end
 	if DB().abbreviate == false then return binding end
 	for _, pair in ipairs(SHORT) do binding = binding:gsub(pair[1], pair[2]) end
 	return binding
+end
 end
 
 -- Our action keys ---------------------------------------------------------------------
@@ -174,6 +427,7 @@ local function Tint(key)
 	elseif key.usable == false and key.noMana then icon:SetVertexColor(ColorOf(db.manaColor, 0.45, 0.58, 1)); icon:SetDesaturated(false)
 	elseif key.usable == false then icon:SetVertexColor(ColorOf(db.unusableColor, 0.5, 0.5, 0.48)); icon:SetDesaturated(true)
 	else icon:SetVertexColor(1, 1, 1); icon:SetDesaturated(false) end
+	HW.Lamp(key)
 end
 
 local function UpdateUsable(key, usable, noMana)
@@ -196,12 +450,9 @@ end
 
 local function UpdateState(key)
 	local slot = key.slot
-	local on = slot and key.has and (Flag(IsCurrentAction(slot)) or Flag(IsAutoRepeatAction(slot))) or false
-	local equipped = slot and key.has and Flag(IsEquippedAction(slot)) or false
-	if on then Kit:SetLed(key.lamp, true)
-	elseif equipped then Kit:SetLed(key.lamp, true, 'green')
-	else Kit:SetLed(key.lamp, false) end
-	Kit:ShowLed(key.lamp, (on or equipped) and DB().keyLed ~= false)
+	key.on = slot and key.has and (Flag(IsCurrentAction(slot)) or Flag(IsAutoRepeatAction(slot))) or false
+	key.equipped = slot and key.has and Flag(IsEquippedAction(slot)) or false
+	HW.Lamp(key)
 end
 
 -- A proc: 'pulse' is a lit ring and a slow pulse of the key color, 'ring' the
@@ -307,6 +558,13 @@ local function UpdateLegend(key)
 	local text = db.hotkeys and key.binding or ''
 	key.hotkey:SetText(text)
 	local light = LightCap()
+	if HW.On() then
+		-- Printed on the cap's band, above the icon window: ink on the cap.
+		key.hotkeyChip:Hide()
+		Kit:Tint(key.hotkey, light and (key.has and 'ink' or 'dim') or (key.has and 'darkInk' or 'darkDim'))
+		key.hotkey:SetShadowOffset(0, 0)
+		return
+	end
 	local chip = key.has and db.legendChip ~= false and text ~= ''
 	key.hotkeyChip:SetShown(chip)
 	if chip then
@@ -366,7 +624,9 @@ local function UpdateKey(key)
 		key.macro:SetText('')
 	end
 	-- An empty key is a blank keycap: fainter, no icon window, its legend only.
-	key.skin:SetAlpha(key.has and 1 or Kit:Clamp(tonumber(DB().emptyAlpha) or 0.5, 0.15, 1))
+	-- Hardware: a blank cap in its slot, as solid as any other.
+	local empty = HW.On() and 1 or Kit:Clamp(tonumber(DB().emptyAlpha) or 0.5, 0.15, 1)
+	key.skin:SetAlpha(key.has and 1 or empty)
 	key.window:SetShown(key.has and true or false)
 	UpdateLegend(key)
 	UpdateGrid(key)
@@ -443,11 +703,14 @@ end
 
 
 -- Where a legend sits on the key, as an offset direction from that corner.
+local Corner
+do
 local CORNERS = {TOPLEFT = {1, -1}, TOP = {0, -1}, TOPRIGHT = {-1, -1}, BOTTOMLEFT = {1, 1}, BOTTOM = {0, 1}, BOTTOMRIGHT = {-1, 1}}
-local function Corner(text, point, inset)
+function Corner(text, point, inset)
 	local sign = CORNERS[point] or CORNERS.TOPLEFT
 	text:ClearAllPoints()
 	text:SetPoint(CORNERS[point] and point or 'TOPLEFT', sign[1] * (inset + 1), sign[2] * (inset + 1))
+end
 end
 
 local function Sized(value, auto)
@@ -459,14 +722,39 @@ end
 local function ApplyLook(key)
 	local db, size = DB(), key.size
 	local inset = FaceInset(size)
-	Kit:Font(key.hotkey, Sized(db.hotkeySize, max(7, floor(size * 0.22))), '', true)
-	Corner(key.hotkey, db.hotkeyPoint, inset + 1)
-	Kit:Font(key.count, Sized(db.countSize, max(7, floor(size * 0.24))), '', true)
-	Corner(key.count, db.countPoint or 'BOTTOMRIGHT', inset + 1)
-	Kit:Font(key.macro, Sized(db.macroSize, 7), '', false)
-	key.macro:ClearAllPoints()
-	key.macro:SetPoint('BOTTOMLEFT', inset, inset)
-	key.macro:SetPoint('BOTTOMRIGHT', -inset, inset)
+	if HW.On() then
+		-- The legend is printed in the cap's band; the lamp sits at its other end.
+		local side, band = HW.Window(size, inset)
+		local point = db.hotkeyPoint or 'TOPLEFT'
+		local align = point:find('RIGHT') and 'RIGHT' or ((point == 'TOP' or point == 'BOTTOM') and 'CENTER' or 'LEFT')
+		Kit:Font(key.hotkey, Sized(db.hotkeySize, max(6, floor(band * 0.68))), '', true)
+		key.hotkey:ClearAllPoints()
+		local y = -band / 2
+		if align == 'RIGHT' then key.hotkey:SetPoint('RIGHT', key.face, 'TOPRIGHT', -side, y)
+		elseif align == 'CENTER' then key.hotkey:SetPoint('CENTER', key.face, 'TOP', 0, y)
+		else key.hotkey:SetPoint('LEFT', key.face, 'TOPLEFT', side, y) end
+		key.lamp:ClearAllPoints()
+		if align == 'RIGHT' then key.lamp:SetPoint('CENTER', key.face, 'TOPLEFT', side + 2, y)
+		else key.lamp:SetPoint('CENTER', key.face, 'TOPRIGHT', -side - 2, y) end
+		-- Counts on their LCD chip over the window's corner; macro names along its foot.
+		Kit:Font(key.count, Sized(db.countSize, max(7, floor(size * 0.22))), '', true)
+		local countPoint = db.countPoint or 'BOTTOMRIGHT'
+		key.count:ClearAllPoints()
+		key.count:SetPoint(countPoint, key.icon, countPoint, countPoint:find('LEFT') and 2 or (countPoint:find('RIGHT') and -2 or 0), 2)
+		Kit:Font(key.macro, Sized(db.macroSize, 7), '', false)
+		key.macro:ClearAllPoints()
+		key.macro:SetPoint('BOTTOMLEFT', key.icon, 'BOTTOMLEFT', 1, 1)
+		key.macro:SetPoint('BOTTOMRIGHT', key.icon, 'BOTTOMRIGHT', -1, 1)
+	else
+		Kit:Font(key.hotkey, Sized(db.hotkeySize, max(7, floor(size * 0.22))), '', true)
+		Corner(key.hotkey, db.hotkeyPoint, inset + 1)
+		Kit:Font(key.count, Sized(db.countSize, max(7, floor(size * 0.24))), '', true)
+		Corner(key.count, db.countPoint or 'BOTTOMRIGHT', inset + 1)
+		Kit:Font(key.macro, Sized(db.macroSize, 7), '', false)
+		key.macro:ClearAllPoints()
+		key.macro:SetPoint('BOTTOMLEFT', inset, inset)
+		key.macro:SetPoint('BOTTOMRIGHT', -inset, inset)
+	end
 	local cooldown = key.cooldown
 	if cooldown.SetHideCountdownNumbers then cooldown:SetHideCountdownNumbers(db.cdNumbers == false) end
 	-- Short cooldowns (the global cooldown) show no numbers.
@@ -479,22 +767,25 @@ local function ApplyLook(key)
 	end
 end
 
--- A key at a new size: its cap, legend inset, glow and lamp. Out of combat only.
+-- A key at a new size: its cap, icon window, glow and lamp. Out of combat only.
 local function SizeKey(key, size)
 	key.size = size
 	key.button:SetSize(size, size)
 	key.skin.kitMaxCorner = max(6, floor(size * 0.27))
 	Kit:FitSprite(key.skin, size, size)
 	local inset = FaceInset(size)
+	local left, top, right, bottom = HW.Window(size, inset)
 	key.icon:ClearAllPoints()
-	key.icon:SetPoint('TOPLEFT', inset, -inset)
-	key.icon:SetPoint('BOTTOMRIGHT', -inset, inset)
+	key.icon:SetPoint('TOPLEFT', left, -top)
+	key.icon:SetPoint('BOTTOMRIGHT', -right, bottom)
+	HW.Crop(key.icon, size - left - right, size - top - bottom)
 	key.glow:ClearAllPoints()
 	key.glow:SetPoint('TOPLEFT', -size * 0.28, size * 0.28)
 	key.glow:SetPoint('BOTTOMRIGHT', size * 0.28, -size * 0.28)
 	Kit:Place(key.window, key.icon, 0, 0, 0, 0)
 	key.lamp:ClearAllPoints()
 	key.lamp:SetPoint('TOPRIGHT', -max(2, floor(inset / 2)), -max(2, floor(inset / 2)))
+	HW.ShowSlot(key.slotRing, HW.On())
 	ApplyLook(key)
 end
 
@@ -538,6 +829,8 @@ local function CreateKey(bar, index, header, size)
 	key.skin = Kit:Skin(key, Sprites()[1], 'BACKGROUND', 0)
 	key.skin.kitMaxCorner = max(6, floor(size * 0.27))
 	Kit:FitSprite(key.skin, size, size)
+	-- The hole in the housing the cap sits in (Hardware look).
+	key.slotRing = HW.Slot(key, key)
 	local face = CreateFrame('Frame', nil, key)
 	face:SetPoint('TOPLEFT')
 	face:SetPoint('BOTTOMRIGHT')
@@ -571,6 +864,13 @@ local function CreateKey(bar, index, header, size)
 		return cooldown
 	end
 	key.cooldown = Cooldown({0, 0, 0, 0.72}, true)
+	if HW.On() then
+		-- The reference's sweep: a lighter shade with a lit edge riding it.
+		key.cooldown:SetSwipeColor(0, 0, 0, 0.62)
+		key.cooldown:SetDrawEdge(true)
+		local r, g, b = Kit:RGB('lamp')
+		if key.cooldown.SetEdgeTexture then pcall(key.cooldown.SetEdgeTexture, key.cooldown, [[Interface\Cooldown\edge]], r, g, b, 1) end
+	end
 	-- Our own cooldown frame, so this field and hook touch nothing of Blizzard's.
 	key.cooldown.kitKey = key
 	key.cooldown:HookScript('OnCooldownDone', function() if Kit.MotionNotify then Kit:MotionNotify('cooldown-done', key) end end)
@@ -582,7 +882,8 @@ local function CreateKey(bar, index, header, size)
 	local top = CreateFrame('Frame', nil, face)
 	top:SetAllPoints()
 	top:SetFrameLevel(face:GetFrameLevel() + 4)
-	key.hotkey = Kit:Text(top, '', max(7, floor(size * 0.24)), 'white', true, true)
+	-- Hardware prints the legend on the cap, with no shadow; Classic over the icon.
+	key.hotkey = Kit:Text(top, '', max(7, floor(size * 0.24)), 'white', true, not HW.On())
 	key.hotkey:SetPoint('TOPLEFT', inset + 1, -inset - 1)
 	key.hotkeyChip = Kit:Texture(top, 'round-3', 'ARTWORK', 0)
 	Kit:Place(key.hotkeyChip, key.hotkey, 2, 1, 2, 1)
@@ -740,7 +1041,7 @@ local dressed = {}
 local function DressedPress(key, down)
 	if not key or key.down == down then return end
 	key.down = down
-	Kit:SetSprite(key.skin, Sprites()[down and 2 or 1])
+	Kit:SetSprite(key.skin, (key.sprites or Sprites())[down and 2 or 1])
 	Sound(down)
 end
 
@@ -782,9 +1083,12 @@ local function WatchPress(button)
 	end)
 end
 
-local function Dress(button, size)
+-- round: a big round key (the extra and zone abilities, Hardware look).
+local function Dress(button, size, round)
 	if dressed[button] then return dressed[button] end
 	local name = button:GetName() or ''
+	local hardware = HW.On()
+	round = round and hardware
 	button:SetSize(size, size)
 	for _, part in ipairs({'SlotArt', 'SlotBackground', 'RightDivider', 'BottomDivider', 'FlyoutBorderShadow', 'Border', 'NormalTexture2'}) do
 		Fade(button[part])
@@ -794,15 +1098,18 @@ local function Dress(button, size)
 	if button.GetPushedTexture then Fade(button:GetPushedTexture()) end
 	if button.GetCheckedTexture then Fade(button:GetCheckedTexture()) end
 	local inset = FaceInset(size)
+	local left, top, right, bottom = HW.Window(size, inset)
+	if round then left, top, right, bottom = inset + 2, inset + 2, inset + 2, inset + 2 end
 	local icon = button.icon or button.Icon or _G[name..'Icon']
+	local maskFile = round and 'circle' or 'mask-icon'
 	if icon then
 		icon:ClearAllPoints()
-		icon:SetPoint('TOPLEFT', inset, -inset)
-		icon:SetPoint('BOTTOMRIGHT', -inset, inset)
-		icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+		icon:SetPoint('TOPLEFT', left, -top)
+		icon:SetPoint('BOTTOMRIGHT', -right, bottom)
+		HW.Crop(icon, size - left - right, size - top - bottom)
 		local mask = button.IconMask
 		if mask and mask.SetTexture then
-			mask:SetTexture(Kit.media..'mask-icon.tga', 'CLAMPTOBLACKADDITIVE', 'CLAMPTOBLACKADDITIVE')
+			mask:SetTexture(Kit.media..maskFile..'.tga', 'CLAMPTOBLACKADDITIVE', 'CLAMPTOBLACKADDITIVE')
 			mask:ClearAllPoints()
 			mask:SetAllPoints(icon)
 		end
@@ -810,16 +1117,25 @@ local function Dress(button, size)
 		if cooldown and not Forbidden(cooldown) then
 			cooldown:ClearAllPoints()
 			cooldown:SetAllPoints(icon)
-			if cooldown.SetSwipeTexture then cooldown:SetSwipeTexture(Kit.media..'mask-icon.tga', 0, 0, 0, 0.72) end
+			if cooldown.SetSwipeTexture then cooldown:SetSwipeTexture(Kit.media..maskFile..'.tga', 0, 0, 0, 0.72) end
 		end
 		local highlight = button.GetHighlightTexture and button:GetHighlightTexture()
 		if highlight then highlight:ClearAllPoints(); highlight:SetAllPoints(icon); highlight:SetAlpha(0.2) end
 	end
 	local hotkey = button.HotKey or _G[name..'HotKey']
 	if hotkey then
-		Kit:Font(hotkey, max(7, floor(size * 0.26)), 'OUTLINE', true)
 		hotkey:ClearAllPoints()
-		hotkey:SetPoint('TOPLEFT', inset, -inset)
+		if hardware and not round then
+			-- Printed on the cap's band, in ink, like the action keys.
+			Kit:Font(hotkey, max(6, floor(top * 0.68)), '', true)
+			hotkey:SetPoint('LEFT', button, 'TOPLEFT', left, -top / 2)
+			hotkey:SetShadowOffset(0, 0)
+			local r, g, b = Kit:RGB(LightCap() and 'ink' or 'darkInk')
+			hotkey:SetTextColor(r, g, b)
+		else
+			Kit:Font(hotkey, max(7, floor(size * 0.26)), 'OUTLINE', true)
+			hotkey:SetPoint('TOPLEFT', inset, -inset)
+		end
 	end
 	local count = button.Count or _G[name..'Count']
 	if count then Kit:Font(count, max(8, floor(size * 0.3)), 'OUTLINE', true) end
@@ -828,20 +1144,32 @@ local function Dress(button, size)
 	key:SetAllPoints()
 	key:SetFrameLevel(max(button:GetFrameLevel() - 1, 0))
 	key:EnableMouse(false)
-	key.skin = Kit:Skin(key, Sprites()[1], 'BACKGROUND', 0)
+	key.sprites = round and {'key-round', 'key-round-down'} or nil
+	key.skin = Kit:Skin(key, (key.sprites or Sprites())[1], 'BACKGROUND', 0)
 	key.skin.kitMaxCorner = max(5, floor(size * 0.27))
 	Kit:FitSprite(key.skin, size, size)
+	if hardware then
+		key.slotRing = HW.Slot(key, key, round)
+		HW.ShowSlot(key.slotRing, true)
+	end
 	local lid = CreateFrame('Frame', nil, button)
 	lid:SetAllPoints()
 	lid:SetFrameLevel(button:GetFrameLevel() + 3)
 	lid:EnableMouse(false)
 	if icon then
-		key.window = Kit:Texture(lid, 'inset-6', 'ARTWORK', 0)
-		Kit:Place(key.window, icon, 0, 0, 0, 0)
-		key.window:SetVertexColor(0, 0, 0, 0.6)
+		if round then
+			key.window = Kit:Texture(lid, 'circle-ring', 'ARTWORK', 0)
+			Kit:Place(key.window, icon, 1, 1, 1, 1)
+			key.window:SetVertexColor(0, 0, 0, 0.45)
+		else
+			key.window = Kit:Texture(lid, 'inset-6', 'ARTWORK', 0)
+			Kit:Place(key.window, icon, 0, 0, 0, 0)
+			key.window:SetVertexColor(0, 0, 0, 0.6)
+		end
 	end
 	key.lamp = Kit:Led(lid, 4, false)
-	key.lamp:SetPoint('TOPRIGHT', -2, -2)
+	if hardware and not round then key.lamp:SetPoint('CENTER', button, 'TOPRIGHT', -right - 2, -top / 2)
+	else key.lamp:SetPoint('TOPRIGHT', -2, -2) end
 	Kit:ShowLed(key.lamp, false)
 	key.hotkey = hotkey
 	dressed[button] = key
@@ -919,6 +1247,8 @@ end
 -- A bar may fade out of combat, show only under the mouse, or both (then it
 -- shows in a fight or under the mouse). Alpha only, so it works in combat.
 local inCombat = false
+local UpdateFades, WatchFade
+do
 local faders = {} -- frame -> {id, hovered, alpha}
 
 local function FadeTarget(id, hovered)
@@ -938,7 +1268,13 @@ local function UpdateFade(frame)
 	Kit:FadeTo(frame, alpha, 'FAST')
 end
 
-local function UpdateFades() for frame in pairs(faders) do UpdateFade(frame) end end
+-- reset: forget the alphas set, so every frame is faded again (after a settings change).
+function UpdateFades(reset)
+	for frame, fader in pairs(faders) do
+		if reset then fader.alpha = nil end
+		UpdateFade(frame)
+	end
+end
 
 local function Hover(frame, on)
 	local fader = faders[frame]
@@ -954,13 +1290,14 @@ local function Hover(frame, on)
 	end)
 end
 
-local function WatchFade(frame, id, buttons)
+function WatchFade(frame, id, buttons)
 	faders[frame] = faders[frame] or {id = id}
 	for _, button in ipairs(buttons) do
 		button:HookScript('OnEnter', function() Hover(frame, true) end)
 		button:HookScript('OnLeave', function() Hover(frame, false) end)
 	end
 	UpdateFade(frame)
+end
 end
 
 -- Devices --------------------------------------------------------------------------------
@@ -1019,6 +1356,10 @@ local function BuildBar(bar, parent, size, vertical)
 			control:ChildUpdate('page', newstate)
 		]])
 		RegisterStateDriver(header, 'page', PageConditions())
+		-- The console's page LCD and lamps follow the page the secure snippet picked.
+		header:HookScript('OnAttributeChanged', function(_, name, value)
+			if name == 'actionpage' and console and console.pager then UI:Safe(HW.ShowPage, console.pager, value) end
+		end)
 	end
 	bars[bar.id] = bar
 	return header
@@ -1040,6 +1381,7 @@ local function BuildXP(parent)
 	Kit:Perforate(bar, onDark and 'glass' or 'track', onDark and 'darkEdge' or nil)
 	if Kit.MarkBar then Kit:MarkBar(bar) end
 	track.bar = bar
+	if HW.On() then HW.MeterParts(parent, track) end
 	track:EnableMouse(true)
 	track:SetScript('OnEnter', function(self)
 		GameTooltip:SetOwner(self, 'ANCHOR_TOP')
@@ -1075,6 +1417,7 @@ local function UpdateXP()
 			xp.tip = {format('Level %d  %d / %d (%.1f%%)', level, current, total, current / total * 100)}
 			if not IsSecret(rested) and rested and rested > 0 then xp.tip[2] = format('Rested %d', rested) end
 			if readout then readout:SetText(Readout(format('LV %d  %4.1f%%', level, current / total * 100))) end
+			HW.MeterText(xp, 'XP', format('%4.1f%%', current / total * 100))
 			xp:SetShown(DB().xpbar)
 			return
 		end
@@ -1093,11 +1436,13 @@ local function UpdateXP()
 			Kit:Tint(xp.bar, 'green')
 			xp.tip = {format('%s  %d / %d', name, value - low, span)}
 			if readout then readout:SetText(Readout(format('LV %s  REP', plain and level or '??'))) end
+			HW.MeterText(xp, 'Rep', format('%4.1f%%', min(max(value - low, 0), span) / span * 100))
 			xp:SetShown(DB().xpbar)
 			return
 		end
 		xp.tip = nil
 		if readout then readout:SetText(Readout(plain and format('LV %d  MAX', level) or 'LV ??')) end
+		HW.MeterText(xp, 'XP', 'MAX')
 		xp.bar:SetMinMaxValues(0, 1)
 		xp.bar:SetValue(1)
 		Kit:Tint(xp.bar, 'dim')
@@ -1161,10 +1506,11 @@ local function LayoutConsole()
 	local size = KeySize()
 	-- The keyboard: each bar one row, as wide as its shown keys, centered.
 	local width, height = 0, 0
+	local bank = HW.On() and HW.BANK_H or 0
 	for _, bar in ipairs(console.bars) do
 		LayoutBar(bar, size, Spacing(bar.id), Shown(bar.id), 12, false)
 		width = max(width, bar.width)
-		height = height + bar.height
+		height = height + bar.height + bank
 	end
 	height = height + max(#console.bars - 1, 0) * GAP
 	if width == 0 then width, height = 12 * size + 11 * GAP, size end
@@ -1188,12 +1534,16 @@ local function LayoutConsole()
 	console:SetSize(PAD * 2 + width + sideWidth * 2, HEAD + body + (castHeight > 0 and castHeight + ROW_GAP or 0) + xpHeight + PAD)
 	local left = PAD + sideWidth
 
-	-- Bar 1 is the bottom row, as on Blizzard's bars.
+	-- Bar 1 is the bottom row, as on Blizzard's bars. In the Hardware look each
+	-- bank has its printed legend and rule above it.
 	local y = -HEAD
 	for index = #console.bars, 1, -1 do
 		local bar = console.bars[index]
+		local x = left + (width - bar.width) / 2
+		if bar.bank then HW.PlaceBank(bar.bank, console, x - 2, y, bar.width + 4, bank > 0) end
+		y = y - bank
 		bar.header:ClearAllPoints()
-		bar.header:SetPoint('TOPLEFT', console, 'TOPLEFT', left + (width - bar.width) / 2, y)
+		bar.header:SetPoint('TOPLEFT', console, 'TOPLEFT', x, y)
 		y = y - bar.height - GAP
 	end
 
@@ -1236,11 +1586,8 @@ local function LayoutConsole()
 		end
 	end
 	if xp then
-		xp:ClearAllPoints()
-		xp:SetPoint('BOTTOMLEFT', console, 'BOTTOMLEFT', PAD, PAD)
-		xp:SetPoint('BOTTOMRIGHT', console, 'BOTTOMRIGHT', -PAD, PAD)
-		xp:SetHeight(XPHeight())
 		xp:SetShown(DB().xpbar and true or false)
+		HW.PlaceMeter(xp, console, PAD, PAD, PAD, XPHeight())
 	end
 	if console.lcd then console.lcd:SetShown(DB().readout ~= 'off') end
 	-- Pet and stance modules sit on the console's top edge, tucked under it.
@@ -1263,9 +1610,17 @@ local function BuildConsole()
 	console.lcd:SetPoint('TOPRIGHT', -PAD, -5)
 	console.readout = Kit:Text(console.lcd, '', 'tiny', 'lcdInk', true)
 	console.readout:SetPoint('RIGHT', -5, 0)
-	console.title:SetPoint('RIGHT', console.lcd, 'LEFT', -8, 0)
 	BuildLeave(console)
-	leave:SetPoint('RIGHT', console.lcd, 'LEFT', -6, 0)
+	if HW.On() then
+		HW.Decorate(console, 14)
+		console.pager = HW.BuildPager(console)
+		console.pager:SetPoint('RIGHT', console.lcd, 'LEFT', -10, 0)
+		console.title:SetPoint('RIGHT', console.pager, 'LEFT', -8, 0)
+		leave:SetPoint('RIGHT', console.pager, 'LEFT', -8, 0)
+	else
+		console.title:SetPoint('RIGHT', console.lcd, 'LEFT', -8, 0)
+		leave:SetPoint('RIGHT', console.lcd, 'LEFT', -6, 0)
+	end
 	local size = KeySize()
 	console.bars = {}
 	for row = 1, Rows() do
@@ -1273,6 +1628,7 @@ local function BuildConsole()
 			BuildBar(BARS[row], console, size)
 			console.bars[#console.bars + 1] = BARS[row]
 			WatchFade(BARS[row].header, row, BARS[row].buttons)
+			if HW.On() then BARS[row].bank = HW.Bank(console, 'Bank '..strsub('ABC', row, row)..(row == 1 and '  Main' or '')) end
 		end
 	end
 	local parts = UnitParts()
@@ -1285,6 +1641,7 @@ local function BuildConsole()
 	console.castSlots = {Slot(console, ''), Slot(console, '')}
 	for _, slot in ipairs(console.castSlots) do slot:Hide() end
 	xp = BuildXP(console)
+	if console.pager and BARS[1].header then HW.ShowPage(console.pager, BARS[1].header:GetAttribute('actionpage') or 1) end
 	UI:RegisterMover(console, 'ab.console', 'Console', {'BOTTOM', 0, 12})
 end
 
@@ -1299,8 +1656,8 @@ local function LayoutFree()
 			local extra = (row == 1 and xp and DB().xpbar) and XPHeight() + ROW_GAP or 0
 			device:SetSize(width + PAD * 2, height + PAD * 2 + extra)
 			if row == 1 and xp then
-				xp:SetHeight(XPHeight())
 				xp:SetShown(DB().xpbar and true or false)
+				HW.PlaceMeter(xp, device, PAD, PAD, PAD, XPHeight())
 			end
 		end
 	end
@@ -1316,10 +1673,10 @@ local function BuildFree()
 			local header = BuildBar(BARS[row], device, BarSize(row, size))
 			header:SetPoint('TOPLEFT', PAD, -PAD)
 			BARS[row].device = device
+			HW.Decorate(device, 10)
 			if row == 1 then
 				xp = BuildXP(device)
-				xp:SetPoint('BOTTOMLEFT', PAD, PAD)
-				xp:SetPoint('BOTTOMRIGHT', -PAD, PAD)
+				HW.PlaceMeter(xp, device, PAD, PAD, PAD, XPHeight())
 				BuildLeave(device)
 				leave:SetPoint('BOTTOMRIGHT', device, 'TOPRIGHT', -PAD, 4)
 			end
@@ -1366,6 +1723,7 @@ end
 local function BuildSide()
 	if not (BarEnabled(4) or BarEnabled(5)) then return end
 	side = Device('JiberishSpec01SideBars', 'SX-1', 'Side', {template = 'SecureHandlerStateTemplate', radius = 12})
+	HW.Decorate(side, 12)
 	RegisterStateDriver(side, 'visibility', '[petbattle] hide; show')
 	local vertical = DB().sideLayout ~= 'rows'
 	for _, id in ipairs({5, 4}) do
@@ -1386,7 +1744,7 @@ local function PlacePetKeys()
 	for index, button in pairs(petKeys) do
 		if button:GetParent() ~= petModule then button:SetParent(petModule) end
 		button:ClearAllPoints()
-		button:SetPoint('LEFT', PAD + (index - 1) * (size + spacing), Docking() and 4 or 0)
+		button:SetPoint('LEFT', PAD + (index - 1) * (size + spacing), (Docking() and 4 or 0) - (HW.On() and HW.BANK_H / 2 or 0))
 		button:Show()
 	end
 end
@@ -1395,8 +1753,9 @@ local function BuildPet()
 	local size = BarSize('Pet', max(20, floor(KeySize() * 0.72)))
 	local count = NUM_PET_ACTION_SLOTS or 10
 	petModule = Device('JiberishSpec01PetKeys', 'PT-1', '', {header = false, template = 'SecureHandlerStateTemplate', radius = 9, level = 4})
-	petModule:SetSize(PAD + count * size + (count - 1) * Spacing('Pet') + PAD, size + 16)
+	petModule:SetSize(PAD + count * size + (count - 1) * Spacing('Pet') + PAD, size + 16 + (HW.On() and HW.BANK_H or 0))
 	petModule.keySize = size
+	HW.MiniLegend(petModule, 'Pet')
 	RegisterStateDriver(petModule, 'visibility', '[petbattle][vehicleui][overridebar][possessbar] hide; [@pet,exists] show; hide')
 	for index = 1, count do
 		local button = _G['PetActionButton'..index]
@@ -1433,11 +1792,12 @@ local function BuildStance()
 	local size = BarSize('Stance', max(20, floor(KeySize() * 0.72)))
 	stanceModule = Device('JiberishSpec01StanceKeys', 'ST-1', '', {header = false, radius = 9, level = 4})
 	stanceModule.size = size
-	stanceModule:SetHeight(size + 16)
+	stanceModule:SetHeight(size + 16 + (HW.On() and HW.BANK_H or 0))
+	HW.MiniLegend(stanceModule, 'Stance')
 	for index = 1, (NUM_STANCE_SLOTS or 10) do
 		local button = CreateFrame('CheckButton', 'JiberishSpec01StanceKey'..index, stanceModule, 'StanceButtonTemplate')
 		button:SetID(index)
-		button:SetPoint('LEFT', PAD + (index - 1) * (size + Spacing('Stance')), Docking() and 4 or 0)
+		button:SetPoint('LEFT', PAD + (index - 1) * (size + Spacing('Stance')), (Docking() and 4 or 0) - (HW.On() and HW.BANK_H / 2 or 0))
 		Dress(button, size)
 		stanceKeys[index] = button
 		extraKeys[#extraKeys + 1] = {button = button, command = 'SHAPESHIFTBUTTON'..index, hotkey = button.HotKey}
@@ -1588,6 +1948,10 @@ local function DressMenuButton(button)
 	key:EnableMouse(false)
 	key.skin = Kit:Skin(key, Sprites()[1], 'BACKGROUND', 0)
 	key.skin.kitMaxCorner = 6
+	if HW.On() then
+		key.slotRing = HW.Slot(key, key)
+		HW.ShowSlot(key.slotRing, true)
+	end
 	menuKeys[button] = key
 	local glyph = GLYPH_OF[button:GetName() or '']
 	if glyph then
@@ -1728,6 +2092,7 @@ local function QueueMenu() C_Timer.After(0, function() UI:Safe(LayoutMenu) end) 
 
 function BuildMenu()
 	menu = Device('JiberishSpec01Menu', 'MN-1', 'Menu', {radius = 12})
+	HW.Decorate(menu, 12)
 	menu:SetScale((DB().scale or 1) * 0.8)
 	LayoutMenu()
 	UI:RegisterMover(menu, 'ab.menu', 'Menu and bags', {'BOTTOMRIGHT', -12, 12})
@@ -1796,9 +2161,27 @@ local function BuildExtra()
 	local extra = _G.ExtraActionButton1
 	if extra and not Forbidden(extra) then
 		Fade(extra.style)
-		Dress(extra, 48)
+		-- Hardware: a big round key in a round hole.
+		Dress(extra, HW.On() and 52 or 48, true)
 	end
-	if _G.ZoneAbilityFrame then Fade(_G.ZoneAbilityFrame.Style) end
+	local zone = _G.ZoneAbilityFrame
+	if zone then
+		Fade(zone.Style)
+		-- Zone abilities come and go from a pool; dress each one as it shows,
+		-- out of combat (they are sized here).
+		local container = zone.SpellButtonContainer
+		local function DressZone()
+			if not HW.On() or not (container and container.EnumerateActive) then return end
+			if InCombatLockdown() then return UI:AfterCombat(DressZone, 'ab.zonekeys') end
+			for button in container:EnumerateActive() do
+				if not Forbidden(button) and not dressed[button] then Dress(button, 52, true) end
+			end
+		end
+		if type(zone.UpdateDisplayedZoneAbilities) == 'function' then
+			hooksecurefunc(zone, 'UpdateDisplayedZoneAbilities', function() C_Timer.After(0, function() UI:Safe(DressZone) end) end)
+		end
+		UI:Safe(DressZone)
+	end
 end
 
 -- Blizzard's bars ----------------------------------------------------------------------
@@ -2005,11 +2388,13 @@ function module:Refresh()
 		if device then
 			UI:SetMoverBaseScale(entry[2], scale, device)
 			if device.shell then device.shell:SetShown(DB().housing ~= false) end
+			HW.ShowDecor(device, DB().housing ~= false)
 		end
 	end
 	if menu then
 		UI:SetMoverBaseScale('ab.menu', scale * 0.8, menu)
 		if menu.shell then menu.shell:SetShown(DB().housing ~= false) end
+		HW.ShowDecor(menu, DB().housing ~= false)
 		RepaintMenu()
 	end
 	LayoutConsole()
@@ -2024,8 +2409,7 @@ function module:Refresh()
 		UI:Safe(ApplyLook, key)
 		UI:Safe(UpdateKey, key)
 	end
-	for _, fader in pairs(faders) do fader.alpha = nil end
-	UpdateFades()
+	UpdateFades(true)
 	UI:Safe(UpdateXP)
 	ApplyLock()
 	ApplyCountdownCVar()
@@ -2062,6 +2446,8 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 	{title = 'Console', rows = {
 		{'segmented', 'Keys', 'style.actionbars', items = {{'keys', 'Keys'}, {'caps', 'Caps'}, {'blizzard', 'Blizzard'}}, reload = true,
 			note = 'Keys: the reference\'s light keys. Caps: its charcoal keycaps. Blizzard: the game\'s own bars.'},
+		{'segmented', 'Console look', 'actionbars.look', items = {{'hardware', 'Hardware'}, {'classic', 'Classic'}}, reload = true,
+			since = '0.5.1', note = 'Hardware: keys set in slots in the housing, legends printed on the caps, printed banks, corner screws, a page LCD and a meter with its own LCD, as on SPEC-01\'s devices. Classic: the earlier look.'},
 		{'segmented', 'Layout', 'actionbars.layout', items = {{'console', 'Console'}, {'free', 'Free'}}, reload = true,
 			note = 'Console: one device with the player and target docked beside the keys. Free: every bar on its own.'},
 		{'switch', 'Dock unit frames', 'actionbars.dock', 'Player and target frames and cast bars inside the console.', reload = true},
@@ -2089,11 +2475,13 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 		{'slider', 'Macro name size', 'actionbars.macroSize', 6, 12, 1},
 	}},
 	{title = 'Look', rows = {
-		{'switch', 'Legend chip', 'actionbars.legendChip', 'The keybind on a small label of the cap\'s own color, as the reference prints its legends.', since = '0.5.0'},
+		{'switch', 'Legend chip', 'actionbars.legendChip', 'Classic look: the keybind on a small label of the cap\'s own color.', since = '0.5.0',
+			hidden = function() return HW.On() end},
 		{'switch', 'Count chip', 'actionbars.countChip', 'Charges and item counts on a small gray LCD chip.', since = '0.5.0'},
-		{'switch', 'State LED', 'actionbars.keyLed', 'A lamp in the top-right corner while an action is active or equipped.', since = '0.5.0'},
+		{'switch', 'State LED', 'actionbars.keyLed', 'A lamp on each key: lit while active, green when equipped; in the Hardware look also red out of range and blue short of power.', since = '0.5.0'},
 		{'slider', 'Icon window inset', 'actionbars.iconInset', 0, 12, 1, 'How much of the cap shows around the icon.', format = Auto, since = '0.5.0'},
-		{'slider', 'Empty key opacity', 'actionbars.emptyAlpha', 0.15, 1, 0.05, 'Keys with nothing on them are blank caps this faint.',
+		{'slider', 'Empty key opacity', 'actionbars.emptyAlpha', 0.15, 1, 0.05, 'Classic look: keys with nothing on them are blank caps this faint.',
+			hidden = function() return HW.On() end,
 			format = function(v) return floor(v * 100 + 0.5)..'%' end, since = '0.5.0'},
 	}},
 	{title = 'Cooldowns', rows = {
