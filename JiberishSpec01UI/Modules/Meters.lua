@@ -22,7 +22,10 @@ UI:RegisterDefaults('meters', {
 	bar = 'dots', barHeight = 16, fontSize = 10, classColors = true,
 	details = true, detailsBase = true, blizzard = true, skada = true, recount = true,
 	dock = false, dockWidth = 320, dockHeight = 220, dockWindows = 1,
-	own = false, ownType = 'damage', ownSession = 'current', ownRows = 8, ownWidth = 250,
+	own = true, ownType = 'damage', ownSession = 'current', ownRows = 8, ownWidth = 270,
+	-- DM-1 windows: replace the game's meter, how many, and what each row shows.
+	replaceGame = true, ownCount = 1, ownRate = true, ownPercent = true, ownNameColor = false, ownTooltip = true,
+	ownMotion = true, ownSounds = true, windows = {},
 	-- The game's own meter.
 	blizzHeader = true, blizzFill = 'class', blizzRanks = false, blizzRate = false, blizzMotion = true,
 	blizzSounds = true, blizzTopBlip = false,
@@ -698,28 +701,100 @@ local function Lamps(state)
 	end
 end
 
+-- Replacing the game's meter: its session windows (Edit Mode systems) are
+-- never moved or reparented, only made invisible and click-through, and put
+-- back exactly as they were when the setting is turned off.
+local function HasMeterAPI()
+	return C_DamageMeter and C_DamageMeter.GetCombatSessionFromType and Enum and Enum.DamageMeterType and Enum.DamageMeterSessionType
+end
+
+-- Only while the DM-1 meter is on, so turning it off never leaves no meter at all.
+local function Replacing() return DB().replaceGame and DB().own and HasMeterAPI() and true or false end
+
+local concealed = setmetatable({}, {__mode = 'k'}) -- window -> {mouse = {}, wheel = {}}
+local concealHooked = setmetatable({}, {__mode = 'k'})
+
+local function Conceal(window)
+	if Forbidden(window) then return end
+	local saved = concealed[window] or {mouse = {}, wheel = {}}
+	concealed[window] = saved
+	window:SetAlpha(0)
+	local function Walk(frame, depth)
+		if frame.IsMouseEnabled then
+			local enabled = frame:IsMouseEnabled()
+			if not IsSecret(enabled) and enabled then
+				saved.mouse[frame] = true
+				frame:EnableMouse(false)
+			end
+		end
+		if frame.IsMouseWheelEnabled then
+			local wheel = frame:IsMouseWheelEnabled()
+			if not IsSecret(wheel) and wheel then
+				saved.wheel[frame] = true
+				frame:EnableMouseWheel(false)
+			end
+		end
+		if depth < 5 then
+			for _, child in ipairs({frame:GetChildren()}) do
+				if not Forbidden(child) then Walk(child, depth + 1) end
+			end
+		end
+	end
+	Walk(window, 0)
+	if not concealHooked[window] then
+		concealHooked[window] = true
+		window:HookScript('OnShow', function(self)
+			if Replacing() then C_Timer.After(0, function() UI:Safe(Conceal, self) end) end
+		end)
+	end
+end
+
+local function Reveal(window)
+	local saved = concealed[window]
+	if not saved then return end
+	concealed[window] = nil
+	window:SetAlpha(1)
+	for frame in pairs(saved.mouse) do if not Forbidden(frame) then frame:EnableMouse(true) end end
+	for frame in pairs(saved.wheel) do if not Forbidden(frame) then frame:EnableMouseWheel(true) end end
+end
+
+
+local function ApplyReplace()
+	local meter = _G.DamageMeter
+	if Forbidden(meter) or type(meter.ForEachSessionWindow) ~= 'function' then return end
+	local replace = Replacing()
+	meter:ForEachSessionWindow(function(window)
+		if replace then UI:Safe(Conceal, window) else UI:Safe(Reveal, window) end
+	end)
+end
+
 local blizzardHooked
 local function HookBlizzard()
-	if not DB().blizzard then return end
 	local meter = _G.DamageMeter
 	if Forbidden(meter) then return end
 	if not blizzardHooked and type(meter.SetupSessionWindow) == 'function' then
 		blizzardHooked = true
-		-- New session windows are styled a frame later, outside Blizzard's own call.
-		hooksecurefunc(meter, 'SetupSessionWindow', function() C_Timer.After(0, StyleBlizzard) end)
+		-- New session windows are handled a frame later, outside Blizzard's own call.
+		hooksecurefunc(meter, 'SetupSessionWindow', function()
+			C_Timer.After(0, function()
+				if Replacing() then UI:Safe(ApplyReplace) elseif DB().blizzard then UI:Safe(StyleBlizzard) end
+			end)
+		end)
 		local events = CreateFrame('Frame')
 		for _, event in ipairs({'PLAYER_REGEN_DISABLED', 'PLAYER_REGEN_ENABLED', 'DAMAGE_METER_RESET',
 			'DAMAGE_METER_COMBAT_SESSION_UPDATED', 'DAMAGE_METER_CURRENT_SESSION_UPDATED'}) do
 			pcall(events.RegisterEvent, events, event)
 		end
 		events:SetScript('OnEvent', function(_, event)
+			if Replacing() then return end
 			if event == 'PLAYER_REGEN_DISABLED' then Lamps('fight')
 			elseif event == 'PLAYER_REGEN_ENABLED' then Lamps('off')
 			elseif event == 'DAMAGE_METER_RESET' then Lamps('reset'); Sound('latch-up') end
 			SweepRows()
 		end)
 	end
-	StyleBlizzard()
+	if Replacing() then ApplyReplace()
+	elseif DB().blizzard then StyleBlizzard() end
 end
 
 -- Skada and Recount ---------------------------------------------------------------------
@@ -748,118 +823,405 @@ local function StyleRecount()
 end
 
 -- Own meter (C_DamageMeter) ----------------------------------------------------------------
-local own
-local TYPES = {
-	{'damage', 'DamageDone', 'Damage'}, {'healing', 'HealingDone', 'Healing'}, {'interrupts', 'Interrupts', 'Interrupts'},
-	{'dispels', 'Dispels', 'Dispels'}, {'taken', 'DamageTaken', 'Damage taken'},
+-- Up to three DM-1 windows, each with its own meter type and session, reading
+-- the game's own combat data. The game hands sources over already ranked, so
+-- its order is kept and nothing is ever sorted or compared; amounts, names and
+-- GUIDs may be secret and then only reach setters (SetValue, SetText through
+-- the game's AbbreviateNumbers, SetFormattedText, SetAlphaFromBoolean).
+local owns = {}
+local OWN_KEYS = {'dm.own', 'dm.own2', 'dm.own3'}
+local OWN_SPOTS = {{'BOTTOMRIGHT', -16, 260}, {'BOTTOMRIGHT', -296, 260}, {'BOTTOMRIGHT', -576, 260}}
+local HEADER, ROW_GAP, PAD = 26, 2, 3
+local BuildOwns -- defined below
+
+-- The meter types the client offers, in order, with our labels.
+local TYPE_LABELS = {
+	{'DamageDone', 'Damage'}, {'Dps', 'DPS'}, {'HealingDone', 'Healing'}, {'Hps', 'HPS'}, {'Absorbs', 'Absorbs'},
+	{'Interrupts', 'Interrupts'}, {'Dispels', 'Dispels'}, {'DamageTaken', 'Damage taken'},
+	{'AvoidableDamageTaken', 'Avoidable'}, {'EnemyDamageTaken', 'Enemy damage'}, {'Deaths', 'Deaths'},
 }
-local function TypeOf(key)
-	for index, entry in ipairs(TYPES) do if entry[1] == key then return entry, index end end
-	return TYPES[1], 1
-end
+local OLD_TYPES = {damage = 'DamageDone', healing = 'HealingDone', interrupts = 'Interrupts', dispels = 'Dispels', taken = 'DamageTaken'}
 
-local function HasMeterAPI()
-	return C_DamageMeter and C_DamageMeter.GetCombatSessionFromType and Enum and Enum.DamageMeterType and Enum.DamageMeterSessionType
-end
-
-local HEADER, ROW_GAP = 24, 2
-
-local function OwnRow(index)
-	local row = own.rows[index]
-	if row then return row end
-	local parent = own.display.screen
-	row = CreateFrame('Frame', nil, parent)
-	row.bar = CreateFrame('StatusBar', nil, row)
-	row.bar:SetAllPoints()
-	row.bar:SetStatusBarTexture(Kit.media..'bar-flat.tga')
-	row.bar:SetMinMaxValues(0, 1)
-	row.rank = Kit:Text(row.bar, '', 8, 'darkDim', true)
-	row.rank:SetPoint('LEFT', 4, 0)
-	row.rank:SetWidth(14)
-	row.rank:SetJustifyH('RIGHT')
-	row.value = Kit:Text(row.bar, '', 9, 'darkInk', true, true)
-	row.value:SetPoint('RIGHT', -5, 0)
-	row.rate = Kit:Text(row.bar, '', 8, 'darkDim', false, true)
-	row.rate:SetPoint('RIGHT', row.value, 'LEFT', -5, 0)
-	row.name = Kit:Text(row.bar, '', 9, 'darkInk', false, true)
-	row.name:SetPoint('LEFT', row.rank, 'RIGHT', 5, 0)
-	row.name:SetPoint('RIGHT', row.rate, 'LEFT', -5, 0)
-	row.name:SetJustifyH('LEFT')
-	row.name:SetWordWrap(false)
-	row.lamp = Kit:Led(row.bar, 4, true)
-	row.lamp:SetPoint('LEFT', 1, 0)
-	own.rows[index] = row
-	return row
-end
-
-local function LayoutOwn()
-	if not own then return end
-	local db = DB()
-	local rows = Kit:Clamp(floor(db.ownRows or 8), 1, 30)
-	local height = db.barHeight or 16
-	if not own.docked then own:SetSize(db.ownWidth, HEADER + 8 + rows * (height + ROW_GAP) + 6) end
-	for index = 1, max(rows, #own.rows) do
-		local row = OwnRow(index)
-		row:ClearAllPoints()
-		row:SetPoint('TOPLEFT', own.display.screen, 'TOPLEFT', 3, -3 - (index - 1) * (height + ROW_GAP))
-		row:SetPoint('TOPRIGHT', own.display.screen, 'TOPRIGHT', -3, -3 - (index - 1) * (height + ROW_GAP))
-		row:SetHeight(height)
-		if db.bar == 'flat' then
-			Kit:Unperforate(row.bar)
-		else
-			Kit:Perforate(row.bar, 'black', 'darkEdge')
-		end
-		row.enabled = index <= rows
-		if not row.enabled then row:Hide() end
+local function Types()
+	local list, enum = {}, Enum and Enum.DamageMeterType
+	if not enum then return list end
+	for _, entry in ipairs(TYPE_LABELS) do
+		if enum[entry[1]] ~= nil then list[#list + 1] = entry end
 	end
+	return list
+end
+
+local function TypeLabel(key)
+	for _, entry in ipairs(TYPE_LABELS) do if entry[1] == key then return entry[2] end end
+	return 'Damage'
+end
+
+-- Each window's own choices: meter type, session, and a size set with its grip.
+local function Cfg(index)
+	local db = DB()
+	if type(db.windows) ~= 'table' then db.windows = {} end
+	local cfg = db.windows[index]
+	if type(cfg) ~= 'table' then
+		local first = index == 1
+		cfg = {type = first and (OLD_TYPES[db.ownType] or 'DamageDone') or (index == 2 and 'HealingDone' or 'DamageTaken'),
+			session = first and db.ownSession == 'overall' and 'overall' or 'current'}
+		db.windows[index] = cfg
+	end
+	if not (Enum.DamageMeterType and Enum.DamageMeterType[cfg.type]) then cfg.type = 'DamageDone' end
+	return cfg
+end
+
+local function MeterType(cfg) return Enum.DamageMeterType[cfg.type] or Enum.DamageMeterType.DamageDone end
+
+-- 'current', 'overall' or a session ID from the recent list.
+local function SessionOf(cfg)
+	if type(cfg.session) == 'number' then return nil, cfg.session end
+	local kinds = Enum.DamageMeterSessionType
+	return kinds[cfg.session == 'overall' and 'Overall' or 'Current'], nil
+end
+
+local function Recent()
+	if not C_DamageMeter.GetAvailableCombatSessions then return {} end
+	local ok, list = pcall(C_DamageMeter.GetAvailableCombatSessions)
+	return ok and type(list) == 'table' and list or {}
+end
+
+local function Fetch(cfg)
+	local kind, id = SessionOf(cfg)
+	local meterType = MeterType(cfg)
+	local ok, session
+	if id then
+		if C_DamageMeter.GetCombatSessionFromID then ok, session = pcall(C_DamageMeter.GetCombatSessionFromID, id, meterType) end
+		-- A fight that has expired: back to the current one.
+		if not ok or type(session) ~= 'table' then
+			cfg.session = 'current'
+			kind, id = SessionOf(cfg)
+		end
+	end
+	if not id then ok, session = pcall(C_DamageMeter.GetCombatSessionFromType, kind, meterType) end
+	return ok and type(session) == 'table' and session or nil, kind, id
+end
+
+local function Duration(kind, id)
+	if id then
+		for _, entry in ipairs(Recent()) do
+			local entryID = entry.sessionID
+			if not IsSecret(entryID) and entryID == id then return entry.durationSeconds end
+		end
+		return nil
+	end
+	local ok, seconds = pcall(C_DamageMeter.GetSessionDurationSeconds, kind)
+	return ok and seconds or nil
 end
 
 local function Clock(seconds)
 	seconds = Plain(seconds)
-	if not seconds then return '--:--' end
+	if type(seconds) ~= 'number' then return '--:--' end
 	return format('%d:%02d', floor(seconds / 60), floor(seconds % 60))
 end
 
-local function UpdateOwn()
-	if not own or not own:IsShown() then return end
-	local db = DB()
-	local entry = TypeOf(db.ownType)
-	own.title:SetText(strupper(entry[3]))
-	local sessionType = Enum.DamageMeterSessionType[db.ownSession == 'overall' and 'Overall' or 'Current']
-	local meterType = Enum.DamageMeterType[entry[2]]
-	local sources
-	if sessionType and meterType then
-		local ok, session = pcall(C_DamageMeter.GetCombatSessionFromType, sessionType, meterType)
-		sources = ok and type(session) == 'table' and session.combatSources or nil
+-- Numbers. Plain ones are formatted here (no raw floats: 72.9, 1.2K, 3.45M);
+-- secret ones go to the game's AbbreviateNumbers with a K/M/B table, else to
+-- SetFormattedText, so they are never read.
+local abbreviate
+local function AbbreviateOptions()
+	if abbreviate ~= nil then return abbreviate or nil end
+	abbreviate = false
+	if CreateAbbreviateConfig then
+		local ok, config = pcall(CreateAbbreviateConfig, {
+			{breakpoint = 1000000000, abbreviation = 'B', significandDivisor = 10000000, fractionDivisor = 100, abbreviationIsGlobal = false},
+			{breakpoint = 1000000, abbreviation = 'M', significandDivisor = 10000, fractionDivisor = 100, abbreviationIsGlobal = false},
+			{breakpoint = 1000, abbreviation = 'K', significandDivisor = 100, fractionDivisor = 10, abbreviationIsGlobal = false},
+			{breakpoint = 1, abbreviation = '', significandDivisor = 1, fractionDivisor = 1, abbreviationIsGlobal = false},
+		})
+		if ok and config then abbreviate = {config = config} end
 	end
-	local count = type(sources) == 'table' and #sources or 0
-	for index, row in ipairs(own.rows) do
-		local source = row.enabled and index <= count and sources[index]
-		if source then
-			row:Show()
-			-- Amounts may be secret: they only ever go to setters.
-			pcall(row.bar.SetMinMaxValues, row.bar, 0, sources[1].totalAmount)
-			pcall(row.bar.SetValue, row.bar, source.totalAmount)
-			local class = Plain(source.classFilename)
-			local color = class and (CUSTOM_CLASS_COLORS or RAID_CLASS_COLORS)[class]
-			if color and db.classColors then row.bar:SetStatusBarColor(color.r, color.g, color.b, 0.9)
-			else row.bar:SetStatusBarColor(Kit:RGB('lamp')) end
-			local name = source.name
-			if not IsSecret(name) and type(name) == 'string' and Ambiguate then name = Ambiguate(name, 'short') end
-			row.name:SetText(name)
-			row.rank:SetText(index)
-			if AbbreviateNumbers then
-				pcall(row.value.SetText, row.value, AbbreviateNumbers(source.totalAmount))
-				pcall(row.rate.SetText, row.rate, AbbreviateNumbers(source.amountPerSecond))
-			end
-			Kit:ShowLed(row.lamp, Plain(source.isLocalPlayer) == true)
-		else
-			row:Hide()
+	return abbreviate or nil
+end
+
+local function SetNumber(fontString, value)
+	if IsSecret(value) then
+		local options = AbbreviateOptions()
+		if AbbreviateNumbers and pcall(function()
+			fontString:SetText(options and AbbreviateNumbers(value, options) or AbbreviateNumbers(value))
+		end) then return end
+		pcall(fontString.SetFormattedText, fontString, '%.0f', value)
+		return
+	end
+	if type(value) ~= 'number' then fontString:SetText('') return end
+	if value >= 1e9 then fontString:SetFormattedText('%.2fB', value / 1e9)
+	elseif value >= 1e6 then fontString:SetFormattedText('%.2fM', value / 1e6)
+	elseif value >= 1e4 then fontString:SetFormattedText('%.0fK', value / 1e3)
+	elseif value >= 1e3 then fontString:SetFormattedText('%.1fK', value / 1e3)
+	elseif value >= 10 or value == 0 then fontString:SetFormattedText('%d', floor(value + 0.5))
+	else fontString:SetFormattedText('%.1f', value) end
+end
+
+local function OwnMotion() return DB().ownMotion and not Kit:Reduced() end
+local function OwnSound(name) if DB().ownSounds then Kit:Play(name) end end
+
+local CLASS_ICON_FILE = [[Interface\WorldStateFrame\ICONS-CLASSES]]
+
+-- Rows -----------------------------------------------------------------------------------------
+local function RowHeight() return Kit:Clamp(floor(DB().barHeight or 16), 12, 30) end
+
+local ShowBreakdown, HideBreakdown -- defined below
+
+local function OwnRow(window, index)
+	local row = window.rows[index]
+	if row then return row end
+	row = CreateFrame('Button', nil, window.display.screen)
+	row.window = window
+	row.inner = CreateFrame('Frame', nil, row)
+	row.inner:SetPoint('TOPLEFT')
+	row.inner:SetPoint('BOTTOMRIGHT')
+	row.rank = Kit:Text(row.inner, '', 8, 'darkDim', true)
+	Kit:Font(row.rank, 8, nil, true, 'numbers')
+	row.rank:SetJustifyH('RIGHT')
+	row.iconBack = row.inner:CreateTexture(nil, 'BACKGROUND')
+	row.iconBack:SetColorTexture(1, 1, 1, 1)
+	Kit:Tint(row.iconBack, 'black', 0.9)
+	row.icon = row.inner:CreateTexture(nil, 'ARTWORK')
+	row.bar = CreateFrame('StatusBar', nil, row.inner)
+	row.bar:SetStatusBarTexture(Kit.media..'bar-flat.tga')
+	row.bar:SetMinMaxValues(0, 1)
+	row.bar:SetValue(0)
+	row.track = row.bar:CreateTexture(nil, 'BACKGROUND', nil, -2)
+	row.track:SetAllPoints()
+	row.track:SetColorTexture(1, 1, 1, 1)
+	Kit:Tint(row.track, 'glass', 0.9)
+	local fill = row.bar:GetStatusBarTexture()
+	row.edge = row.bar:CreateTexture(nil, 'OVERLAY', nil, 5)
+	row.edge:SetColorTexture(1, 1, 1, 1)
+	row.edge:SetPoint('TOPLEFT', fill, 'TOPLEFT')
+	row.edge:SetPoint('TOPRIGHT', fill, 'TOPRIGHT')
+	row.edge:SetAlpha(0.3)
+	row.spark = row.bar:CreateTexture(nil, 'OVERLAY', nil, 6)
+	row.spark:SetColorTexture(1, 1, 1, 1)
+	row.spark:SetBlendMode('ADD')
+	row.spark:SetPoint('TOP', fill, 'TOPRIGHT', 0, 0)
+	row.spark:SetPoint('BOTTOM', fill, 'BOTTOMRIGHT', 0, 0)
+	row.spark:SetAlpha(0.6)
+	-- Text above the bar (and its dot cover).
+	row.texts = CreateFrame('Frame', nil, row.bar)
+	row.texts:SetAllPoints()
+	row.texts:SetFrameLevel(row.bar:GetFrameLevel() + 3)
+	row.pct = Kit:Text(row.texts, '', 8, 'darkDim', false, true)
+	row.rate = Kit:Text(row.texts, '', 8, 'darkDim', false, true)
+	row.value = Kit:Text(row.texts, '', 9, 'darkInk', true, true)
+	for _, text in ipairs({row.pct, row.rate, row.value}) do
+		Kit:Font(text, text == row.value and 9 or 8, 'OUTLINE', text == row.value, 'numbers')
+		text:SetJustifyH('RIGHT')
+	end
+	row.name = Kit:Text(row.texts, '', 9, 'darkInk', false, true)
+	Kit:Font(row.name, 9, 'OUTLINE', false)
+	row.name:SetJustifyH('LEFT')
+	row.name:SetWordWrap(false)
+	row.lamp = Kit:Led(row.inner, 4, true)
+	Kit:ShowLed(row.lamp, false)
+	row.hover = row.inner:CreateTexture(nil, 'HIGHLIGHT')
+	row.hover:SetAllPoints()
+	row.hover:SetColorTexture(1, 1, 1, 0.06)
+	row:SetScript('OnEnter', function(self) if DB().ownTooltip then UI:Safe(ShowBreakdown, self) end end)
+	row:SetScript('OnLeave', function() HideBreakdown() end)
+	window.rows[index] = row
+	return row
+end
+
+local function LayoutRow(row, height)
+	local px = UI.Pixel.Px(row, 1)
+	row.rank:ClearAllPoints()
+	row.rank:SetPoint('LEFT', row.inner, 'LEFT', 0, 0)
+	row.rank:SetWidth(14)
+	row.icon:ClearAllPoints()
+	row.icon:SetPoint('LEFT', row.inner, 'LEFT', 18, 0)
+	row.icon:SetSize(height - 2, height - 2)
+	row.iconBack:ClearAllPoints()
+	row.iconBack:SetPoint('TOPLEFT', row.icon, 'TOPLEFT', -1, 1)
+	row.iconBack:SetPoint('BOTTOMRIGHT', row.icon, 'BOTTOMRIGHT', 1, -1)
+	row.lamp:ClearAllPoints()
+	row.lamp:SetPoint('TOPLEFT', row.icon, 'TOPLEFT', -2, 2)
+	row.bar:ClearAllPoints()
+	row.bar:SetPoint('TOPLEFT', row.icon, 'TOPRIGHT', 3, 1)
+	row.bar:SetPoint('BOTTOMRIGHT', row.inner, 'BOTTOMRIGHT', 0, 0)
+	row.edge:SetHeight(px)
+	row.spark:SetWidth(2 * px)
+	if DB().bar == 'flat' then Kit:Unperforate(row.bar) else Kit:Perforate(row.bar, 'black', 'darkEdge') end
+	-- Figures from the right: percent, per second, total; the name takes what is left.
+	local db, anchor = DB(), nil
+	for _, part in ipairs({{row.pct, db.ownPercent}, {row.rate, db.ownRate}, {row.value, true}}) do
+		local text, shown = part[1], part[2]
+		text:ClearAllPoints()
+		text:SetShown(shown and true or false)
+		if shown then
+			if anchor then text:SetPoint('RIGHT', anchor, 'LEFT', -6, 0) else text:SetPoint('RIGHT', row.texts, 'RIGHT', -4, 0) end
+			anchor = text
 		end
 	end
-	own.empty:SetShown(count == 0)
-	local ok, seconds = pcall(C_DamageMeter.GetSessionDurationSeconds, sessionType)
-	own.clock:SetText(ok and Clock(seconds) or '--:--')
+	row.name:ClearAllPoints()
+	row.name:SetPoint('LEFT', row.texts, 'LEFT', 4, 0)
+	row.name:SetPoint('RIGHT', anchor, 'LEFT', -6, 0)
+end
+
+-- Rows arriving: a short fade and slide from the left.
+local function Arrive(row)
+	if not OwnMotion() then
+		row.inner:SetAlpha(1)
+		return
+	end
+	Kit:Animate(row.inner, 0.22, 0, 1, function(value, progress)
+		row.inner:ClearAllPoints()
+		row.inner:SetPoint('TOPLEFT', row, 'TOPLEFT', -8 * (1 - value), 0)
+		row.inner:SetPoint('BOTTOMRIGHT', row, 'BOTTOMRIGHT', -8 * (1 - value), 0)
+		row.inner:SetAlpha(progress)
+	end, function()
+		row.inner:ClearAllPoints()
+		row.inner:SetPoint('TOPLEFT')
+		row.inner:SetPoint('BOTTOMRIGHT')
+		row.inner:SetAlpha(1)
+	end, 'settle')
+end
+
+local function ClassColor(class)
+	class = Plain(class)
+	local colors = CUSTOM_CLASS_COLORS or RAID_CLASS_COLORS
+	return class and colors and colors[class]
+end
+
+local function FillOwnRow(row, source, rank, top, total)
+	local db = DB()
+	if not row:IsShown() then
+		row:Show()
+		Arrive(row)
+	end
+	row.source = source
+	row.rank:SetText(rank)
+	-- Bar: the top source's amount is the scale; both only go to setters.
+	pcall(row.bar.SetMinMaxValues, row.bar, 0, top.totalAmount)
+	pcall(row.bar.SetValue, row.bar, source.totalAmount, OwnMotion() and Kit.SMOOTH or nil)
+	local color = ClassColor(source.classFilename)
+	if color and db.classColors then row.bar:SetStatusBarColor(color.r, color.g, color.b, 0.95)
+	else row.bar:SetStatusBarColor(Kit:RGB('lamp')) end
+	-- Icon: the spec's, else the class's, cropped.
+	local spec = Plain(source.specIconID)
+	local class = Plain(source.classFilename)
+	if type(spec) == 'number' and spec > 0 then
+		row.icon:SetTexture(spec)
+		row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	elseif class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class] then
+		local c = CLASS_ICON_TCOORDS[class]
+		row.icon:SetTexture(CLASS_ICON_FILE)
+		row.icon:SetTexCoord(c[1] + 0.02, c[2] - 0.02, c[3] + 0.02, c[4] - 0.02)
+	else
+		row.icon:SetTexture(134400)
+		row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	end
+	-- Name: shortened when plain; a secret one goes straight to the string.
+	local name = source.name
+	if not IsSecret(name) and type(name) == 'string' and Ambiguate then name = Ambiguate(name, 'short') end
+	row.name:SetText(name)
+	if color and db.ownNameColor then row.name:SetTextColor(color.r, color.g, color.b) else Kit:Tint(row.name, 'darkInk') end
+	-- Figures.
+	SetNumber(row.value, source.totalAmount)
+	if db.ownRate then SetNumber(row.rate, source.amountPerSecond) end
+	if db.ownPercent then
+		local amount = source.totalAmount
+		if not IsSecret(amount) and type(amount) == 'number' and type(total) == 'number' and total > 0 then
+			row.pct:SetFormattedText('%d%%', floor(amount / total * 100 + 0.5))
+		else
+			row.pct:SetText('')
+		end
+	end
+	-- Your row: a lamp; a secret answer sets it without being read.
+	local mine = source.isLocalPlayer
+	if IsSecret(mine) and row.lamp.SetAlphaFromBoolean then
+		Kit:ShowLed(row.lamp, true)
+		row.lamp:SetAlphaFromBoolean(mine, 1, 0)
+	else
+		Kit:ShowLed(row.lamp, mine == true)
+		row.lamp:SetAlpha(1)
+	end
+end
+
+-- Windows --------------------------------------------------------------------------------------
+local function Visible(window)
+	local height = RowHeight()
+	local room = window:GetHeight() - HEADER - 8 - PAD * 2 + ROW_GAP
+	if IsSecret(room) then return 1 end
+	return max(1, floor(room / (height + ROW_GAP)))
+end
+
+local function SizeFor(rows) return HEADER + 8 + PAD * 2 + rows * (RowHeight() + ROW_GAP) - ROW_GAP end
+
+local function LayoutOwn(window)
+	if not window then return end
+	local db, cfg = DB(), Cfg(window.index)
+	-- While its grip is held the window follows the cursor; it snaps on release.
+	if not window.docked and not window.dragging then
+		window:SetSize(cfg.width or db.ownWidth, SizeFor(Kit:Clamp(floor(cfg.rows or db.ownRows or 8), 1, 40)))
+	end
+	local height = RowHeight()
+	window.visible = Visible(window)
+	for index = 1, max(window.visible, #window.rows) do
+		local row = OwnRow(window, index)
+		row:ClearAllPoints()
+		row:SetPoint('TOPLEFT', window.display.screen, 'TOPLEFT', PAD, -PAD - (index - 1) * (height + ROW_GAP))
+		row:SetPoint('TOPRIGHT', window.display.screen, 'TOPRIGHT', -PAD, -PAD - (index - 1) * (height + ROW_GAP))
+		row:SetHeight(height)
+		LayoutRow(row, height)
+		row.enabled = index <= window.visible
+		if not row.enabled then row:Hide() end
+	end
+end
+
+local function SessionLabel(cfg)
+	if cfg.session == 'overall' then return 'Overall' end
+	if type(cfg.session) ~= 'number' then return 'Current' end
+	return format('Fight %d', cfg.session)
+end
+
+-- A new fight or a reset: the header lamp blinks and the screen flashes.
+local function Sweep(window)
+	if not OwnMotion() then return end
+	Kit:Flash(window.display, {token = 'lamp', alpha = 0.35})
+	Kit:Blink(window.lamp, 0.12, true)
+	C_Timer.After(0.6, function() Kit:Blink(window.lamp, nil, false) end)
+end
+
+local function UpdateOwn(window)
+	if not window or not window:IsShown() then return end
+	local cfg = Cfg(window.index)
+	window.typeKey:SetKeyText(TypeLabel(cfg.type))
+	window.sessionKey:SetKeyText(SessionLabel(cfg))
+	local session, kind, id = Fetch(cfg)
+	local sources = session and session.combatSources
+	local count = type(sources) == 'table' and #sources or 0
+	local visible = window.visible or 1
+	window.offset = Kit:Clamp(window.offset or 0, 0, max(0, count - visible))
+	-- Percent needs every amount plain; otherwise it is left blank.
+	local total = session and Plain(session.totalAmount)
+	if type(total) ~= 'number' and count > 0 then
+		total = 0
+		for _, source in ipairs(sources) do
+			local amount = source.totalAmount
+			if IsSecret(amount) or type(amount) ~= 'number' then total = nil break end
+			total = total + amount
+		end
+	end
+	local top = count > 0 and sources[1]
+	for index, row in ipairs(window.rows) do
+		local rank = window.offset + index
+		local source = row.enabled and rank <= count and sources[rank]
+		if source then UI:Safe(FillOwnRow, row, source, rank, top, total)
+		else row:Hide(); row.source = nil end
+	end
+	window.empty:SetShown(count == 0)
+	local seconds = Duration(kind, id)
+	window.clock:SetText(Clock(seconds))
+	-- A clock that went back to the start: a new fight began.
+	local plain = Plain(seconds)
+	if type(plain) == 'number' and type(window.lastSeconds) == 'number' and plain + 1 < window.lastSeconds then Sweep(window) end
+	window.lastSeconds = plain
 end
 
 local queued
@@ -868,82 +1230,329 @@ local function QueueOwn()
 	queued = true
 	C_Timer.After(0.25, function()
 		queued = false
-		UI:Safe(UpdateOwn)
+		for _, window in ipairs(owns) do UI:Safe(UpdateOwn, window) end
 	end)
 end
 
-local function OwnMenu(anchor)
-	local db = DB()
+-- Pickers --------------------------------------------------------------------------------------
+local function TypeMenu(window)
+	local cfg = Cfg(window.index)
+	local list = Types()
+	local items = {}
+	for _, entry in ipairs(list) do items[#items + 1] = {text = entry[2], checked = cfg.type == entry[1]} end
+	Kit:Menu(window.typeKey, items, function(index)
+		if not list[index] then return end
+		cfg.type = list[index][1]
+		window.offset = 0
+		OwnSound('tick')
+		UI:Safe(UpdateOwn, window)
+	end, {side = 'CURSOR', width = 150})
+end
+
+local function SessionMenu(window)
+	local cfg = Cfg(window.index)
 	local items, actions = {}, {}
-	for _, entry in ipairs(TYPES) do
-		items[#items + 1] = {text = entry[3], checked = db.ownType == entry[1]}
-		actions[#actions + 1] = function() Kit:SetOption('meters.ownType', entry[1]) end
+	local function Add(text, checked, action) items[#items + 1] = {text = text, checked = checked}; actions[#items] = action end
+	Add('Current fight', cfg.session == 'current', function() cfg.session = 'current' end)
+	Add('Overall', cfg.session == 'overall', function() cfg.session = 'overall' end)
+	local recent = Recent()
+	if #recent > 0 then
+		items[#items + 1] = {separator = true}
+		-- Newest first, at most ten.
+		for index = #recent, max(1, #recent - 9), -1 do
+			local entry = recent[index]
+			local id = entry.sessionID
+			if not IsSecret(id) and type(id) == 'number' then
+				local name = entry.name
+				if IsSecret(name) or type(name) ~= 'string' or name == '' then name = format('Fight %d', id) end
+				Add(format('%s  %s', name, Clock(entry.durationSeconds)), cfg.session == id, function() cfg.session = id end)
+			end
+		end
 	end
-	items[#items + 1] = {separator = true}; actions[#actions + 1] = false
-	items[#items + 1] = {text = 'This fight', checked = db.ownSession ~= 'overall'}
-	actions[#actions + 1] = function() Kit:SetOption('meters.ownSession', 'current') end
-	items[#items + 1] = {text = 'Overall', checked = db.ownSession == 'overall'}
-	actions[#actions + 1] = function() Kit:SetOption('meters.ownSession', 'overall') end
-	items[#items + 1] = {separator = true}; actions[#actions + 1] = false
-	items[#items + 1] = {text = 'Reset'}
-	actions[#actions + 1] = function()
-		if C_DamageMeter.ResetAllCombatSessions then pcall(C_DamageMeter.ResetAllCombatSessions) end
-		QueueOwn()
-	end
-	Kit:Menu(anchor, items, function(index) if actions[index] then actions[index]() end end, {side = 'CURSOR', width = 160})
+	Kit:Menu(window.sessionKey, items, function(index)
+		if not actions[index] then return end
+		actions[index]()
+		window.offset = 0
+		OwnSound('tick')
+		UI:Safe(UpdateOwn, window)
+	end, {side = 'CURSOR', width = 200})
 end
 
-local combatTicker
-local function BuildOwn()
-	if own or not HasMeterAPI() then return end
+local function ConfirmReset()
+	Kit:AlertDialog({title = 'Reset the meter', confirm = 'Reset',
+		text = 'Every fight the game\'s meter has recorded is cleared, in every window.',
+		onConfirm = function()
+			if C_DamageMeter.ResetAllCombatSessions then pcall(C_DamageMeter.ResetAllCombatSessions) end
+			OwnSound('latch-up')
+			for _, window in ipairs(owns) do Sweep(window) end
+			QueueOwn()
+		end})
+end
+
+-- Spell breakdown on hover ------------------------------------------------------------------------
+local card
+local CARD_ROWS, CARD_WIDTH = 8, 240
+
+local function Card()
+	if card then return card end
+	card = Kit:Device(UIParent, {surface = 'dark', model = 'DM', title = '', width = CARD_WIDTH, height = 60, radius = 8})
+	card:SetFrameStrata('TOOLTIP')
+	Kit:Relevel(card)
+	card:EnableMouse(false)
+	card.kind = Kit:Label(card, '', 'darkDim', 8)
+	card.kind:SetPoint('TOPRIGHT', -10, -8)
+	card.note = Kit:Text(card, '', 8, 'darkDim', false)
+	card.note:SetPoint('TOPLEFT', 10, -26)
+	card.note:SetPoint('RIGHT', -10, 0)
+	card.note:SetJustifyH('LEFT')
+	card.rows = {}
+	for index = 1, CARD_ROWS do
+		local line = CreateFrame('Frame', nil, card)
+		line:SetHeight(14)
+		line:SetPoint('TOPLEFT', 10, -24 - (index - 1) * 16)
+		line:SetPoint('TOPRIGHT', -10, -24 - (index - 1) * 16)
+		line.icon = line:CreateTexture(nil, 'ARTWORK')
+		line.icon:SetSize(12, 12)
+		line.icon:SetPoint('LEFT')
+		line.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		line.bar = CreateFrame('StatusBar', nil, line)
+		line.bar:SetStatusBarTexture(Kit.media..'bar-flat.tga')
+		line.bar:SetPoint('TOPLEFT', line.icon, 'TOPRIGHT', 4, 0)
+		line.bar:SetPoint('BOTTOMRIGHT')
+		line.bar:SetMinMaxValues(0, 1)
+		local back = line.bar:CreateTexture(nil, 'BACKGROUND')
+		back:SetAllPoints()
+		back:SetColorTexture(1, 1, 1, 1)
+		Kit:Tint(back, 'glass', 0.9)
+		line.texts = CreateFrame('Frame', nil, line.bar)
+		line.texts:SetAllPoints()
+		line.texts:SetFrameLevel(line.bar:GetFrameLevel() + 2)
+		line.pct = Kit:Text(line.texts, '', 8, 'darkDim', false, true)
+		line.pct:SetPoint('RIGHT', -3, 0)
+		line.amount = Kit:Text(line.texts, '', 8, 'darkInk', true, true)
+		line.amount:SetPoint('RIGHT', line.pct, 'LEFT', -5, 0)
+		Kit:Font(line.amount, 8, 'OUTLINE', true, 'numbers')
+		Kit:Font(line.pct, 8, 'OUTLINE', false, 'numbers')
+		line.name = Kit:Text(line.texts, '', 8, 'darkInk', false, true)
+		line.name:SetPoint('LEFT', 3, 0)
+		line.name:SetPoint('RIGHT', line.amount, 'LEFT', -5, 0)
+		line.name:SetJustifyH('LEFT')
+		line.name:SetWordWrap(false)
+		card.rows[index] = line
+	end
+	card:Hide()
+	return card
+end
+
+function HideBreakdown() if card then card:Hide() end end
+
+function ShowBreakdown(row)
+	local source, window = row.source, row.window
+	if not source then return end
+	local cfg = Cfg(window.index)
+	local kind, id = SessionOf(cfg)
+	local panel = Card()
+	panel.model:SetText('DM')
+	panel.title:SetText(source.name) -- may be secret: a setter only
+	panel.kind:SetText(strupper(TypeLabel(cfg.type)))
+	-- In a fight a row's GUID is secret and can't be asked about, except your own.
+	local guid, creature = source.sourceGUID, source.sourceCreatureID
+	if IsSecret(guid) or IsSecret(creature) then
+		local mine = source.isLocalPlayer
+		if not IsSecret(mine) and mine == true then guid, creature = UnitGUID('player'), nil else guid, creature = nil, nil end
+	end
+	local spells
+	if guid or creature then
+		local ok, data
+		if id and C_DamageMeter.GetCombatSessionSourceFromID then
+			ok, data = pcall(C_DamageMeter.GetCombatSessionSourceFromID, id, MeterType(cfg), guid, creature)
+		elseif C_DamageMeter.GetCombatSessionSourceFromType then
+			ok, data = pcall(C_DamageMeter.GetCombatSessionSourceFromType, kind, MeterType(cfg), guid, creature)
+		end
+		spells = ok and type(data) == 'table' and type(data.combatSpells) == 'table' and data.combatSpells or nil
+	end
+	local count = spells and min(#spells, CARD_ROWS) or 0
+	panel.note:SetShown(count == 0)
+	panel.note:SetText((guid or creature) and 'No spells recorded.' or 'Spell details show once the fight is over.')
+	local total
+	if count > 0 then
+		total = 0
+		for _, spell in ipairs(spells) do
+			local amount = spell.totalAmount
+			if IsSecret(amount) or type(amount) ~= 'number' then total = nil break end
+			total = total + amount
+		end
+	end
+	local getIcon, getName = C_Spell and C_Spell.GetSpellTexture, C_Spell and C_Spell.GetSpellName
+	for index, line in ipairs(panel.rows) do
+		local spell = index <= count and spells[index]
+		if spell then
+			line:Show()
+			-- The spell's ID, icon and name may be secret: tested by type only, set as they are.
+			local texture
+			if getIcon then
+				local ok, value = pcall(getIcon, spell.spellID)
+				if ok then texture = value end
+			end
+			if type(texture) ~= 'nil' then line.icon:SetTexture(texture) else line.icon:SetTexture(134400) end
+			local name
+			if getName then
+				local ok, value = pcall(getName, spell.spellID)
+				if ok then name = value end
+			end
+			if type(name) ~= 'nil' then line.name:SetText(name) else line.name:SetText('') end
+			pcall(line.bar.SetMinMaxValues, line.bar, 0, spells[1].totalAmount)
+			pcall(line.bar.SetValue, line.bar, spell.totalAmount)
+			line.bar:SetStatusBarColor(Kit:RGB('lamp'))
+			SetNumber(line.amount, spell.totalAmount)
+			local amount = spell.totalAmount
+			if total and total > 0 and not IsSecret(amount) and type(amount) == 'number' then
+				line.pct:SetFormattedText('%d%%', floor(amount / total * 100 + 0.5))
+			else
+				line.pct:SetText('')
+			end
+		else
+			line:Hide()
+		end
+	end
+	panel:SetHeight(32 + max(count, 1) * 16)
+	panel:ClearAllPoints()
+	local right = Plain(window:GetRight())
+	local screen = UIParent:GetRight()
+	if right and screen and right + CARD_WIDTH + 12 > screen then
+		panel:SetPoint('TOPRIGHT', window, 'TOPLEFT', -6, 0)
+	else
+		panel:SetPoint('TOPLEFT', window, 'TOPRIGHT', 6, 0)
+	end
+	panel:Show()
+end
+
+-- Building -------------------------------------------------------------------------------------
+local function HeaderKey(window, text, width, onClick, icon)
+	local sound
+	if not DB().ownSounds then sound = false end
+	return Kit:Key(window, {text = text, icon = icon, width = width, height = 18, textSize = 8, onClick = onClick, sound = sound})
+end
+
+local function BuildOwn(index)
+	if owns[index] or not HasMeterAPI() then return owns[index] end
 	local db = DB()
-	own = Kit:Device(UIParent, {model = 'DM-1', title = 'Damage', radius = 10, width = db.ownWidth, height = 120})
-	own:SetFrameStrata('LOW')
-	own:SetFrameLevel(4)
-	Kit:Relevel(own)
-	own.rows = {}
-	own.display = Kit:Screen(own, {inset = 3, radius = 6})
-	own.display:SetPoint('TOPLEFT', 8, -HEADER)
-	own.display:SetPoint('BOTTOMRIGHT', -8, 8)
-	Kit:Relevel(own.display)
-	own.clockPanel = Kit:LCDPanel(own, {radius = 3})
-	own.clockPanel:SetSize(44, 14)
-	own.clockPanel:SetPoint('TOPRIGHT', -8, -5)
-	own.clock = Kit:Text(own.clockPanel, '--:--', 8, 'lcdInk', true)
-	own.clock:SetPoint('CENTER')
-	own.title:ClearAllPoints()
-	own.title:SetPoint('LEFT', own.model, 'RIGHT', 5, 0)
-	own.title:SetPoint('RIGHT', own.clockPanel, 'LEFT', -6, 0)
-	own.empty = Kit:Label(own.display.screen, 'No data', 'darkDim', 8)
-	own.empty:SetPoint('CENTER')
-	-- Left-click the header: next type. Right-click: types, session and reset.
-	own:EnableMouse(true)
-	own:SetScript('OnMouseUp', function(self, button)
-		local _, y = GetCursorPosition()
-		local top = self:GetTop()
-		if top and (top - y / self:GetEffectiveScale()) > HEADER then return end
-		if button == 'RightButton' then return OwnMenu(self) end
-		Kit:Play('tick')
-		local _, index = TypeOf(DB().ownType)
-		Kit:SetOption('meters.ownType', TYPES[index % #TYPES + 1][1])
+	local window = Kit:Device(UIParent, {model = 'DM-'..index, title = '', radius = 10, width = db.ownWidth, height = 160})
+	window.index = index
+	window:SetFrameStrata('LOW')
+	window:SetFrameLevel(4)
+	Kit:Relevel(window)
+	window:SetClampedToScreen(true)
+	window:SetResizable(true)
+	if window.SetResizeBounds then window:SetResizeBounds(200, SizeFor(1), 640, SizeFor(40)) end
+	window.rows = {}
+	window.offset = 0
+	window.display = Kit:Screen(window, {inset = 3, radius = 6})
+	window.display:SetPoint('TOPLEFT', 8, -HEADER)
+	window.display:SetPoint('BOTTOMRIGHT', -8, 8)
+	Kit:Relevel(window.display)
+	-- Header: lamp, model, type and session keys, reset, and the session clock.
+	window.title:Hide()
+	window.typeKey = HeaderKey(window, 'Damage', 74, function() TypeMenu(window) end)
+	window.typeKey:SetPoint('LEFT', window.model, 'RIGHT', 6, 0)
+	window.sessionKey = HeaderKey(window, 'Current', 62, function() SessionMenu(window) end)
+	window.sessionKey:SetPoint('LEFT', window.typeKey, 'RIGHT', 4, 0)
+	window.clockPanel = Kit:LCDPanel(window, {radius = 3})
+	window.clockPanel:SetSize(44, 16)
+	window.clockPanel:SetPoint('TOPRIGHT', -8, -5)
+	window.clock = Kit:Text(window.clockPanel, '--:--', 9, 'lcdInk', true)
+	Kit:Font(window.clock, 9, nil, true, 'numbers')
+	window.clock:SetPoint('RIGHT', -5, 0)
+	window.ghost = Kit:Text(window.clockPanel, '88:88', 9, 'lcdGhost', true)
+	Kit:Font(window.ghost, 9, nil, true, 'numbers')
+	window.ghost:SetPoint('RIGHT', -5, 0)
+	window.ghost:SetDrawLayer('ARTWORK', -1)
+	window.resetKey = HeaderKey(window, nil, 22, ConfirmReset, 'trash')
+	window.resetKey:SetPoint('RIGHT', window.clockPanel, 'LEFT', -4, 0)
+	window.empty = Kit:Label(window.display.screen, 'No data', 'darkDim', 8)
+	window.empty:SetPoint('CENTER')
+	-- Scroll the list with the wheel.
+	window.display:EnableMouseWheel(true)
+	window.display:SetScript('OnMouseWheel', function(_, delta)
+		window.offset = (window.offset or 0) - delta
+		UI:Safe(UpdateOwn, window)
 	end)
-	LayoutOwn()
-	UI:RegisterMover(own, 'dm.own', 'Meter', {'BOTTOMRIGHT', -16, 260})
-	local events = CreateFrame('Frame')
+	-- The grip: drag to size; the height snaps to whole rows.
+	window.grip = CreateFrame('Button', nil, window)
+	window.grip:SetSize(12, 12)
+	window.grip:SetPoint('BOTTOMRIGHT', -2, 2)
+	window.grip:SetFrameLevel(window.display:GetFrameLevel() + 5)
+	local glyph = Kit:Icon(window.grip, 'grip', 10, 'darkDim')
+	glyph:SetPoint('CENTER')
+	window.grip:SetScript('OnMouseDown', function(_, button)
+		if button ~= 'LeftButton' or InCombatLockdown() or window.docked then return end
+		window.dragging = true
+		window:StartSizing('BOTTOMRIGHT')
+	end)
+	window.grip:SetScript('OnMouseUp', function()
+		window:StopMovingOrSizing()
+		window.dragging = false
+		if window.docked then return end
+		local cfg = Cfg(window.index)
+		local width, height = Plain(window:GetWidth()), Plain(window:GetHeight())
+		if width and height then
+			cfg.width = floor(width + 0.5)
+			cfg.rows = max(1, floor((height - HEADER - 8 - PAD * 2 + ROW_GAP) / (RowHeight() + ROW_GAP) + 0.5))
+		end
+		LayoutOwn(window)
+		UI:PlaceMover(OWN_KEYS[window.index])
+		UI:Safe(UpdateOwn, window)
+	end)
+	window:HookScript('OnSizeChanged', function()
+		if window.sizing then return end
+		window.sizing = true
+		UI:Safe(LayoutOwn, window)
+		window.sizing = false
+	end)
+	window:HookScript('OnHide', HideBreakdown)
+	owns[index] = window
+	LayoutOwn(window)
+	UI:RegisterMover(window, OWN_KEYS[index], index == 1 and 'Meter' or 'Meter '..index, OWN_SPOTS[index])
+	return window
+end
+
+local driver, combatTicker
+local function Events()
+	if driver then return end
+	driver = CreateFrame('Frame')
 	for _, event in ipairs({'DAMAGE_METER_COMBAT_SESSION_UPDATED', 'DAMAGE_METER_CURRENT_SESSION_UPDATED', 'DAMAGE_METER_RESET',
 		'PLAYER_REGEN_DISABLED', 'PLAYER_REGEN_ENABLED', 'GROUP_ROSTER_UPDATE', 'PLAYER_ENTERING_WORLD'}) do
-		pcall(events.RegisterEvent, events, event)
+		pcall(driver.RegisterEvent, driver, event)
 	end
-	events:SetScript('OnEvent', function(_, event)
+	driver:SetScript('OnEvent', function(_, event)
 		if event == 'PLAYER_REGEN_DISABLED' then
-			Kit:SetLed(own.lamp, true)
+			for _, window in ipairs(owns) do Kit:SetLed(window.lamp, true, 'red'); Sweep(window) end
 			if not combatTicker then combatTicker = C_Timer.NewTicker(1, QueueOwn) end
 		elseif event == 'PLAYER_REGEN_ENABLED' then
-			Kit:SetLed(own.lamp, false)
+			for _, window in ipairs(owns) do Kit:SetLed(window.lamp, false) end
 			if combatTicker then combatTicker:Cancel(); combatTicker = nil end
+		elseif event == 'DAMAGE_METER_RESET' then
+			for _, window in ipairs(owns) do Sweep(window) end
 		end
 		QueueOwn()
 	end)
+end
+
+function BuildOwns()
+	if not DB().own or not HasMeterAPI() then
+		for _, window in ipairs(owns) do window:Hide() end
+		return
+	end
+	local count = Kit:Clamp(floor(DB().ownCount or 1), 1, #OWN_KEYS)
+	for index = 1, #OWN_KEYS do
+		if index <= count then
+			local window = BuildOwn(index)
+			if window then window:Show(); LayoutOwn(window) end
+		elseif owns[index] then
+			owns[index]:Hide()
+		end
+	end
+	Events()
 	QueueOwn()
 end
 
@@ -951,12 +1560,13 @@ end
 local dock
 function Dock()
 	local db = DB()
+	local first = owns[1]
 	local windows = {}
 	if db.dock then
 		for _, instance in ipairs(DetailsWindows()) do
 			if #windows < (db.dockWindows or 1) then windows[#windows + 1] = instance end
 		end
-		if own and #windows < 2 then windows[#windows + 1] = own end
+		if first and first:IsShown() and #windows < 2 then windows[#windows + 1] = first end
 	end
 	-- Windows leaving the dock get their own housings back.
 	for target, housing in pairs(housings) do
@@ -965,11 +1575,11 @@ function Dock()
 			housing:SetShown(target:IsShown())
 		end
 	end
-	if own and own.docked then
-		own.docked = nil
-		own.shell:Show()
-		UI:PlaceMover('dm.own')
-		LayoutOwn()
+	if first and first.docked then
+		first.docked = nil
+		first.shell:Show()
+		UI:PlaceMover(OWN_KEYS[1])
+		LayoutOwn(first)
 	end
 	if not db.dock or #windows == 0 then
 		if dock then dock:Hide() end
@@ -990,13 +1600,13 @@ function Dock()
 	local width = db.dockWidth - inset * 2
 	for index, window in ipairs(windows) do
 		local y = -top - (index - 1) * (height + gap)
-		if window == own then
-			own.docked = true
-			own.shell:Hide()
-			own:ClearAllPoints()
-			own:SetPoint('TOPLEFT', dock, 'TOPLEFT', inset - 8, y + HEADER)
-			own:SetSize(width + 16, height + HEADER)
-			LayoutOwn()
+		if window == first then
+			first.docked = true
+			first.shell:Hide()
+			first:ClearAllPoints()
+			first:SetPoint('TOPLEFT', dock, 'TOPLEFT', inset - 8, y + HEADER)
+			first:SetSize(width + 16, height + HEADER)
+			LayoutOwn(first)
 		else
 			local frame = window.baseframe
 			local insets = DetailsInsets(window)
@@ -1020,14 +1630,14 @@ end
 function module:Enable()
 	RegisterMedia()
 	WaitForDetails()
-	if Loaded('Blizzard_DamageMeter') then HookBlizzard() end
-	if DB().own then BuildOwn() end
-	local driver = CreateFrame('Frame')
-	driver:RegisterEvent('ADDON_LOADED')
-	driver:RegisterEvent('PLAYER_ENTERING_WORLD')
-	driver:SetScript('OnEvent', function(_, event, name)
+	if Loaded('Blizzard_DamageMeter') then UI:Safe(HookBlizzard) end
+	BuildOwns()
+	local events = CreateFrame('Frame')
+	events:RegisterEvent('ADDON_LOADED')
+	events:RegisterEvent('PLAYER_ENTERING_WORLD')
+	events:SetScript('OnEvent', function(_, event, name)
 		if event == 'ADDON_LOADED' then
-			if name == 'Blizzard_DamageMeter' then C_Timer.After(0, HookBlizzard)
+			if name == 'Blizzard_DamageMeter' then C_Timer.After(0, function() UI:Safe(HookBlizzard) end)
 			elseif name == 'Skada' then C_Timer.After(1, StyleSkada)
 			elseif name == 'Recount' then C_Timer.After(1, StyleRecount) end
 		else
@@ -1045,9 +1655,8 @@ local signature
 local function Signature()
 	local db = DB()
 	return strjoin(',', tostringall(db.bar, db.barHeight, db.fontSize, db.classColors, db.details, db.detailsBase, db.dock,
-		db.dockWidth, db.dockHeight, db.dockWindows, db.ownType, db.ownSession, db.ownRows, db.ownWidth, db.blizzFill,
-		db.blizzRanks, db.blizzRate, Kit:DB().finish,
-		Kit:DB().accent))
+		db.dockWidth, db.dockHeight, db.dockWindows, db.ownRows, db.ownWidth, db.ownCount, db.ownRate, db.ownPercent,
+		db.ownNameColor, db.replaceGame, db.blizzFill, db.blizzRanks, db.blizzRate, Kit:DB().finish, Kit:DB().accent))
 end
 
 function module:Refresh()
@@ -1055,52 +1664,72 @@ function module:Refresh()
 	if now == signature then return end
 	signature = now
 	if Details() then StyleAllDetails(true) end
+	if _G.DamageMeter then
+		UI:Safe(ApplyReplace)
+		-- Shown again: skin it in place (once per window).
+		if not Replacing() and DB().blizzard then UI:Safe(StyleBlizzard) end
+	end
 	for _, Each in ipairs(restyle) do UI:Safe(Each) end
-	if own then LayoutOwn(); QueueOwn() end
+	BuildOwns()
+	for _, window in ipairs(owns) do UI:Safe(LayoutOwn, window) end
+	QueueOwn()
 	Dock()
 end
 
 -- Hub page ---------------------------------------------------------------------------------
-local TYPE_ITEMS = {}
-for _, entry in ipairs(TYPES) do TYPE_ITEMS[#TYPE_ITEMS + 1] = {entry[1], entry[3]} end
 local function Count(v) return format('%d', v) end
+local function ResetSizes()
+	local db = DB()
+	for _, cfg in pairs(type(db.windows) == 'table' and db.windows or {}) do
+		if type(cfg) == 'table' then cfg.rows, cfg.width = nil, nil end
+	end
+	for _, window in ipairs(owns) do UI:Safe(LayoutOwn, window) end
+	QueueOwn()
+end
 
 UI:RegisterPage('meters', {title = 'Damage meters', order = 18, cards = {
+	{title = 'DM-1 meter', rows = {
+		{'switch', 'DM-1 meter', 'meters.own', 'SPEC-01 meter windows reading the game\'s own combat data. Pick the type and the fight from each window\'s header.', reload = true},
+		{'switch', 'Replace the game\'s meter', 'meters.replaceGame', 'Hide the game\'s own meter windows while the DM-1 meter is on. Edit Mode still places them.'},
+		{'slider', 'Windows', 'meters.ownCount', 1, 3, 1, 'Up to three DM-1 windows, each with its own type and fight.', format = Count},
+		{'slider', 'Rows', 'meters.ownRows', 3, 20, 1, 'Rows per window, unless sized with its grip.', format = Count},
+		{'slider', 'Width', 'meters.ownWidth', 200, 480, 10, nil, format = Count},
+		{'button', 'Window sizes', 'Reset', ResetSizes, 'Windows sized with their grip go back to Rows and Width.'},
+		{'switch', 'Per second', 'meters.ownRate', 'The per-second figure beside each total.'},
+		{'switch', 'Percent', 'meters.ownPercent', 'Each row\'s share of the total (blank while the game keeps amounts secret).'},
+		{'switch', 'Class-colored names', 'meters.ownNameColor'},
+		{'switch', 'Spell breakdown', 'meters.ownTooltip', 'Hover a row for its top spells.'},
+		{'switch', 'Animations', 'meters.ownMotion', 'Rows slide in, bars glide, a new fight sweeps the header lamp.'},
+		{'switch', 'Sounds', 'meters.ownSounds', 'Ticks on the pickers, a latch on reset.'},
+	}},
 	{title = 'Style', rows = {
 		{'segmented', 'Meters', 'style.meters', items = {{'device', 'Device'}, {'blizzard', 'Blizzard'}}, reload = true,
 			note = 'Meter windows in dark SPEC-01 housings, with SPEC-01 bars and type.'},
 		{'segmented', 'Bars', 'meters.bar', items = {{'dots', 'Dots'}, {'segments', 'Segments'}, {'flat', 'Flat'}}},
-		{'slider', 'Bar height', 'meters.barHeight', 10, 28, 1, nil, format = Count},
+		{'slider', 'Bar height', 'meters.barHeight', 12, 28, 1, nil, format = Count},
 		{'slider', 'Text size', 'meters.fontSize', 8, 14, 1, nil, format = Count},
 		{'switch', 'Class colors', 'meters.classColors', 'Bars in class colors; off uses the lamp color.'},
 	}},
 	{title = 'Meters', rows = {
 		{'switch', 'Details!', 'meters.details', 'Bars, type and housing set through Details\' own window settings.', reload = true},
 		{'switch', 'Flat base skin', 'meters.detailsBase', 'Each Details window starts on its flat Minimalistic skin, once; a skin you pick later stays.'},
-		{'switch', 'Blizzard meter', 'meters.blizzard', 'The game\'s own damage meter windows. Edit Mode places them.', reload = true},
+		{'switch', 'Blizzard meter skin', 'meters.blizzard', 'When the game\'s meter is shown (not replaced), its windows are skinned in place.', reload = true},
 		{'switch', 'Skada', 'meters.skada', nil, reload = true},
 		{'switch', 'Recount', 'meters.recount', nil, reload = true},
 	}},
-	{title = 'Game meter', rows = {
+	{title = 'Game meter skin', rows = {
 		{'switch', 'Device header', 'meters.blizzHeader', 'A printed DM-1 header (lamp, model, name) above each window.', reload = true},
 		{'segmented', 'Fill', 'meters.blizzFill', items = {{'class', 'Class'}, {'key', 'Key color'}}},
 		{'switch', 'Ranks', 'meters.blizzRanks', 'Each row\'s place printed on its icon.'},
 		{'switch', 'Per second', 'meters.blizzRate', 'The per-second figure, dim, before the total.'},
-		{'switch', 'Animations', 'meters.blizzMotion', 'Bars glide, new rows fade in, a fight start sweeps the header lamps.'},
+		{'switch', 'Animations', 'meters.blizzMotion', 'New rows fade in, a fight start sweeps the header lamps.'},
 		{'switch', 'Sounds', 'meters.blizzSounds', 'Ticks on the dropdowns, a latch on reset.'},
 		{'switch', 'Top spot blip', 'meters.blizzTopBlip', 'A quiet blip when you take the top spot (at most every 20 s).'},
 	}},
 	{title = 'Dock', rows = {
-		{'switch', 'Dock', 'meters.dock', 'One DM-0 device holding Details windows (and the DM-1 meter). Place it with /spec move.'},
+		{'switch', 'Dock', 'meters.dock', 'One DM-0 device holding Details windows (and the first DM-1 window). Place it in Unlock mode.'},
 		{'slider', 'Dock width', 'meters.dockWidth', 200, 640, 10, nil, format = Count},
 		{'slider', 'Dock height', 'meters.dockHeight', 120, 520, 10, nil, format = Count},
 		{'slider', 'Docked windows', 'meters.dockWindows', 1, 2, 1, nil, format = Count},
-	}},
-	{title = 'DM-1 meter', rows = {
-		{'switch', 'Own meter', 'meters.own', 'A DM-1 device reading the game\'s own combat data. Click its header for the next type; right-click for more.', reload = true},
-		{'dropdown', 'Shows', 'meters.ownType', items = TYPE_ITEMS},
-		{'segmented', 'Session', 'meters.ownSession', items = {{'current', 'This fight'}, {'overall', 'Overall'}}},
-		{'slider', 'Rows', 'meters.ownRows', 3, 20, 1, nil, format = Count},
-		{'slider', 'Width', 'meters.ownWidth', 180, 420, 10, nil, format = Count},
 	}},
 }})
