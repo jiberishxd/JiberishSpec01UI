@@ -1664,6 +1664,30 @@ local function WatchAlerts()
 end
 
 local laying
+-- The game's own bag bar and micro menu code re-anchors these buttons now and
+-- then (after a bag change, a layout pass); whenever one is moved off our
+-- device or handed another parent, put the menu back together a frame later.
+local guarded, pendingLayout = setmetatable({}, {__mode = 'k'}), false
+local function Relayout()
+	if pendingLayout then return end
+	pendingLayout = true
+	C_Timer.After(0, function()
+		pendingLayout = false
+		UI:Safe(LayoutMenu)
+	end)
+end
+local function Guard(button)
+	if guarded[button] then return end
+	guarded[button] = true
+	hooksecurefunc(button, 'SetPoint', function(self)
+		if laying then return end
+		local _, relative = self:GetPoint(1)
+		if relative ~= menu then Relayout() end
+	end)
+	hooksecurefunc(button, 'SetParent', function(_, parent)
+		if not laying and parent ~= menu then Relayout() end
+	end)
+end
 function LayoutMenu()
 	if not menu or laying then return end
 	laying = true
@@ -1671,6 +1695,7 @@ function LayoutMenu()
 	local x, tallest = PAD, 0
 	local function Place(button, size)
 		if not button or Forbidden(button) then return end
+		Guard(button)
 		if button:GetParent() ~= menu then button:SetParent(menu) end
 		if size then button:SetSize(size, size) end
 		DressMenuButton(button)
