@@ -19,9 +19,14 @@
 -- (the clock runs the same either way); a key with no estimate at all takes
 -- lanes in turn.
 --
--- Only what is on the line shows: a timer longer than the line waits unseen
--- past its clipped end and slides on as it drops below the line's length, and
--- auras that last until cancelled never show.
+-- Only what is on the line shows. Each key sits in a window frame whose alpha
+-- says whether its time left is on the line (above zero, at most the line's
+-- length): set outright for a plain time, and for a secret one by a step curve
+-- the duration object evaluates itself (the answer goes straight to the
+-- alpha). A longer timer stays hidden until it drops onto the line; one that
+-- has run out (or a cooldown that is ready) leaves at once. Auras that last
+-- until cancelled are never tracked. The bars also reach well past the line
+-- and live in a clip frame, so nothing can be drawn beyond its ends.
 local _, UI = ...
 local Kit = UI.Kit
 
@@ -302,7 +307,13 @@ local function NewEntry(index)
 	entry.gate = CreateFrame('Frame', nil, entry.bar)
 	entry.gate:SetAllPoints(clip)
 	entry.gate:EnableMouse(false)
-	entry.motion = CreateFrame('Frame', nil, entry.gate)
+	-- The window: shown only while the time left is on the line (above zero,
+	-- at most the line's length). Its alpha is the source of truth for that.
+	entry.window = CreateFrame('Frame', nil, entry.gate)
+	entry.window:SetAllPoints(clip)
+	entry.window:EnableMouse(false)
+	entry.window:SetAlpha(0)
+	entry.motion = CreateFrame('Frame', nil, entry.window)
 	entry.motion:SetAllPoints(clip)
 	entry.motion:EnableMouse(false)
 	entry.key = MakeKey(entry.motion, level)
@@ -429,6 +440,31 @@ local Pop
 -- secret still has an estimate for lanes and minutes.
 local known, knownAt = {}, {}
 
+-- Whether a time left is on the line: 0 below 0.05 s (run out, or a cooldown
+-- that is ready), 1 up to the line's length, 0 beyond. A step curve the
+-- duration object evaluates itself, so a secret time is never read; the
+-- answer (secret or not) goes straight to an alpha.
+local windowCurves = {}
+local function WindowCurve(maxTime)
+	local curve = windowCurves[maxTime]
+	if curve ~= nil then return curve or nil end
+	curve = false
+	if C_CurveUtil and C_CurveUtil.CreateCurve then
+		local ok, made = pcall(C_CurveUtil.CreateCurve)
+		if ok and made then
+			if made.SetType and Enum and Enum.LuaCurveType and Enum.LuaCurveType.Step then made:SetType(Enum.LuaCurveType.Step) end
+			made:AddPoint(0, 0)
+			made:AddPoint(0.05, 1)
+			made:AddPoint(maxTime + 0.001, 0)
+			curve = made
+		end
+	end
+	windowCurves[maxTime] = curve
+	return curve or nil
+end
+
+local function OnLine(left, maxTime) return (left >= 0.05 and left <= maxTime) and 1 or 0 end
+
 local function Tick(entry, now)
 	local db = DB()
 	local remaining, secret, value = nil, false, nil
@@ -456,11 +492,25 @@ local function Tick(entry, now)
 		elseif entry.estimate and entry.estimate >= 60 then text:SetText(TimeText(entry.estimate))
 		elseif secret then text:SetFormattedText('%.1f', value) end -- the widget formats a secret; no Lua reads it
 	end
+	-- Shown only while on the line: a plain time decides outright, a secret one
+	-- through the curve (exact), else the estimate.
+	local maxTime = max(db.maxTime or 60, 1)
+	if remaining then
+		entry.window:SetAlpha(OnLine(remaining, maxTime))
+	else
+		local curve = secret and entry.duration.EvaluateRemainingDuration and WindowCurve(maxTime)
+		local shown = false
+		if curve then
+			local ok, alpha = pcall(entry.duration.EvaluateRemainingDuration, entry.duration, curve, 0)
+			if ok then entry.window:SetAlpha(alpha); shown = true end
+		end
+		if not shown then entry.window:SetAlpha(entry.estimate and OnLine(entry.estimate, maxTime) or 1) end
+	end
 	-- Arriving: a time read (or estimated) crossing onto the line from beyond
-	-- it fades the key in with a short lamp flash as it comes past the clip.
+	-- it fades the key in with a short lamp flash.
 	local left = remaining or entry.estimate
 	if left then
-		local beyond = left > max(db.maxTime or 60, 1)
+		local beyond = left > maxTime
 		if entry.beyond and not beyond and not Reduced() then
 			entry.motion:SetAlpha(0)
 			Kit:FadeTo(entry.motion, 1, 'FAST')
@@ -753,6 +803,7 @@ local function Assign(entry, item, seen)
 	entry.bar:SetMinMaxValues(0, top)
 	-- Until its first tick, the key waits out of sight past the line.
 	entry.bar:SetValue(top, IMMEDIATE)
+	entry.window:SetAlpha(0)
 	-- A secret "lasts forever" reaches the gate's alpha, untested.
 	entry.gate:SetAlpha(1)
 	if item.hasZero and entry.gate.SetAlphaFromBoolean then entry.gate:SetAlphaFromBoolean(item.zeroFlag, 0, 1) end
