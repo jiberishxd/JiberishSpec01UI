@@ -97,7 +97,7 @@ UI:RegisterDefaults('actionbars', {
 	legendChip = true, countChip = true, keyLed = true, iconInset = 0, emptyAlpha = 0.5,
 	-- The menu and bag keys: SPEC-01 glyphs or the game's art; bag slots show
 	-- the bag's own icon (a glyph only when empty) or always the glyph.
-	menuIcons = 'glyphs', bagIcons = 'items',
+	menuIcons = 'glyphs', bagIcons = 'glyphs',
 	bar1 = BarDefaults(5), bar2 = BarDefaults(5), bar3 = BarDefaults(5), bar4 = BarDefaults(5), bar5 = BarDefaults(5),
 	barPet = BarDefaults(4), barStance = BarDefaults(4),
 })

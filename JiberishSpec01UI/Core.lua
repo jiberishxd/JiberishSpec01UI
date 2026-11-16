@@ -157,6 +157,11 @@ function UI:Migrate(db)
 	end
 	-- The 0.2 styles were renamed: the light housing is 'paper'.
 	if type(db.style) == 'table' and db.style.unitframes == 'device' then db.style.unitframes = 'paper' end
+	-- 0.5.1: bag slots match the menu's glyph keys; the bag pictures stay an option.
+	if type(db.actionbars) == 'table' and not db.actionbars.bagGlyphsMoved then
+		if db.actionbars.bagIcons == 'items' then db.actionbars.bagIcons = 'glyphs' end
+		db.actionbars.bagGlyphsMoved = true
+	end
 	-- 0.5.1: the chat housing switch became a choice of housings.
 	if type(db.chat) == 'table' then
 		if db.chat.housing == true then db.chat.housing = 'device'
