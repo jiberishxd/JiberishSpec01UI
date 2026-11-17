@@ -41,11 +41,21 @@ function Kit:Switch(parent, opts)
 		switch.onLabel = self:Label(switch, (opts.labels and opts.labels[2]) or 'On', 'dim')
 		switch.onLabel:SetPoint('LEFT', switch, 'RIGHT', 8, 0)
 	end
+	-- The state printed in the track, on the side the thumb leaves bare: ON lit
+	-- in the key's ink, OFF in red, so on and off read at a glance on any finish.
+	switch.legendOn = self:Label(switch, 'On', 'onAccent', 6, true)
+	switch.legendOn:SetPoint('LEFT', switch, 'LEFT', 8 * zoom, 0)
+	switch.legendOff = self:Label(switch, 'Off', 'red', 6, true)
+	switch.legendOff:SetPoint('RIGHT', switch, 'RIGHT', -7 * zoom, 0)
+	for _, legend in ipairs({switch.legendOn, switch.legendOff}) do legend:SetDrawLayer('ARTWORK', 2) end
 	local inset = 3 * zoom
 	local function Paint(position)
 		switch.thumb:ClearAllPoints()
 		switch.thumb:SetPoint('LEFT', switch, 'LEFT', inset + position * (width - thumbSize - inset * 2), 0)
 		switch.on:SetAlpha(position)
+		switch.off:SetAlpha(1 - 0.35 * position)
+		switch.legendOn:SetAlpha(position)
+		switch.legendOff:SetAlpha(1 - position)
 	end
 	function switch:SetValue(checked, animate)
 		self.checked = checked and true or false
