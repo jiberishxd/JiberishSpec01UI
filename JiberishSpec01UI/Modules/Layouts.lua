@@ -231,7 +231,7 @@ local EXCLUSIVE = {['group.small'] = 'group.large', ['group.large'] = 'group.sma
 	['group.boss'] = 'group.arena', ['group.arena'] = 'group.boss', ['dm.dock'] = 'dm.own', ['dm.own'] = 'dm.dock'}
 
 -- Sizes for frames not built yet, by key prefix.
-local GUESS = {{'ab.bar', 480, 50}, {'ab.side', 50, 480}, {'ab.menu', 520, 52}, {'ab.', 160, 44},
+local GUESS = {{'ab.bar', 480, 50}, {'ab.side', 50, 480}, {'ab.menu', 160, 60}, {'ab.bags', 160, 34}, {'ab.', 160, 44},
 	{'uf.player', 224, 70}, {'uf.target', 224, 70}, {'uf.party', 176, 50}, {'uf.', 136, 36}, {'cb.', 240, 30},
 	{'group.small', 420, 200}, {'group.large', 560, 300}, {'group.', 200, 300}, {'dm.', 270, 180}, {'tl.', 440, 60}}
 
@@ -277,7 +277,9 @@ local function Solver(preset)
 
 	function s.present(key)
 		if Unmanaged(key) then return false end
-		if docked and DOCKABLE[key] then return false end
+		-- Docked frames are placed by the console. A layout that docks, applied
+		-- before the reload that docks them, places them beside it meanwhile.
+		if docked and DOCKABLE[key] and (UI:MoverDocked(key) or not UI:HasMover(key)) then return false end
 		if key == 'ab.console' then return not free end
 		local bar = key:match('^ab%.bar(%d)$')
 		if bar then return free and tonumber(bar) <= rows end
@@ -372,6 +374,44 @@ local function Solver(preset)
 		return Record(key, x, y, width * (opts.scale or 1), height * (opts.scale or 1), opts.scale or 1)
 	end
 
+	-- Player and target as a mirror pair: the same height, symmetric about
+	-- centreX with `gap` from it to each frame's inner edge. If either spot is
+	-- taken, both move together: up first, then further out, nearest first.
+	-- Only frames placed before (the core) and the game's frames can block a
+	-- pair, so the edge devices placed later have to make room for it.
+	function s.pair(leftKey, rightKey, centreX, gap, y, opts)
+		opts = opts or {}
+		local leftOn, rightOn = s.present(leftKey) and not s.rects[leftKey], s.present(rightKey) and not s.rects[rightKey]
+		if not (leftOn and rightOn) then
+			if leftOn then s.put(leftKey, centreX - gap - s.size(leftKey), y, {nudge = {'up', 'left'}, scale = opts.scale}) end
+			if rightOn then s.put(rightKey, centreX + gap, y, {nudge = {'up', 'right'}, scale = opts.scale}) end
+			return
+		end
+		local start = opts.scale or 1
+		for _, factor in ipairs(SHRINK) do
+			if factor <= start + 0.001 then
+				local lw, lh = s.size(leftKey)
+				local rw, rh = s.size(rightKey)
+				lw, lh, rw, rh = lw * factor, lh * factor, rw * factor, rh * factor
+				local steps = math.ceil(H / STEP)
+				for step = 0, steps do
+					for _, out in ipairs(opts.outward == false and {0} or {0, 1, 2, 3, 4, 6, 8, 12, 16}) do
+						local up = (opts.down and -1 or 1) * step * STEP
+						local spread = out * STEP
+						local lx, rx, ty = centreX - gap - lw - spread, centreX + gap + spread, y + up
+						if Free(leftKey, lx, ty, lw, lh) and Free(rightKey, rx, ty, rw, rh) then
+							Record(leftKey, lx, ty, lw, lh, factor)
+							Record(rightKey, rx, ty, rw, rh, factor)
+							return
+						end
+					end
+				end
+			end
+		end
+		s.put(leftKey, centreX - gap - s.size(leftKey), y, {nudge = {'up', 'left'}})
+		s.put(rightKey, centreX + gap, y, {nudge = {'up', 'right'}})
+	end
+
 	-- Helpers for rules.
 	function s.get(key) return s.rects[key] end
 	function s.top(key, fallback) local rect = s.rects[key] return rect and rect.y + rect.h or fallback end
@@ -422,17 +462,19 @@ local function Edges(s, opts)
 	-- Right edge: side bars centred, the menu in the corner.
 	local sideWidth, sideHeight = s.size('ab.side')
 	s.put('ab.side', W - sideWidth - 6, H / 2 - sideHeight / 2, {nudge = {'down', 'up', 'left'}})
-	-- Bottom-right corner: the menu, the bag keys just left of it. If the
-	-- console reaches the corner, they go up over its right end.
+	-- Bottom-right corner: the menu, the bag keys right-aligned just above it. If
+	-- the console reaches the corner, they go up over its right end.
 	local menuWidth = s.size('ab.menu')
 	s.put('ab.menu', W - menuWidth - MARGIN, MARGIN, {nudge = {'up', 'left'}})
 	local bagKeysWidth = s.size('ab.bags')
-	s.put('ab.bags', s.left('ab.menu', W - MARGIN) - bagKeysWidth - GAP, s.bottom('ab.menu', MARGIN), {nudge = {'left', 'up'}})
+	s.put('ab.bags', s.right('ab.menu', W - MARGIN) - bagKeysWidth, s.top('ab.menu', MARGIN) + 6, {nudge = {'up', 'left'}})
 	-- Meters: a column at the right edge, stacked upward over the menu (or from
 	-- the middle), each at most a third of the screen tall.
 	local meterCap = H * 0.35
 	local meterWidth, meterHeight = s.size('dm.own')
-	local sideRoom = opts.meters == 'middle' and s.size('ab.side') + 12 or 0
+	-- Meters and bags keep left of the side bar column over its whole height.
+	local sideLeft = s.left('ab.side')
+	local sideRoom = sideLeft and (W - sideLeft) + GAP - MARGIN or 0
 	local meterY = opts.meters == 'middle' and H * 0.4 - min(meterHeight, meterCap) / 2
 		or s.highest({'ab.menu', 'ab.bags'}, MARGIN) + GAP
 	s.put('dm.own', W - meterWidth - MARGIN - sideRoom, meterY, {nudge = {'up', 'left'}, scale = edge, maxHeight = meterCap})
@@ -446,7 +488,7 @@ local function Edges(s, opts)
 	end
 	-- Bags over the meters at the right edge.
 	local bagsWidth = s.size('bags.bags')
-	s.put('bags.bags', W - bagsWidth - MARGIN, s.highest({'dm.own', 'dm.own2', 'dm.own3', 'dm.dock', 'ab.menu', 'ab.bags'}, MARGIN) + GAP,
+	s.put('bags.bags', W - bagsWidth - MARGIN - sideRoom, s.highest({'dm.own', 'dm.own2', 'dm.own3', 'dm.dock', 'ab.menu', 'ab.bags'}, MARGIN) + GAP,
 		{nudge = {'up', 'left'}, scale = edge})
 	-- Boss and arena: a column left of the side bars, upper half.
 	local bossWidth, bossHeight = s.size('group.boss')
@@ -522,21 +564,32 @@ local function Console(s)
 	s.put('ab.console', s.W / 2 - width / 2, MARGIN, {nudge = {'up'}})
 end
 
+-- In a docking layout, frames not docked yet (before its reload) sit flush
+-- against the console's sides at its height, cast bars over the console.
+local function Flank(s)
+	local console = s.get('ab.console')
+	if not console then return end
+	s.pair('uf.player', 'uf.target', console.x + console.w / 2, console.w / 2 + 8, console.y)
+	s.put('cb.player', console.x + console.w / 2 - s.size('cb.player') / 2, console.y + console.h + 8, {nudge = {'up'}})
+	s.put('cb.target', s.left('uf.target', console.x + console.w + 8), s.top('uf.target', console.y + console.h) + 6, {nudge = {'up', 'right'}})
+end
+
 PRESETS = {
 	{key = 'console', title = 'Console', model = 'LY-1',
 		note = 'Everything in one CX-1 console at the bottom centre, player and target docked into it, raid above it.',
 		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true, ['actionbars.rows'] = 3, ['actionbars.side'] = true},
 		rules = function(s)
 			Console(s)
+			Flank(s)
 			-- Strips tucked on the console's top edge, left and right.
 			local console = s.get('ab.console')
 			if console then
-				local top = console.y + console.h + 6
+				local top = console.y + console.h + 2
 				s.put('ab.stance', console.x, top, {nudge = {'right', 'up'}})
 				s.put('ab.pet', console.x + console.w - s.size('ab.pet'), top, {nudge = {'left', 'up'}})
 			end
 			-- The timeline centred just over the console; abilities over it; the raid above.
-			s.above('tl.player', {'ab.console', 'ab.stance', 'ab.pet'}, 12)
+			s.above('tl.player', {'ab.console', 'ab.stance', 'ab.pet', 'cb.player'}, 12)
 			s.above('ab.extra', {'tl.player', 'ab.console'}, 12)
 			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.top('tl.player', s.H * 0.3) + 12),
 				{nudge = {'left', 'up'}})
@@ -560,8 +613,7 @@ PRESETS = {
 			Console(s)
 			local console = s.get('ab.console')
 			local cx, cy, cw = console and console.x or s.W / 2, console and console.y or MARGIN, console and console.w or 0
-			s.put('uf.player', cx - s.size('uf.player') - 16, cy, {nudge = {'left', 'up'}})
-			s.put('uf.target', cx + cw + 16, cy, {nudge = {'right', 'up'}})
+			s.pair('uf.player', 'uf.target', cx + cw / 2, cw / 2 + 16, cy)
 			s.above('cb.player', {'ab.console'}, 12)
 			s.above('cb.target', {'cb.player', 'ab.console'}, 6)
 			s.above('tl.player', {'cb.target', 'cb.player', 'ab.console'}, 16)
@@ -579,8 +631,7 @@ PRESETS = {
 			Console(s)
 			local width = s.size('uf.player')
 			local y = max(s.top('ab.console', MARGIN) + 90, s.H * 0.3)
-			s.put('uf.player', s.W / 2 - width - 70, y, {nudge = {'up', 'left'}})
-			s.put('uf.target', s.W / 2 + 70, s.bottom('uf.player', y), {nudge = {'up', 'right'}})
+			s.pair('uf.player', 'uf.target', s.W / 2, 70, y, {outward = false})
 			s.above('tl.player', {'uf.player', 'uf.target'}, 14)
 			local _, castHeight = s.size('cb.player')
 			s.put('cb.player', s.mid('cb.player'), s.bottom('uf.player', y) - castHeight - 10, {nudge = {'down', 'up'}})
@@ -606,8 +657,7 @@ PRESETS = {
 			local rx, ry, rw, rh = raid and raid.x or s.W / 2, raid and raid.y or s.H * 0.3, raid and raid.w or 0, raid and raid.h or 0
 			local _, height = s.size('uf.player')
 			local y = ry + rh / 2 - height / 2
-			s.put('uf.player', rx - s.size('uf.player') - 28, y, {nudge = {'left', 'up', 'down'}})
-			s.put('uf.target', rx + rw + 28, y, {nudge = {'right', 'up', 'down'}})
+			s.pair('uf.player', 'uf.target', rx + rw / 2, rw / 2 + 28, y)
 			Companions(s)
 			s.above('tl.player', {'group.small', 'group.large', 'cb.player'}, 14)
 			s.above('ab.extra', {'tl.player'}, 12)
@@ -649,8 +699,7 @@ PRESETS = {
 		rules = function(s)
 			Console(s)
 			local y = s.top('ab.console', MARGIN) + 20
-			s.put('uf.player', s.W / 2 - s.size('uf.player') * 0.85 - 10, y, {nudge = {'up', 'left'}, scale = 0.9})
-			s.put('uf.target', s.W / 2 + 10, s.bottom('uf.player', y), {nudge = {'up', 'right'}, scale = 0.9})
+			s.pair('uf.player', 'uf.target', s.W / 2, 10, y, {scale = 0.9})
 			s.above('cb.player', {'uf.player', 'uf.target'}, 8, {nudge = {'up'}, scale = 0.9})
 			s.above('tl.player', {'cb.player', 'uf.player'}, 12, {nudge = {'up'}, scale = 0.9})
 			local width = s.size('uf.targettarget')
@@ -672,6 +721,7 @@ PRESETS = {
 			local band = min(s.W, s.H * 16 / 9)
 			local bandLeft = (s.W - band) / 2
 			Console(s)
+			Flank(s)
 			s.above('tl.player', {'ab.console'}, 24)
 			local console = s.get('ab.console')
 			if console then
@@ -698,6 +748,7 @@ PRESETS = {
 			s.reserve(s.W * 0.74, s.H * 0.68, s.W * 0.26, s.H * 0.32)
 			local width = s.size('ab.console')
 			s.put('ab.console', s.W * 0.56 - width / 2, MARGIN, {nudge = {'right', 'up'}})
+			Flank(s)
 			s.above('tl.player', {'ab.console'}, 20)
 			local console = s.get('ab.console')
 			local cx, cy, cw, ch = console and console.x or s.W / 2, console and console.y or MARGIN, console and console.w or 0, console and console.h or 0
