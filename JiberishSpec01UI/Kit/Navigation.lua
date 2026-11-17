@@ -314,8 +314,85 @@ function Kit:ScrollArea(parent, opts)
 		self.content:SetWidth(max(self:GetWidth() - 8, 1))
 		self:Refresh()
 	end)
+	if opts.smooth then self:SmoothScroll(area) end
 	area:Refresh()
 	return area
+end
+
+-- opts.smooth: the wheel eases toward its target (a quick settle, no jumps), the
+-- bar is a hairline rail with a small pill, the content fades out under the
+-- top and bottom edges, and a soft tick marks running into either end.
+-- ScrollTo(offset, instant) keeps working; instant lands at once.
+function Kit:SmoothScroll(area)
+	local opts = area.opts
+	area.target = area.offset or 0
+	area.rail = self:Solid(area, 'line', 'OVERLAY')
+	area.rail:SetWidth(1)
+	area.rail:SetPoint('TOPRIGHT', -2, -4)
+	area.rail:SetPoint('BOTTOMRIGHT', -2, 4)
+	area.thumb:SetDrawLayer('OVERLAY', 1)
+	self:Tint(area.thumb, 'dim')
+	-- Edge fades in the page color.
+	local function Fade(point)
+		local fade = area:CreateTexture(nil, 'OVERLAY', nil, -1)
+		fade:SetColorTexture(1, 1, 1, 1)
+		fade:SetPoint(point..'LEFT')
+		fade:SetPoint(point..'RIGHT', -6, 0)
+		fade:SetHeight(18)
+		fade:Hide()
+		return fade
+	end
+	area.fadeTop, area.fadeBottom = Fade('TOP'), Fade('BOTTOM')
+	local function PaintFades()
+		local r, g, b = Kit:RGB('page')
+		if area.fadeTop.SetGradient and CreateColor then
+			area.fadeTop:SetGradient('VERTICAL', CreateColor(r, g, b, 0), CreateColor(r, g, b, 0.95))
+			area.fadeBottom:SetGradient('VERTICAL', CreateColor(r, g, b, 0.95), CreateColor(r, g, b, 0))
+		end
+	end
+	PaintFades()
+	local refresh = area.Refresh
+	function area:Refresh()
+		refresh(self)
+		local range = max(0, self.content:GetHeight() - self:GetHeight())
+		self.rail:SetShown(range > 0)
+		self.thumb:SetWidth(3)
+		self.fadeTop:SetShown(self.offset > 1)
+		self.fadeBottom:SetShown(self.offset < range - 1)
+	end
+	local function Step(self, elapsed)
+		local range = max(0, self.content:GetHeight() - self:GetHeight())
+		self.target = Kit:Clamp(self.target, 0, range)
+		local diff = self.target - self.offset
+		if math.abs(diff) < 0.5 then
+			self.offset = self.target
+			self:SetScript('OnUpdate', nil)
+		else
+			self.offset = self.offset + diff * min(1, elapsed * 14)
+		end
+		refresh(self)
+		self:Refresh()
+	end
+	function area:ScrollTo(offset, instant)
+		self.target = offset or 0
+		if instant or Kit:Reduced() or not self:IsVisible() then
+			self.offset = self.target
+			self:SetScript('OnUpdate', nil)
+			return self:Refresh()
+		end
+		self:SetScript('OnUpdate', Step)
+	end
+	local lastBump = 0
+	area:SetScript('OnMouseWheel', function(self, delta)
+		local range = max(0, self.content:GetHeight() - self:GetHeight())
+		local target = (self.target or self.offset) - delta * (opts.step or 40)
+		if (target < 0 and (self.target or 0) <= 0) or (target > range and (self.target or 0) >= range) then
+			local now = GetTime()
+			if range > 0 and now - lastBump > 0.4 then lastBump = now; Kit:Play('tick') end
+		end
+		self:ScrollTo(Kit:Clamp(target, 0, range))
+	end)
+	self:OnRefresh(PaintFades)
 end
 
 -- 39 Carousel -----------------------------------------------------------------------------------------

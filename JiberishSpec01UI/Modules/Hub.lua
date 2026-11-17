@@ -95,6 +95,11 @@ function UI:NeedsReload()
 	if hub then
 		hub.reload:Show()
 		hub.reload:SetTone('primary')
+		-- A lamp on the key blinks until the reload.
+		if hub.reload.led then
+			Kit:SetLed(hub.reload.led, true, 'amber')
+			if Kit:Faithful('breathe') then Kit:Blink(hub.reload.led, 0.8, true) end
+		end
 	end
 end
 
@@ -105,7 +110,7 @@ end
 -- which adds one dim, truncated line under the label. A control too wide to
 -- share the line (a long segmented picker) drops under its label instead.
 -- Every height is measured after widths are set, so nothing can overlap.
-local ROW_HEIGHT = {switch = 30, segmented = 34, slider = 46, button = 34, color = 30, dropdown = 34, input = 36, note = 0, header = 24}
+local ROW_HEIGHT = {switch = 30, segmented = 34, slider = 54, button = 34, color = 30, dropdown = 34, input = 36, note = 0, header = 24}
 local NOTE_INDEX = {switch = 4, slider = 7, button = 5, color = 4, input = 4}
 local CARD_ROWS = 6 -- settings shown per card before "More options" (Advanced shows all)
 
@@ -134,7 +139,10 @@ local function Items(row)
 end
 
 -- The control that made a change keeps animating; only the others refresh.
+local changedPaths, UpdateLCD = {}, nil
 local function Changed(row, value, control)
+	changedPaths[row[3] or row] = true
+	if UpdateLCD then UpdateLCD() end
 	UI.changing = control
 	if row.set then
 		UI:Safe(row.set, value)
@@ -250,6 +258,127 @@ local function ShowsNew(page, row)
 	return UI:IsNew(row.since) and not (HubDB().seen or {})[page.key]
 end
 
+-- Dropdowns open as a SPEC-01 drawer: a sheet that unrolls under the control
+-- with a grab line, printed rows with a lamp on the chosen one, a tick as the
+-- pointer moves through them and a latch on choosing; a click anywhere else
+-- rolls it back up.
+local DRAWER_ROW, DRAWER_MAX = 20, 12
+local drawer
+local function CloseDrawer(instant)
+	if not drawer or not drawer:IsShown() or drawer.closing then return end
+	drawer.catcher:Hide()
+	if instant or not Kit:Faithful('slide') then drawer:Hide() return end
+	drawer.closing = true
+	local from = drawer:GetHeight()
+	Kit:Animate(drawer, 0.14, from, 1, function(height) drawer:SetHeight(max(height, 1)) end, function()
+		drawer.closing = nil
+		drawer:Hide()
+	end, 'cubic')
+end
+
+local function DrawerRow(parent)
+	local item = CreateFrame('Button', nil, parent)
+	item:SetHeight(DRAWER_ROW)
+	item.highlight = item:CreateTexture(nil, 'BACKGROUND')
+	item.highlight:SetAllPoints()
+	item.highlight:SetColorTexture(1, 1, 1, 1)
+	Kit:Tint(item.highlight, 'lamp', 0.18)
+	item.highlight:Hide()
+	item.lamp = Kit:Led(item, 5, false)
+	item.lamp:SetPoint('LEFT', 8, 0)
+	item.label = Kit:Label(item, '', 'ink', 9)
+	item.label:SetPoint('LEFT', 20, 0)
+	item.label:SetPoint('RIGHT', -8, 0)
+	item.label:SetJustifyH('LEFT')
+	item.label:SetWordWrap(false)
+	item:SetScript('OnEnter', function(self)
+		self.highlight:Show()
+		Kit:Play('tick')
+	end)
+	item:SetScript('OnLeave', function(self) self.highlight:Hide() end)
+	item:SetScript('OnClick', function(self)
+		local owner, value = drawer.owner, self.value
+		Kit:Play('latch-down')
+		Kit:Chosen(self, self.highlight, self.label, function()
+			CloseDrawer()
+			if owner and owner.choose then owner.choose(value) end
+		end, 'ink', 'ink')
+	end)
+	return item
+end
+
+local function OpenDrawer(control, items, current)
+	if drawer and drawer:IsShown() and drawer.owner == control then return CloseDrawer() end
+	if not drawer then
+		drawer = Kit:Panel(hub, {radius = 6, fill = 'panel', border = 'hair', shadow = 0.5})
+		drawer:SetClipsChildren(true)
+		drawer:EnableMouse(true)
+		drawer.grab = Kit:Solid(drawer, 'hair')
+		drawer.grab:SetSize(28, 2)
+		drawer.grab:SetPoint('TOP', 0, -5)
+		drawer.list = Kit:ScrollArea(drawer, {width = 200, height = 100, step = DRAWER_ROW * 3, smooth = true})
+		drawer.list:SetPoint('TOPLEFT', 2, -10)
+		drawer.list:SetPoint('BOTTOMRIGHT', -2, 4)
+		drawer.rows = {}
+		-- Clicks outside the sheet roll it back up.
+		drawer.catcher = CreateFrame('Button', nil, hub)
+		drawer.catcher:SetAllPoints(hub)
+		drawer.catcher:SetScript('OnClick', function() CloseDrawer() end)
+		drawer.catcher:Hide()
+		hub:HookScript('OnHide', function() CloseDrawer(true) end)
+	end
+	drawer.owner = control
+	local width = max(control:GetWidth(), 170)
+	local shown = min(#items, DRAWER_MAX)
+	local full = 14 + max(shown, 1) * DRAWER_ROW + 6
+	drawer:SetWidth(width)
+	drawer.list:SetWidth(width - 4)
+	drawer.list.content:SetWidth(width - 12)
+	for index, item in ipairs(items) do
+		local entry = drawer.rows[index]
+		if not entry then entry = DrawerRow(drawer.list.content); drawer.rows[index] = entry end
+		local value, text = item, tostring(item)
+		if type(item) == 'table' then value, text = item[1], item[2] or tostring(item[1]) end
+		entry.value = value
+		entry:ClearAllPoints()
+		entry:SetPoint('TOPLEFT', 0, -(index - 1) * DRAWER_ROW)
+		entry:SetPoint('TOPRIGHT', 0, -(index - 1) * DRAWER_ROW)
+		entry.label:SetText(strupper(text))
+		Kit:SetLed(entry.lamp, value == current)
+		Kit:Tint(entry.label, value == current and 'ink' or 'dim')
+		entry.highlight:Hide()
+		entry:Show()
+	end
+	for index = #items + 1, #drawer.rows do drawer.rows[index]:Hide() end
+	drawer.list.content:SetHeight(max(#items, 1) * DRAWER_ROW)
+	-- Below the control, or above it when there is no room under it.
+	drawer:ClearAllPoints()
+	local bottom = control:GetBottom() or 0
+	local hubBottom = hub:GetBottom() or 0
+	if bottom - full < hubBottom + 12 then
+		drawer:SetPoint('BOTTOMRIGHT', control, 'TOPRIGHT', 0, 4)
+	else
+		drawer:SetPoint('TOPRIGHT', control, 'BOTTOMRIGHT', 0, -4)
+	end
+	drawer:SetFrameLevel(control:GetFrameLevel() + 30)
+	drawer.catcher:SetFrameLevel(drawer:GetFrameLevel() - 1)
+	drawer.catcher:Show()
+	drawer.closing = nil
+	drawer:Show()
+	-- Scroll the chosen one into view.
+	for index, item in ipairs(items) do
+		local value = type(item) == 'table' and item[1] or item
+		if value == current then drawer.list:ScrollTo(max(0, (index - DRAWER_MAX) * DRAWER_ROW), true) end
+	end
+	Kit:Play('open')
+	if Kit:Faithful('slide') then
+		Kit:Animate(drawer, 0.18, 1, full, function(height) drawer:SetHeight(max(height, 1)) end, nil, 'detent')
+	else
+		drawer:SetHeight(full)
+	end
+	drawer.list:Refresh()
+end
+
 local function Control(card, row, width)
 	local kind = row[1]
 	local control
@@ -265,7 +394,11 @@ local function Control(card, row, width)
 		end
 		local longest = 0
 		for _, name in ipairs(names) do longest = max(longest, #tostring(name)) end
-		control = Kit:Segmented(card.body, {items = names, width = min(max(longest * 7 + 22, 52) * #names, width), value = current,
+		-- On the label's line when it fits in about 60% of the card (squeezed a
+		-- little if need be), else on a line of its own under the label.
+		local wanted, inline = max(longest * 7 + 22, 52) * #names, floor(width * 0.6)
+		local segWidth = wanted <= inline * 1.2 and min(wanted, inline) or min(wanted, width)
+		control = Kit:Segmented(card.body, {items = names, width = segWidth, value = current,
 			onChange = function(index, self) Changed(row, values[index], self) end})
 		control.refresh = function()
 			local value = Get(row)
@@ -279,6 +412,16 @@ local function Control(card, row, width)
 			onChange = function(value, self) Changed(row, value, self) end})
 		control.refresh = function() control:SetValue(Get(row)) end
 		control.lift = 12 -- its own (empty) label line sits above the track
+		-- The value on a small LCD left of the track, not over it.
+		local lcd = Kit:LCDPanel(card.body, {radius = 3})
+		lcd:SetSize(48, 18)
+		lcd:SetPoint('RIGHT', control, 'TOPLEFT', -6, -31)
+		control.readout:ClearAllPoints()
+		control.readout:SetPoint('CENTER', lcd, 'CENTER', 0, 0)
+		control.readout:SetParent(lcd)
+		Kit:Font(control.readout, 9, nil, true, 'numbers')
+		Kit:Tint(control.readout, 'lcdInk')
+		control.extra = 54
 	elseif kind == 'button' then
 		control = Kit:Button(card.body, {text = row[3], width = max(80, #row[3] * 8 + 28), height = 26})
 		control.onClick = function() UI:Safe(row[4], control) end
@@ -292,6 +435,11 @@ local function Control(card, row, width)
 			if type(row.items) == 'function' then control:SetItems(Items(row)) end
 			control:SetValue(Get(row))
 		end
+		control.choose = function(value)
+			control:SetValue(value)
+			Changed(row, value, control)
+		end
+		control.onClick = function(self) OpenDrawer(self, Items(row), Get(row)) end
 	elseif kind == 'input' then
 		control = Kit:TextField(card.body, {width = min(170, floor(width * 0.48)), value = Get(row) or ''})
 		local function Commit()
@@ -328,8 +476,8 @@ local function BuildRow(card, row, y, width, page)
 		label:SetPoint('TOPLEFT', 0, -y)
 		return 20
 	end
-	local controlWidth = control:GetWidth()
-	local stacked = controlWidth > width * 0.56
+	local controlWidth = control:GetWidth() + (control.extra or 0)
+	local stacked = controlWidth > width * 0.66
 	local labelWidth = stacked and width or (width - controlWidth - 14)
 	local noteText = NoteOf(row)
 	-- The label column: a NEW lamp, the label (one line), the info mark.
@@ -354,14 +502,6 @@ local function BuildRow(card, row, y, width, page)
 		hit:SetPoint('BOTTOMRIGHT', info, 'BOTTOMRIGHT', 2, -2)
 	end
 	local textHeight = 12
-	if noteText and HubDB().describe then
-		local line = Kit:Text(card.body, FirstLine(noteText), 9, 'dim')
-		line:SetPoint('TOPLEFT', left, -y - 14)
-		line:SetWidth(max(labelWidth - left, 20))
-		line:SetJustifyH('LEFT')
-		line:SetWordWrap(false)
-		textHeight = 26
-	end
 	-- The control column.
 	local height
 	control:ClearAllPoints()
@@ -373,6 +513,16 @@ local function BuildRow(card, row, y, width, page)
 		local nudge = (kind == 'switch' or kind == 'color' or kind == 'slider') and 0 or 2
 		control:SetPoint('TOPRIGHT', card.body, 'TOPRIGHT', kind == 'switch' and -2 or 0, -y + nudge + (control.lift or 0))
 		height = max(ROW_HEIGHT[kind], textHeight + 10)
+	end
+	-- Descriptions: under the whole row, the card's full width, two lines at most.
+	if noteText and HubDB().describe then
+		local line = Kit:Text(card.body, noteText, 9, 'dim')
+		line:SetPoint('TOPLEFT', left, -y - height + 4)
+		line:SetWidth(width - left)
+		line:SetJustifyH('LEFT')
+		line:SetWordWrap(true)
+		if line.SetMaxLines then line:SetMaxLines(2) end
+		height = height + min(line:GetStringHeight(), 26) + 6
 	end
 	Lockable(control, label, row)
 	if control.refresh and row.disabled then control.refresh() end
@@ -407,6 +557,43 @@ local function Expander(card, y, width, text, onClick)
 	return 32
 end
 
+-- A page's printed model code: the title's initials, e.g. Unit frames -> UF.
+local function PageCode(page)
+	if page.code then return page.code end
+	local letters = {}
+	for word in tostring(page.title or page.key):gmatch('%a+') do
+		if #letters < 2 and #word > 1 then letters[#letters + 1] = strupper(word:sub(1, 1)) end
+	end
+	if #letters < 2 then letters = {strupper(tostring(page.title or page.key):gsub('%A', ''):sub(1, 2))} end
+	page.code = table.concat(letters)
+	return page.code
+end
+
+-- Whether the page's module is running (the card lamps).
+local function PageRunning(page)
+	local module = UI.modules[page.key]
+	if not module then return true end
+	if module.problem then return false end
+	return (module.enabled or module.ready) and true or false
+end
+
+-- Cards in one grid row share the tallest one's height, so bottoms line up.
+local function EvenRows(cards)
+	local column, row = 0, {}
+	local function Settle()
+		local tallest = 0
+		for _, card in ipairs(row) do tallest = max(tallest, card:GetHeight()) end
+		for _, card in ipairs(row) do if not card.folded then card:SetHeight(tallest) end end
+	end
+	for _, card in ipairs(cards) do
+		local span = card.span or 1
+		if column + span > CONTENT_COLUMNS then Settle(); row, column = {}, 0 end
+		row[#row + 1] = card
+		column = column + span
+	end
+	Settle()
+end
+
 local function BuildCards(content, page)
 	local cards = {}
 	local span = page.span or 2
@@ -418,6 +605,10 @@ local function BuildCards(content, page)
 		local card = Kit.CardShell(content, index, spec.title, width, 200)
 		card.span, card.controls = span, {}
 		local collapsed, expanded, id = CardState(page, index)
+		-- Printed model code (UF-01), and a lamp lit while the page's module runs.
+		card.number:SetText(format('%s-%02d', PageCode(page), index))
+		card.lamp = Kit:Led(card, 5, PageRunning(page))
+		card.lamp:SetPoint('TOPRIGHT', -28, -12)
 		-- Preview cards keep their notes whole: they reserve room for a live sample.
 		card.fullNotes = advanced or (type(spec.title) == 'string' and strupper(spec.title) == 'PREVIEW')
 		-- The header folds the card; a chevron shows which way.
@@ -427,10 +618,11 @@ local function BuildCards(content, page)
 		fold:SetHeight(20)
 		fold.chevron = Kit:Icon(card, collapsed and 'chevron-right' or 'chevron-down', 9, 'dim')
 		fold.chevron:SetPoint('TOPRIGHT', -12, -10)
-		card.rule:SetWidth(max(card.rule:GetWidth() - 18, 1))
+		card.rule:SetWidth(max(width - 50 - card.number:GetStringWidth() - card.title:GetStringWidth() - 34, 1))
 		fold:SetScript('OnClick', function()
 			Kit:Play(collapsed and 'latch-down' or 'latch-up')
 			HubDB().collapsed[id] = not collapsed or nil
+			if collapsed then page.animateCard = index end
 			RebuildPage(page)
 		end)
 		fold:SetScript('OnEnter', function() Kit:Tint(fold.chevron, 'ink') end)
@@ -454,6 +646,8 @@ local function BuildCards(content, page)
 				y = y + Expander(card, y, bodyWidth, format('More options (%d)', skipped), function()
 					Kit:Play('down')
 					HubDB().expanded[id] = true
+					page.animateCard = index
+					Kit:Play('latch-down')
 					RebuildPage(page)
 				end)
 			elseif expanded and not advanced then
@@ -467,16 +661,62 @@ local function BuildCards(content, page)
 		else
 			card.body:Hide()
 			card:SetHeight(34)
+			card.folded = true
+		end
+		-- A card just opened (More options, unfolding) slides its rows in like a drawer.
+		if page.animateCard == index and not collapsed then
+			page.animateCard = nil
+			card.body:SetAlpha(0)
+			C_Timer.After(0, function()
+				card.body:SetAlpha(1)
+				if Kit:Faithful('slide') then Kit:SlideIn(card.body, 0, 10, 0.28) end
+			end)
 		end
 		cards[#cards + 1] = card
 		for _, control in ipairs(card.controls) do page.controls[#page.controls + 1] = control end
 	end
 	page.cardFrames = cards
+	EvenRows(cards)
 	return Kit:FlowCards(content, cards, CONTENT_COLUMNS)
 end
 
 -- Window ------------------------------------------------------------------------
-local Search, ClearSearch, GroupOf, BuildNav
+local Search, ClearSearch, GroupOf, BuildNav, CascadeCards, MarkNav
+
+-- Cards deal in one after another on the detent curve: each rises 8 px and fades in.
+function CascadeCards(cards)
+	if type(cards) ~= 'table' then return end
+	if not Kit:Faithful('slide') then return end
+	for index, card in ipairs(cards) do
+		if index > 10 then break end
+		card:SetAlpha(0)
+		C_Timer.After((index - 1) * 0.04, function()
+			-- SlideIn reads the resting alpha, so the card is put back to 1 first.
+			card:SetAlpha(1)
+			if card:IsVisible() then Kit:SlideIn(card, 0, -8, 0.26) end
+		end)
+	end
+end
+
+-- The sidebar's lit plate slides from the old page's entry to the new one.
+function MarkNav(key)
+	local entry = hub.nav and hub.nav[key]
+	local marker = hub.navMarker
+	if not marker then return end
+	if not (entry and entry:IsShown()) then marker:Hide() return end
+	local top, hubTop = entry:GetTop(), hub:GetTop()
+	if not (top and hubTop) then return end
+	local to = hubTop - top
+	local from = marker:IsShown() and marker.at or to
+	marker.at = to
+	marker:Show()
+	local function Place(y)
+		marker:ClearAllPoints()
+		marker:SetPoint('TOPLEFT', hub, 'TOPLEFT', Kit.PAD + 2, -y + 1)
+	end
+	if from == to or not Kit:Faithful('slide') then Place(to) return end
+	Kit:Animate(marker, 0.22, from, to, Place, nil, 'detent')
+end
 
 local function HideAreas(except)
 	for _, other in pairs(pages) do
@@ -504,7 +744,8 @@ local function SelectPage(key)
 		page.area, page.controls = nil, nil
 	end
 	if not page.area then
-		local area = Kit:ScrollArea(hub, {width = hub:GetWidth() - SIDEBAR - Kit.PAD * 2, height = hub:GetHeight() - 78, step = 60})
+		local area = Kit:ScrollArea(hub, {width = hub:GetWidth() - SIDEBAR - Kit.PAD * 2, height = hub:GetHeight() - 78, step = 60,
+			smooth = true})
 		area:SetPoint('TOPLEFT', SIDEBAR + Kit.PAD, -66)
 		local ok, height = pcall(page.build or BuildCards, area.content, page)
 		if not ok then
@@ -521,12 +762,14 @@ local function SelectPage(key)
 	-- side-panel-in: a new page fades in with a 6 px rise (240 ms); with the
 	-- Staggered entrance extra its cards follow one after another.
 	if Kit.SlideIn and Kit:Faithful('slide') then Kit:SlideIn(page.area) end
-	if Kit.Cascade then Kit:Cascade(page.cardFrames or {page.area.content:GetChildren()}) end
+	CascadeCards(page.cardFrames)
 	if page.onShow then page.onShow(page.area) end
 	for _, control in ipairs(page.controls or {}) do
 		if control.refresh then pcall(control.refresh) end
 	end
-	hub.heading:SetText(strupper(page.title))
+	if hub.heading:GetText() ~= strupper(page.title) then Kit:PrintText(hub.heading, strupper(page.title)) end
+	MarkNav(key)
+	if UpdateLCD then UpdateLCD() end
 	-- NEW marks show until a page has been opened once.
 	if not UI.db.hub.seen[key] then
 		UI.db.hub.seen[key] = true
@@ -544,7 +787,7 @@ function RebuildPage(page)
 	page.area, page.controls = nil, nil
 	if UI.db.hub.page == page.key and hub:IsShown() then
 		SelectPage(page.key)
-		if scroll and page.area then page.area:ScrollTo(scroll) end
+		if scroll and page.area then page.area:ScrollTo(scroll, true) end
 	end
 end
 
@@ -634,7 +877,8 @@ end
 
 local function Results()
 	if hub.results then return hub.results end
-	local area = Kit:ScrollArea(hub, {width = hub:GetWidth() - SIDEBAR - Kit.PAD * 2, height = hub:GetHeight() - 78, step = 60})
+	local area = Kit:ScrollArea(hub, {width = hub:GetWidth() - SIDEBAR - Kit.PAD * 2, height = hub:GetHeight() - 78, step = 60,
+		smooth = true})
 	area:SetPoint('TOPLEFT', SIDEBAR + Kit.PAD, -66)
 	area.rows = {}
 	area.empty = Kit:Text(area.content, '', 10, 'dim')
@@ -738,9 +982,10 @@ local function NavEntry(key, page)
 	entry:SetScript('OnLeave', function(self)
 		if UI.db.hub.page ~= key or hub.searching then Kit:Tint(self.label, 'dim') end
 	end)
-	entry:SetScript('OnClick', function()
+	entry:SetScript('OnClick', function(self)
 		if UI.db.hub.page == key and not hub.searching then return end
-		Kit:Play('tick')
+		Kit:Play('latch-down')
+		Kit:Chosen(self, nil, self.label, nil, 'ink', 'ink')
 		SelectPage(key)
 	end)
 	return entry
@@ -749,8 +994,10 @@ end
 local function NavHeader(group, open)
 	local head = CreateFrame('Button', nil, hub)
 	head:SetSize(SIDEBAR - 20, NAV_HEAD)
+	head.lamp = Kit:Led(head, 4, true)
+	head.lamp:SetPoint('LEFT', 2, 0)
 	head.label = Kit:Label(head, group[2], open and 'ink' or 'dim', 8, true)
-	head.label:SetPoint('LEFT', 2, 0)
+	head.label:SetPoint('LEFT', 10, 0)
 	head.chevron = Kit:Icon(head, open and 'chevron-down' or 'chevron-right', 8, 'dim')
 	head.chevron:SetPoint('RIGHT', -2, 0)
 	head:SetScript('OnEnter', function(self) Kit:Tint(self.label, 'ink') end)
@@ -811,6 +1058,11 @@ function BuildNav()
 		Kit:Tint(entry.label, selected and 'ink' or 'dim')
 	end
 	hub.navDirty = nil
+	-- The lit plate lands on the current page without sliding.
+	if hub.navMarker then
+		hub.navMarker:Hide()
+		MarkNav(UI.db.hub.page)
+	end
 end
 
 -- Header toggles: Advanced shows every option and whole notes; Descriptions adds a
@@ -841,6 +1093,26 @@ local function Build()
 	hub:SetScript('OnDragStart', hub.StartMoving)
 	hub:SetScript('OnDragStop', hub.StopMovingOrSizing)
 	Kit:Grain(hub, 0.35, 4)
+	-- A soft vignette: the housing darkens a touch toward its top and bottom edges.
+	for _, edge in ipairs({'TOP', 'BOTTOM'}) do
+		local shade = hub:CreateTexture(nil, 'BORDER', nil, -2)
+		shade:SetColorTexture(1, 1, 1, 1)
+		shade:SetPoint(edge..'LEFT', 10, edge == 'TOP' and -10 or 10)
+		shade:SetPoint(edge..'RIGHT', -10, edge == 'TOP' and -10 or 10)
+		shade:SetHeight(70)
+		if shade.SetGradient and CreateColor then
+			local dark, clear = CreateColor(0, 0, 0, 0.14), CreateColor(0, 0, 0, 0)
+			if edge == 'TOP' then shade:SetGradient('VERTICAL', clear, dark) else shade:SetGradient('VERTICAL', dark, clear) end
+		else
+			shade:Hide()
+		end
+	end
+	-- The sidebar's lit plate behind the current page's entry.
+	hub.navMarker = Kit:Texture(hub, 'round-3', 'BORDER')
+	hub.navMarker:SetSize(SIDEBAR - 16, NAV_ROW)
+	if hub.navMarker.kitScale then hub.navMarker:SetSize((SIDEBAR - 16) / hub.navMarker.kitScale, NAV_ROW / hub.navMarker.kitScale) end
+	Kit:Tint(hub.navMarker, 'track')
+	hub.navMarker:Hide()
 	tinsert(UISpecialFrames, 'JiberishSpec01Hub')
 
 	-- Header: brand on the left, the page name, then the reference's own top bar
@@ -852,7 +1124,10 @@ local function Build()
 
 	hub.close = Kit:Button(hub, {round = true, icon = 'close', width = 28, height = 28, iconSize = 12})
 	hub.close:SetPoint('TOPRIGHT', -Kit.PAD, -14)
-	hub.close.onClick = function() Kit:Close(hub) end
+	hub.close.onClick = function()
+		Kit:Play('latch-up')
+		Kit:Close(hub)
+	end
 	hub.sound = Kit:Key(hub, {width = 34, height = 26, icon = 'speaker', toggle = true, checked = Kit:DB().sound.enable})
 	hub.sound:SetPoint('RIGHT', hub.close, 'LEFT', -10, 0)
 	hub.sound.onClick = function(self) Kit:SetOption('sound.enable', self.checked) end
@@ -864,7 +1139,34 @@ local function Build()
 			Kit:SetOption('finish', finishes[index])
 			UI.changing = nil
 		end})
-	hub.finish:SetPoint('RIGHT', hub.sound, 'LEFT', -12, 1)
+	-- Move UI: closes the hub and unlocks every frame; lit while frames are unlocked.
+	hub.move = Kit:Key(hub, {text = 'Move UI', icon = 'grip', iconSize = 11, width = 96, height = 26, led = true})
+	hub.move:SetPoint('RIGHT', hub.sound, 'LEFT', -10, 0)
+	if hub.move.led then
+		hub.move.led:ClearAllPoints()
+		hub.move.led:SetPoint('TOPRIGHT', hub.move.face or hub.move, 'TOPRIGHT', -6, -6)
+		Kit:SetLed(hub.move.led, UI.MoversUnlocked and UI:MoversUnlocked() and true or false)
+	end
+	hub.move.onClick = function()
+		if UI.MoversUnlocked and UI:MoversUnlocked() then
+			Kit:Play('latch-up')
+			UI:ToggleMovers(true)
+			return
+		end
+		if InCombatLockdown() then
+			Kit:Play('error')
+			return UI:Print('Frames can be moved once you leave combat.')
+		end
+		Kit:Play('latch-down')
+		Kit:Close(hub, function() if UI.ToggleMovers then UI:ToggleMovers(false) end end)
+	end
+	Kit:AttachTooltip(hub.move, 'Unlock mode: drag, resize and nudge every frame')
+	if UI.OnMoversChanged then
+		UI:OnMoversChanged(function(what)
+			if what == '__lock' and hub.move.led then Kit:SetLed(hub.move.led, UI:MoversUnlocked() and true or false) end
+		end)
+	end
+	hub.finish:SetPoint('RIGHT', hub.move, 'LEFT', -12, 1)
 	hub.accents = {}
 	for index, name in ipairs(Kit.accentOrder) do
 		local swatch = CreateFrame('Button', nil, hub)
@@ -882,7 +1184,7 @@ local function Build()
 		end)
 		hub.accents[name] = swatch
 	end
-	hub.reload = Kit:Button(hub, {text = 'Reload UI', width = 96, height = 26})
+	hub.reload = Kit:Button(hub, {text = 'Reload UI', width = 104, height = 26, led = true})
 	hub.reload:SetPoint('RIGHT', hub.accents[Kit.accentOrder[1]], 'LEFT', -18, 0)
 	hub.reload.onClick = function() ReloadUI() end
 	Kit:AttachTooltip(hub.reload, 'Style changes apply after a reload')
@@ -904,6 +1206,23 @@ local function Build()
 		ForgetPages()
 	end
 	Kit:AttachTooltip(hub.describe, 'A line under each setting')
+	-- An LCD strip: the page's code and how many settings changed since opening.
+	hub.lcd = Kit:LCDPanel(hub, {radius = 3})
+	hub.lcd:SetSize(150, 20)
+	hub.lcd:SetPoint('RIGHT', hub.describe, 'LEFT', -10, 0)
+	hub.lcd.text = Kit:Text(hub.lcd, '', 9, 'lcdInk', true)
+	hub.lcd.text:SetPoint('CENTER')
+	Kit:Font(hub.lcd.text, 9, nil, true, 'numbers')
+	UpdateLCD = function()
+		if not hub.lcd then return end
+		local key = UI.db.hub.page
+		local page = pages[key]
+		local position = 1
+		for index, pageKey in ipairs(pageOrder) do if pageKey == key then position = index end end
+		local count = 0
+		for _ in pairs(changedPaths) do count = count + 1 end
+		Kit:PrintText(hub.lcd.text, format('%s-%02d  %02d CHG', page and PageCode(page) or '--', position, count), {minGap = 0.2})
+	end
 
 	-- Sidebar: a search field over the reference's nav items (a lamp and a printed label).
 	local divider = Kit:Solid(hub, 'line')
@@ -989,6 +1308,19 @@ function UI:ToggleHub(key, show)
 		if not hub:IsShown() or hub.kitClosing then
 			Kit:Play('open')
 			Kit:Open(hub)
+			wipe(changedPaths)
+			if UpdateLCD then UpdateLCD() end
+			-- The brand types on and the section lamps light in turn.
+			Kit:PrintText(hub.brand, 'JIBERISH / SPEC-01', {duration = 0.35})
+			for index, head in ipairs(hub.navHeads or {}) do
+				if Kit:Faithful('slide') then
+					Kit:SetLed(head.lamp, false)
+					C_Timer.After(0.12 + index * 0.06, function()
+						Kit:SetLed(head.lamp, true)
+						if index == 1 or index == #hub.navHeads then Kit:Play('blip') end
+					end)
+				end
+			end
 		end
 	else Kit:Close(hub) end
 end
