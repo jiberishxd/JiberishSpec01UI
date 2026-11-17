@@ -1705,13 +1705,19 @@ function FindRangeSpell()
 	end
 end
 
+-- Range dims the frame's face, not the frame: the frame's own alpha belongs to
+-- the idle fade and unlock mode, and two owners of one alpha made it flicker.
 local function Fade(frame, inRange, alpha)
 	frame.ranged = true
+	local target = frame.face or frame
 	if IsSecret(inRange) then
-		if frame.SetAlphaFromBoolean then pcall(frame.SetAlphaFromBoolean, frame, inRange, 1, alpha) end
+		if target.SetAlphaFromBoolean then pcall(target.SetAlphaFromBoolean, target, inRange, 1, alpha) end
 		return
 	end
-	frame:SetAlpha(inRange and 1 or alpha)
+	local want = inRange and 1 or alpha
+	if Kit:Animating(target) then return end
+	local current = target:GetAlpha()
+	if IsSecret(current) or math.abs(current - want) > 0.01 then target:SetAlpha(want) end
 end
 
 local function ApplyRange(frame)
@@ -1743,7 +1749,8 @@ local function RangeTick(_, delta)
 			if frame:IsVisible() then UI:Safe(ApplyRange, frame) end
 		elseif frame.ranged then
 			frame.ranged = nil
-			frame:SetAlpha(1)
+			local face = frame.face or frame
+			face:SetAlpha(1)
 		end
 	end
 end
