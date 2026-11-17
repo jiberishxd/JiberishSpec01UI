@@ -979,9 +979,27 @@ STEPS[#STEPS + 1] = {key = 'actionbars', title = 'Action bars', short = 'Bars',
 		step.rows = Picker(body, {{1, '1'}, {2, '2'}, {3, '3'}}, function() return Read('actionbars.rows') end,
 			function(value) Set('actionbars.rows', value, true) end, 150)
 		step.rows:SetPoint('TOPLEFT', body, 'TOPLEFT', 350, -166)
+		-- Key size and console width are apart: with a fixed width, the key size
+		-- moves only the keys (made just small enough to fit), and the width only the housing.
+		local function ShowSize()
+			if not step.size then return end
+			local width, height, used = UI.ConsoleSize and UI:ConsoleSize()
+			if not width then step.size:SetText('CX-1  applies on reload') return end
+			local key = Read('actionbars.keySize')
+			local note = (used and key and used ~= key) and format('   keys %d', used) or ''
+			step.size:SetText(format('CX-1  %d × %d%s', width, height, note))
+		end
+		local function Later() C_Timer.After(0.15, function() UI:Safe(ShowSize) end) end
 		step.keySize = Slider(body, 'Key size', 24, 48, 1, function() return Read('actionbars.keySize') end,
-			function(value) Set('actionbars.keySize', value, true) end, Whole, 260)
+			function(value) Set('actionbars.keySize', value); Later() end, Whole, 260)
 		step.keySize:SetPoint('TOPLEFT', body, 'TOPLEFT', 520, -150)
+		step.width = Slider(body, 'Console width', 0, 2000, 40, function() return Read('actionbars.consoleWidth') or 0 end,
+			function(value) Set('actionbars.consoleWidth', value); Later() end,
+			function(value) return value == 0 and 'Auto' or format('%d', value) end, 220)
+		step.width:SetPoint('TOPLEFT', body, 'TOPLEFT', 560, -280)
+		step.size = Kit:Text(body, '', 8, 'dim', true)
+		step.size:SetPoint('TOPLEFT', step.width, 'BOTTOMLEFT', 0, -4)
+		step.ShowSize = ShowSize
 		step.side = Toggle(body, 'Side bars', 'The right and left bars at the screen edge.', function() return Read('actionbars.side') end,
 			function(value) Set('actionbars.side', value, true) end, 350, -226, 210)
 		step.dock = Toggle(body, 'Dock frames', 'Player and target inside the console.', function() return Read('actionbars.dock') end,
@@ -995,13 +1013,14 @@ STEPS[#STEPS + 1] = {key = 'actionbars', title = 'Action bars', short = 'Bars',
 	end,
 	refresh = function(step)
 		step.layout:Paint(); step.look:Paint(); step.rows:Refresh(); step.keySize:Refresh(); step.side:Refresh(); step.dock:Refresh()
-		step.empty:Refresh()
+		step.empty:Refresh(); step.width:Refresh(); step.ShowSize()
 	end,
 	summary = function()
 		return {{'Bar layout', Name({{'console', 'Console'}, {'free', 'Free'}}, Read('actionbars.layout')), {'actionbars.layout'}},
 			{'Key look', Name({{'hardware', 'Hardware'}, {'classic', 'Classic'}}, Read('actionbars.look')), {'actionbars.look'}},
 			{'Rows', tostring(Read('actionbars.rows')), {'actionbars.rows'}},
 			{'Key size', tostring(Read('actionbars.keySize')), {'actionbars.keySize'}},
+			{'Console width', (Read('actionbars.consoleWidth') or 0) == 0 and 'Auto' or tostring(Read('actionbars.consoleWidth')), {'actionbars.consoleWidth'}},
 			{'Side bars', Read('actionbars.side') and 'On' or 'Off', {'actionbars.side'}}}
 	end}
 

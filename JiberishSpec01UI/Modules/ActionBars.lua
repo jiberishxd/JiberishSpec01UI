@@ -101,6 +101,10 @@ UI:RegisterDefaults('actionbars', {
 	-- The console's look: SPEC-01 hardware (keys in slots, printed banks, screws,
 	-- page LCD) or the earlier classic look.
 	look = 'hardware',
+	-- The console's size, apart from its keys: 0 is Auto (sized to its keys and
+	-- frames). keyGap 0 keeps each bar's own spacing; banks sit centred, at the
+	-- left, or spread across the width.
+	consoleWidth = 0, consoleHeight = 0, keyGap = 0, bankAlign = 'center',
 	-- The deck along the console's base: the meters' sources and style, the
 	-- stats strip (six chosen readouts), the function keys (slots 1-4 left,
 	-- 5-8 right) and the header panels.
@@ -1525,20 +1529,18 @@ local function HideDocked(hidden)
 	end
 end
 
+-- The console's own size: 0 is Auto (sized to what it holds); a fixed size is
+-- kept, and the keys are fitted inside it.
+local function FixedSize(value, least)
+	value = tonumber(value)
+	if not value or value <= 0 then return nil end
+	return max(floor(value), least)
+end
+
 local function LayoutConsole()
 	if not console then return end
 	if InCombatLockdown() then return UI:AfterCombat(LayoutConsole, 'ab.layout') end
-	local size = KeySize()
-	-- The keyboard: each bar one row, as wide as its shown keys, centered.
-	local width, height = 0, 0
-	local bank = HW.On() and HW.BANK_H or 0
-	for _, bar in ipairs(console.bars) do
-		LayoutBar(bar, size, Spacing(bar.id), Shown(bar.id), 12, false)
-		width = max(width, bar.width)
-		height = height + bar.height + bank
-	end
-	height = height + max(#console.bars - 1, 0) * GAP
-	if width == 0 then width, height = 12 * size + 11 * GAP, size end
+	local db = DB()
 	local PAD = HPad()
 	local parts = UnitParts()
 	local scale = console:GetEffectiveScale()
@@ -1556,26 +1558,74 @@ local function LayoutConsole()
 	if column == 0 and fnW > 0 then column = fnW end
 	local fnBand = fnH > 0 and fnH + 8 or 0
 	local sideWidth = column > 0 and column + COL_GAP or 0
-	local body = max(height, max(ph, th) > 0 and fnBand + max(ph, th) + AUX or fnBand)
 	local _, playerCastHeight = Measure(parts.playerCast)
 	local _, targetCastHeight = Measure(parts.targetCast)
 	local castHeight = max(playerCastHeight, targetCastHeight)
+	local castRow = castHeight > 0 and castHeight + ROW_GAP or 0
 	local xpHeight = Deck.BottomHeight()
-	console:SetSize(PAD * 2 + width + sideWidth * 2, HEAD + body + (castHeight > 0 and castHeight + ROW_GAP or 0) + xpHeight + PAD)
+	local bank = HW.On() and HW.BANK_H or 0
+	local rows = #console.bars
+	local fixedW, fixedH = FixedSize(db.consoleWidth, 300), FixedSize(db.consoleHeight, 80)
+	local function Gap(bar)
+		local gap = tonumber(db.keyGap)
+		return (gap and gap > 0) and floor(gap) or Spacing(bar.id)
+	end
+
+	-- The key size: the one asked for, made just small enough to fit a fixed
+	-- console (the console is never resized for the keys).
+	local size = KeySize()
+	local area = fixedW and (fixedW - PAD * 2 - sideWidth * 2)
+	if area then
+		for _, bar in ipairs(console.bars) do
+			local count = Shown(bar.id)
+			if count * size + (count - 1) * Gap(bar) > area then size = min(size, floor((area - (count - 1) * Gap(bar)) / count)) end
+		end
+	end
+	if fixedH and rows > 0 then
+		local room = fixedH - HEAD - castRow - xpHeight - PAD - rows * bank - (rows - 1) * GAP
+		size = min(size, floor(room / rows))
+	end
+	size = max(size, 16)
+	console.keySize = size
+
+	-- The keyboard: each bar one row, as wide as its shown keys.
+	local width, height = 0, 0
+	for _, bar in ipairs(console.bars) do
+		LayoutBar(bar, size, Gap(bar), Shown(bar.id), 12, false)
+		width = max(width, bar.width)
+		height = height + bar.height + bank
+	end
+	height = height + max(rows - 1, 0) * GAP
+	if width == 0 then width, height = 12 * size + 11 * GAP, size end
+	area = area or width
+	local align = db.bankAlign or 'center'
+	-- Spread: the keys share out the whole width with even gaps.
+	if align == 'spread' and fixedW then
+		for _, bar in ipairs(console.bars) do
+			local count = Shown(bar.id)
+			if count > 1 then LayoutBar(bar, size, max(Gap(bar), (area - count * size) / (count - 1)), count, 12, false) end
+		end
+	end
+	local body = max(height, max(ph, th) > 0 and fnBand + max(ph, th) + AUX or fnBand)
+	if fixedH then body = max(fixedH - HEAD - castRow - xpHeight - PAD, 0) end
+	console:SetSize(fixedW or (PAD * 2 + width + sideWidth * 2), fixedH or (HEAD + body + castRow + xpHeight + PAD))
 	local left = PAD + sideWidth
 
 	-- Bar 1 is the bottom row, as on Blizzard's bars. In the Hardware look each
-	-- bank has its printed legend and rule above it.
-	local y = -HEAD
+	-- bank has its printed legend and rule above it. In a taller fixed console
+	-- the banks sit in the middle of the body.
+	local y = -HEAD - (fixedH and max(0, floor((body - height) / 2)) or 0)
 	for index = #console.bars, 1, -1 do
 		local bar = console.bars[index]
-		local x = left + (width - bar.width) / 2
+		local x = align == 'left' and left or left + (area - bar.width) / 2
 		if bar.bank then HW.PlaceBank(bar.bank, console, x - 2, y, bar.width + 4, bank > 0) end
 		y = y - bank
 		bar.header:ClearAllPoints()
 		bar.header:SetPoint('TOPLEFT', console, 'TOPLEFT', x, y)
 		y = y - bar.height - GAP
 	end
+	-- The cast bars below share the banks' whole area.
+	width = area
 
 	-- Docked unit frames and cast bars, anchored in console units.
 	-- An LCD-style frame keeps its own LCD face; paper and dark ones sit on the housing.
@@ -1689,7 +1739,12 @@ local function BuildConsole()
 	UI:RegisterMover(console, 'ab.console', 'Console', {'BOTTOM', 0, 12})
 end
 
--- Free layout: every bar is its own device.
+-- The console's width and height and the key size in use (nil without a console).
+function UI:ConsoleSize()
+	if not console then return nil end
+	return floor(console:GetWidth() + 0.5), floor(console:GetHeight() + 0.5), console.keySize
+end
+
 -- Free layout: every bar is its own device, sized to its keys.
 local function LayoutFree()
 	if InCombatLockdown() then return UI:AfterCombat(LayoutFree, 'ab.free') end
@@ -3557,7 +3612,27 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 		{'switch', 'Dock unit frames', 'actionbars.dock', 'Player and target frames and cast bars inside the console.', reload = true},
 		{'switch', 'Housing', 'actionbars.housing', 'The device housings around the keys.'},
 		{'slider', 'Rows', 'actionbars.rows', 1, 3, 1, 'Bars in the console: bar 1, then the bottom left and right bars.', reload = true},
-		{'slider', 'Key size', 'actionbars.keySize', 24, 48, 1, 'Width of each key in the console.'},
+		{'slider', 'Key size', 'actionbars.keySize', 24, 48, 1, 'Width of each key. In a fixed-size console the keys shrink just enough to fit; the readout shows the size in use.',
+			format = function(v)
+				local _, _, used = UI:ConsoleSize()
+				if used and used ~= floor(v + 0.5) then return format('%d (%d)', v, used) end
+				return tostring(v)
+			end},
+		{'slider', 'Key gap', 'actionbars.keyGap', 0, 20, 1, 'Space between keys. Auto keeps each bar\'s own spacing.', format = Auto, since = '0.5.1'},
+		{'slider', 'Console width', 'actionbars.consoleWidth', 0, 2400, 10, 'Auto sizes the console to its keys and docked frames. A fixed width is kept: changing the key size moves only the keys.',
+			format = function(v)
+				local width = UI:ConsoleSize()
+				if v == 0 then return width and format('Auto (%d)', width) or 'Auto' end
+				return tostring(v)
+			end, since = '0.5.1'},
+		{'slider', 'Console height', 'actionbars.consoleHeight', 0, 600, 2, 'Auto sizes it to what it holds. A fixed height is kept; the banks sit in the middle.',
+			format = function(v)
+				local _, height = UI:ConsoleSize()
+				if v == 0 then return height and format('Auto (%d)', height) or 'Auto' end
+				return tostring(v)
+			end, since = '0.5.1'},
+		{'segmented', 'Banks', 'actionbars.bankAlign', items = {{'center', 'Centre'}, {'left', 'Left'}, {'spread', 'Spread'}}, since = '0.5.1',
+			note = 'Where the key banks sit in the console. Spread shares a fixed width out between the keys.'},
 		{'slider', 'Side padding', 'actionbars.padding', 0, 60, 2, 'Extra room at the console\'s sides.'},
 		{'slider', 'Scale', 'actionbars.scale', 0.6, 1.6, 0.05, 'Size of every action bar device.', format = Percent},
 		{'button', 'Placement', 'Move bars', function() UI:ToggleHub(nil, false); UI:ToggleMovers() end, 'Snaps to a grid and to other frames.'},
