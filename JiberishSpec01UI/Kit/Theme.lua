@@ -345,8 +345,10 @@ local function ApplyFont(fontString, data)
 	local role = (overridden or data[4]) and RoleOf(fontString, data) or nil
 	local size = data[1] * (Kit:Look('textScale') or 1) * Kit:FontScale(role)
 	local flags = FontFlags(data[2])
-	-- A FontString reports failure with false; Font objects return nothing.
-	if fontString:SetFont(Kit:FontPath(data[3], role), size, flags) == false then
+	-- A FontString reports failure with false; Font objects return nothing. On
+	-- some of the game's own strings the answer is secret: never compare it.
+	local applied = fontString:SetFont(Kit:FontPath(data[3], role), size, flags)
+	if not (issecretvalue and issecretvalue(applied)) and applied == false then
 		fontString:SetFont(STANDARD_TEXT_FONT, size, flags)
 	end
 end
