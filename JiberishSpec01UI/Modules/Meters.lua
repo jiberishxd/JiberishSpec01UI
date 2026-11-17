@@ -19,13 +19,15 @@ local module = UI:RegisterModule('meters', {})
 
 -- defaults:begin
 UI:RegisterDefaults('meters', {
-	bar = 'dots', barHeight = 16, fontSize = 10, classColors = true,
+	bar = 'flat', barHeight = 16, fontSize = 10, classColors = true,
 	details = true, detailsBase = true, blizzard = true, skada = true, recount = true,
 	dock = false, dockWidth = 320, dockHeight = 220, dockWindows = 1,
 	own = true, ownType = 'damage', ownSession = 'current', ownRows = 8, ownWidth = 270,
 	-- DM-1 windows: replace the game's meter, how many, and what each row shows.
 	replaceGame = true, ownCount = 1, ownRate = true, ownPercent = true, ownNameColor = false, ownTooltip = true,
 	ownMotion = true, ownSounds = true, windows = {},
+	-- DM-1 rows: style, height, type, contrast, shading and rank column.
+	ownBar = 'flat', ownRowHeight = 18, ownTextSize = 9, ownContrast = 'outline', ownStripes = true, ownRankWidth = 16,
 	-- The game's own meter.
 	blizzHeader = true, blizzFill = 'class', blizzRanks = false, blizzRate = false, blizzMotion = true,
 	blizzSounds = true, blizzTopBlip = false,
@@ -41,7 +43,7 @@ local function Plain(value) if IsSecret(value) then return nil end return value 
 local function Forbidden(object) return not object or (object.IsForbidden and object:IsForbidden()) end
 
 local BARS = {dots = {'SPEC-01 Dots', 'bar-dots'}, segments = {'SPEC-01 Segments', 'bar-segments'}, flat = {'SPEC-01 Flat', 'bar-flat'}}
-local function Bar() return BARS[DB().bar] or BARS.dots end
+local function Bar() return BARS[DB().bar] or BARS.flat end
 local function BarFile() return Kit.media..Bar()[2]..'.tga' end
 local FONT, FONT_BOLD = 'IBM Plex Mono', 'IBM Plex Mono Bold'
 local INK = {0.95, 0.95, 0.92, 1}
@@ -963,9 +965,43 @@ local function OwnSound(name) if DB().ownSounds then Kit:Play(name) end end
 local CLASS_ICON_FILE = [[Interface\WorldStateFrame\ICONS-CLASSES]]
 
 -- Rows -----------------------------------------------------------------------------------------
-local function RowHeight() return Kit:Clamp(floor(DB().barHeight or 16), 12, 30) end
+-- Row styles, all with the text on its own layer above the meter:
+--   flat      a solid fill at reduced brightness, a lit top edge and a spark
+--   gradient  the color fading from bright at the left to dim at the fill's edge
+--   underline the text on the black screen, a slim 3 px meter along the bottom
+--   led       small LED dots (about a third of the row high) in a strip under the text
+--   segments  the flat fill cut by hairline gaps
+--   outline   a hairline box filled to the value, transparent inside
+local STYLES = {flat = true, gradient = true, underline = true, led = true, segments = true, outline = true}
+local function RowStyle() local style = DB().ownBar return STYLES[style] and style or 'flat' end
+local function RowHeight() return Kit:Clamp(floor(DB().ownRowHeight or 18), 14, 24) end
+local function Strip(style, height)
+	if style == 'underline' then return 3 end
+	if style == 'led' then return max(3, floor(height / 3 + 0.5)) end
+end
+local DIM = 0.6 -- fill brightness behind text
 
 local ShowBreakdown, HideBreakdown -- defined below
+
+local function Lines(parent, count, layer, sublevel)
+	local list = {}
+	for index = 1, count do
+		local line = parent:CreateTexture(nil, layer, nil, sublevel)
+		line:SetColorTexture(1, 1, 1, 1)
+		list[index] = line
+	end
+	return list
+end
+
+-- Four hairlines around `target` (a frame or the fill texture).
+local function Box(lines, target, px)
+	local top, bottom, left, right = lines[1], lines[2], lines[3], lines[4]
+	for _, line in ipairs(lines) do line:ClearAllPoints() end
+	top:SetPoint('TOPLEFT', target, 'TOPLEFT'); top:SetPoint('TOPRIGHT', target, 'TOPRIGHT'); top:SetHeight(px)
+	bottom:SetPoint('BOTTOMLEFT', target, 'BOTTOMLEFT'); bottom:SetPoint('BOTTOMRIGHT', target, 'BOTTOMRIGHT'); bottom:SetHeight(px)
+	left:SetPoint('TOPLEFT', target, 'TOPLEFT'); left:SetPoint('BOTTOMLEFT', target, 'BOTTOMLEFT'); left:SetWidth(px)
+	right:SetPoint('TOPRIGHT', target, 'TOPRIGHT'); right:SetPoint('BOTTOMRIGHT', target, 'BOTTOMRIGHT'); right:SetWidth(px)
+end
 
 local function OwnRow(window, index)
 	local row = window.rows[index]
@@ -975,8 +1011,10 @@ local function OwnRow(window, index)
 	row.inner = CreateFrame('Frame', nil, row)
 	row.inner:SetPoint('TOPLEFT')
 	row.inner:SetPoint('BOTTOMRIGHT')
+	row.stripe = row.inner:CreateTexture(nil, 'BACKGROUND', nil, -6)
+	row.stripe:SetAllPoints()
+	row.stripe:SetColorTexture(1, 1, 1, 0.035)
 	row.rank = Kit:Text(row.inner, '', 8, 'darkDim', true)
-	Kit:Font(row.rank, 8, nil, true, 'numbers')
 	row.rank:SetJustifyH('RIGHT')
 	row.iconBack = row.inner:CreateTexture(nil, 'BACKGROUND')
 	row.iconBack:SetColorTexture(1, 1, 1, 1)
@@ -989,32 +1027,27 @@ local function OwnRow(window, index)
 	row.track = row.bar:CreateTexture(nil, 'BACKGROUND', nil, -2)
 	row.track:SetAllPoints()
 	row.track:SetColorTexture(1, 1, 1, 1)
-	Kit:Tint(row.track, 'glass', 0.9)
 	local fill = row.bar:GetStatusBarTexture()
 	row.edge = row.bar:CreateTexture(nil, 'OVERLAY', nil, 5)
 	row.edge:SetColorTexture(1, 1, 1, 1)
 	row.edge:SetPoint('TOPLEFT', fill, 'TOPLEFT')
 	row.edge:SetPoint('TOPRIGHT', fill, 'TOPRIGHT')
-	row.edge:SetAlpha(0.3)
 	row.spark = row.bar:CreateTexture(nil, 'OVERLAY', nil, 6)
 	row.spark:SetColorTexture(1, 1, 1, 1)
 	row.spark:SetBlendMode('ADD')
 	row.spark:SetPoint('TOP', fill, 'TOPRIGHT', 0, 0)
 	row.spark:SetPoint('BOTTOM', fill, 'BOTTOMRIGHT', 0, 0)
-	row.spark:SetAlpha(0.6)
-	-- Text above the bar (and its dot cover).
-	row.texts = CreateFrame('Frame', nil, row.bar)
-	row.texts:SetAllPoints()
-	row.texts:SetFrameLevel(row.bar:GetFrameLevel() + 3)
-	row.pct = Kit:Text(row.texts, '', 8, 'darkDim', false, true)
-	row.rate = Kit:Text(row.texts, '', 8, 'darkDim', false, true)
-	row.value = Kit:Text(row.texts, '', 9, 'darkInk', true, true)
-	for _, text in ipairs({row.pct, row.rate, row.value}) do
-		Kit:Font(text, text == row.value and 9 or 8, 'OUTLINE', text == row.value, 'numbers')
-		text:SetJustifyH('RIGHT')
-	end
-	row.name = Kit:Text(row.texts, '', 9, 'darkInk', false, true)
-	Kit:Font(row.name, 9, 'OUTLINE', false)
+	row.box = Lines(row.bar, 4, 'OVERLAY', 3)         -- the outline style's frame
+	row.fillBox = Lines(row.bar, 4, 'OVERLAY', 4)     -- and its value outline
+	row.gaps = {}                                     -- the segments style's hairline cuts
+	-- Text on its own layer, above any meter style.
+	row.texts = CreateFrame('Frame', nil, row.inner)
+	row.texts:SetFrameLevel(row.bar:GetFrameLevel() + 4)
+	row.pct = Kit:Text(row.texts, '', 8, 'darkDim', false)
+	row.rate = Kit:Text(row.texts, '', 8, 'darkDim', false)
+	row.value = Kit:Text(row.texts, '', 9, 'darkInk', true)
+	for _, text in ipairs({row.pct, row.rate, row.value}) do text:SetJustifyH('RIGHT') end
+	row.name = Kit:Text(row.texts, '', 9, 'darkInk', false)
 	row.name:SetJustifyH('LEFT')
 	row.name:SetWordWrap(false)
 	row.lamp = Kit:Led(row.inner, 4, true)
@@ -1028,29 +1061,94 @@ local function OwnRow(window, index)
 	return row
 end
 
+-- Legible type over any fill: a crisp outline, or a hard shadow.
+local function Legible(text, size, bold, role)
+	local outline = DB().ownContrast ~= 'shadow'
+	Kit:Font(text, size, outline and 'OUTLINE' or '', bold, role)
+	if outline then
+		text:SetShadowOffset(0, 0)
+	else
+		text:SetShadowOffset(1, -1)
+		text:SetShadowColor(0, 0, 0, 1)
+	end
+end
+
+local function Gaps(row, width, px)
+	local pitch = max(4, floor(RowHeight() / 3 + 0.5))
+	local count = min(80, floor(width / pitch))
+	for index = 1, count do
+		local gap = row.gaps[index]
+		if not gap then
+			gap = row.bar:CreateTexture(nil, 'OVERLAY', nil, 2)
+			gap:SetColorTexture(0, 0, 0, 1)
+			row.gaps[index] = gap
+		end
+		gap:ClearAllPoints()
+		gap:SetPoint('TOP', row.bar, 'TOPLEFT', index * pitch, 0)
+		gap:SetPoint('BOTTOM', row.bar, 'BOTTOMLEFT', index * pitch, 0)
+		gap:SetWidth(px)
+		gap:Show()
+	end
+	for index = count + 1, #row.gaps do row.gaps[index]:Hide() end
+end
+
 local function LayoutRow(row, height)
+	local db, style = DB(), RowStyle()
 	local px = UI.Pixel.Px(row, 1)
+	local rankWidth = Kit:Clamp(floor(db.ownRankWidth or 16), 8, 30)
+	local size = Kit:Clamp(floor(db.ownTextSize or 9), 7, 14)
 	row.rank:ClearAllPoints()
 	row.rank:SetPoint('LEFT', row.inner, 'LEFT', 0, 0)
-	row.rank:SetWidth(14)
+	row.rank:SetWidth(rankWidth)
+	Legible(row.rank, size - 1, true, 'numbers')
 	row.icon:ClearAllPoints()
-	row.icon:SetPoint('LEFT', row.inner, 'LEFT', 18, 0)
+	row.icon:SetPoint('LEFT', row.inner, 'LEFT', rankWidth + 4, 0)
 	row.icon:SetSize(height - 2, height - 2)
 	row.iconBack:ClearAllPoints()
 	row.iconBack:SetPoint('TOPLEFT', row.icon, 'TOPLEFT', -1, 1)
 	row.iconBack:SetPoint('BOTTOMRIGHT', row.icon, 'BOTTOMRIGHT', 1, -1)
 	row.lamp:ClearAllPoints()
 	row.lamp:SetPoint('TOPLEFT', row.icon, 'TOPLEFT', -2, 2)
+	-- The meter: behind the text, or a strip under it.
+	local strip = Strip(style, height)
 	row.bar:ClearAllPoints()
-	row.bar:SetPoint('TOPLEFT', row.icon, 'TOPRIGHT', 3, 1)
-	row.bar:SetPoint('BOTTOMRIGHT', row.inner, 'BOTTOMRIGHT', 0, 0)
+	if strip then
+		row.bar:SetPoint('BOTTOMLEFT', row.icon, 'BOTTOMRIGHT', 4, -1)
+		row.bar:SetPoint('BOTTOMRIGHT', row.inner, 'BOTTOMRIGHT', 0, 0)
+		row.bar:SetHeight(strip)
+	else
+		row.bar:SetPoint('TOPLEFT', row.icon, 'TOPRIGHT', 4, 1)
+		row.bar:SetPoint('BOTTOMRIGHT', row.inner, 'BOTTOMRIGHT', 0, 0)
+	end
+	row.texts:ClearAllPoints()
+	row.texts:SetPoint('TOPLEFT', row.icon, 'TOPRIGHT', 4, 1)
+	row.texts:SetPoint('RIGHT', row.inner, 'RIGHT', 0, 0)
+	row.texts:SetPoint('BOTTOM', row.inner, 'BOTTOM', 0, strip and strip + 1 or 0)
+	-- Track, edge, spark and the style's extras.
+	if style == 'outline' then row.track:SetAlpha(0) else row.track:SetAlpha(1); Kit:Tint(row.track, 'glass', 0.9) end
 	row.edge:SetHeight(px)
+	row.edge:SetShown(style == 'flat' or style == 'gradient' or style == 'segments')
+	row.edge:SetAlpha(0.35)
 	row.spark:SetWidth(2 * px)
-	if DB().bar == 'flat' then Kit:Unperforate(row.bar) else Kit:Perforate(row.bar, 'black', 'darkEdge') end
+	row.spark:SetShown(style ~= 'outline' and style ~= 'led')
+	row.spark:SetAlpha(strip and 0.9 or 0.5)
+	local outline = style == 'outline'
+	Box(row.box, row.bar, px)
+	Box(row.fillBox, row.bar:GetStatusBarTexture(), px)
+	for _, line in ipairs(row.box) do line:SetShown(outline); line:SetVertexColor(1, 1, 1, 0.18) end
+	for _, line in ipairs(row.fillBox) do line:SetShown(outline) end
+	if style == 'led' then Kit:Perforate(row.bar, 'black', 'darkEdge') else Kit:Unperforate(row.bar) end
+	if style == 'segments' then
+		local width = Plain(row.bar:GetWidth())
+		Gaps(row, type(width) == 'number' and width > 0 and width or 200, px)
+	else
+		for _, gap in ipairs(row.gaps) do gap:Hide() end
+	end
 	-- Figures from the right: percent, per second, total; the name takes what is left.
-	local db, anchor = DB(), nil
-	for _, part in ipairs({{row.pct, db.ownPercent}, {row.rate, db.ownRate}, {row.value, true}}) do
-		local text, shown = part[1], part[2]
+	local anchor
+	for _, part in ipairs({{row.pct, db.ownPercent, false}, {row.rate, db.ownRate, false}, {row.value, true, true}}) do
+		local text, shown, main = part[1], part[2], part[3]
+		Legible(text, main and size or size - 1, main, 'numbers')
 		text:ClearAllPoints()
 		text:SetShown(shown and true or false)
 		if shown then
@@ -1058,9 +1156,28 @@ local function LayoutRow(row, height)
 			anchor = text
 		end
 	end
+	Legible(row.name, size, false)
 	row.name:ClearAllPoints()
 	row.name:SetPoint('LEFT', row.texts, 'LEFT', 4, 0)
 	row.name:SetPoint('RIGHT', anchor, 'LEFT', -6, 0)
+end
+
+-- The fill's color for the style; `r, g, b` is the class or key color.
+local function PaintRow(row, r, g, b)
+	local style = RowStyle()
+	local fill = row.bar:GetStatusBarTexture()
+	if style == 'gradient' and fill and fill.SetGradient and CreateColor then
+		row.bar:SetStatusBarColor(1, 1, 1, 1)
+		fill:SetGradient('HORIZONTAL', CreateColor(r * 0.75, g * 0.75, b * 0.75, 1), CreateColor(r * 0.35, g * 0.35, b * 0.35, 1))
+	elseif style == 'underline' or style == 'led' then
+		row.bar:SetStatusBarColor(r, g, b, 1)
+	elseif style == 'outline' then
+		row.bar:SetStatusBarColor(r, g, b, 0.14)
+	else
+		row.bar:SetStatusBarColor(r * DIM, g * DIM, b * DIM, 1)
+	end
+	for _, line in ipairs(row.fillBox) do line:SetVertexColor(r, g, b, 1) end
+	row.spark:SetVertexColor(r, g, b)
 end
 
 -- Rows arriving: a short fade and slide from the left.
@@ -1100,8 +1217,8 @@ local function FillOwnRow(row, source, rank, top, total)
 	pcall(row.bar.SetMinMaxValues, row.bar, 0, top.totalAmount)
 	pcall(row.bar.SetValue, row.bar, source.totalAmount, OwnMotion() and Kit.SMOOTH or nil)
 	local color = ClassColor(source.classFilename)
-	if color and db.classColors then row.bar:SetStatusBarColor(color.r, color.g, color.b, 0.95)
-	else row.bar:SetStatusBarColor(Kit:RGB('lamp')) end
+	if color and db.classColors then PaintRow(row, color.r, color.g, color.b) else PaintRow(row, Kit:RGB('lamp')) end
+	row.stripe:SetShown(db.ownStripes and rank % 2 == 0)
 	-- Icon: the spec's, else the class's, cropped.
 	local spec = Plain(source.specIconID)
 	local class = Plain(source.classFilename)
@@ -1627,7 +1744,18 @@ local function Loaded(name)
 	return UI:IsAddOnLoaded(name)
 end
 
+-- 0.5.1: dot bars were hard to read behind text; saved dots become Flat once.
+-- Dots stay as the DM-1 meter's LED strip style.
+local function Upgrade()
+	local db = DB()
+	if db.barMoved then return end
+	if db.bar == 'dots' then db.bar = 'flat' end
+	if db.ownBar == 'dots' then db.ownBar = 'flat' end
+	db.barMoved = true
+end
+
 function module:Enable()
+	Upgrade()
 	RegisterMedia()
 	WaitForDetails()
 	if Loaded('Blizzard_DamageMeter') then UI:Safe(HookBlizzard) end
@@ -1656,10 +1784,12 @@ local function Signature()
 	local db = DB()
 	return strjoin(',', tostringall(db.bar, db.barHeight, db.fontSize, db.classColors, db.details, db.detailsBase, db.dock,
 		db.dockWidth, db.dockHeight, db.dockWindows, db.ownRows, db.ownWidth, db.ownCount, db.ownRate, db.ownPercent,
-		db.ownNameColor, db.replaceGame, db.blizzFill, db.blizzRanks, db.blizzRate, Kit:DB().finish, Kit:DB().accent))
+		db.ownNameColor, db.ownBar, db.ownRowHeight, db.ownTextSize, db.ownContrast, db.ownStripes, db.ownRankWidth,
+		db.replaceGame, db.blizzFill, db.blizzRanks, db.blizzRate, Kit:DB().finish, Kit:DB().accent))
 end
 
 function module:Refresh()
+	Upgrade()
 	local now = Signature()
 	if now == signature then return end
 	signature = now
@@ -1695,6 +1825,15 @@ UI:RegisterPage('meters', {title = 'Damage meters', order = 18, cards = {
 		{'slider', 'Rows', 'meters.ownRows', 3, 20, 1, 'Rows per window, unless sized with its grip.', format = Count},
 		{'slider', 'Width', 'meters.ownWidth', 200, 480, 10, nil, format = Count},
 		{'button', 'Window sizes', 'Reset', ResetSizes, 'Windows sized with their grip go back to Rows and Width.'},
+		{'dropdown', 'Row style', 'meters.ownBar', items = {{'flat', 'Flat'}, {'gradient', 'Gradient'}, {'underline', 'Underline'},
+			{'led', 'LED strip'}, {'segments', 'Segments'}, {'outline', 'Outline'}},
+			note = 'Flat: a dimmed fill behind the text. Gradient: bright to dim. Underline: a slim meter under the text. LED strip: small dots under the text. Segments: a dimmed fill cut by hairlines. Outline: a hairline box filled to the value.'},
+		{'slider', 'Row height', 'meters.ownRowHeight', 14, 24, 1, nil, format = Count},
+		{'slider', 'Text size', 'meters.ownTextSize', 7, 14, 1, nil, format = Count},
+		{'segmented', 'Text edge', 'meters.ownContrast', items = {{'outline', 'Outline'}, {'shadow', 'Shadow'}},
+			note = 'How names and figures stay readable over the fill.'},
+		{'switch', 'Row shading', 'meters.ownStripes', 'Every other row faintly shaded.'},
+		{'slider', 'Rank column', 'meters.ownRankWidth', 8, 30, 1, 'Width of the rank numbers, so names line up.', format = Count},
 		{'switch', 'Per second', 'meters.ownRate', 'The per-second figure beside each total.'},
 		{'switch', 'Percent', 'meters.ownPercent', 'Each row\'s share of the total (blank while the game keeps amounts secret).'},
 		{'switch', 'Class-colored names', 'meters.ownNameColor'},
@@ -1705,7 +1844,8 @@ UI:RegisterPage('meters', {title = 'Damage meters', order = 18, cards = {
 	{title = 'Style', rows = {
 		{'segmented', 'Meters', 'style.meters', items = {{'device', 'Device'}, {'blizzard', 'Blizzard'}}, reload = true,
 			note = 'Meter windows in dark SPEC-01 housings, with SPEC-01 bars and type.'},
-		{'segmented', 'Bars', 'meters.bar', items = {{'dots', 'Dots'}, {'segments', 'Segments'}, {'flat', 'Flat'}}},
+		{'segmented', 'Bars', 'meters.bar', items = {{'flat', 'Flat'}, {'segments', 'Segments'}},
+			note = 'Bar art for Details!, Skada, Recount and the game\'s meter when it is shown.'},
 		{'slider', 'Bar height', 'meters.barHeight', 12, 28, 1, nil, format = Count},
 		{'slider', 'Text size', 'meters.fontSize', 8, 14, 1, nil, format = Count},
 		{'switch', 'Class colors', 'meters.classColors', 'Bars in class colors; off uses the lamp color.'},
