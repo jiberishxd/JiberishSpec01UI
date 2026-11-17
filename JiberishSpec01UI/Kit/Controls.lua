@@ -240,22 +240,71 @@ function Kit:Knob(parent, opts)
 		Kit:Play('tick')
 		Changed(knob, value)
 	end
-	local origin, base
-	self:Drag(dial, function(_, _, y)
-		-- Vertical travel turns the knob; the full range is about 120 px.
-		local value = base + (y - origin) / 120 * (high - low)
+	-- The whole knob takes the mouse (cap, tick ring and label), above its
+	-- neighbours. On the ring, the knob turns to where you point and follows
+	-- the cursor round; on the cap, dragging up or right turns it up, down or
+	-- left turns it down (about 3x the knob's size for the full range; Shift
+	-- for fine control). The wheel steps it, a double-click puts it back.
+	knob:SetFrameLevel(parent:GetFrameLevel() + 4)
+	local function Set(value)
 		local snapped = Kit:Snap(value, low, high, step)
 		if snapped ~= knob.value then
 			knob:SetValue(snapped)
 			Kit:Play('tick')
 			Changed(knob, snapped)
 		end
+	end
+	local function Centre()
+		local cx, cy = dial:GetCenter()
+		local kx, ky = knob:GetLeft(), knob:GetBottom()
+		return cx - kx, cy - ky
+	end
+	local function AngleValue(x, y)
+		local cx, cy = Centre()
+		local angle = math.deg(math.atan2(y - cy, x - cx))
+		-- 0 at the start of the sweep, clockwise.
+		local start = 90 + sweep / 2
+		local along = (start - angle) % 360
+		if along > sweep then along = along - sweep > (360 - sweep) / 2 and 0 or sweep end
+		return low + along / sweep * (high - low)
+	end
+	local mode, originX, originY, base
+	self:Drag(knob, function(_, x, y)
+		if mode == 'ring' then
+			Set(AngleValue(x, y))
+		else
+			local travel = max(120, size * 3) * (IsShiftKeyDown() and 4 or 1)
+			Set(base + ((y - originY) + (x - originX)) / travel * (high - low))
+		end
 	end, function(self)
-		local _, y = Kit:Cursor(self)
-		origin, base = y, knob.value
+		local x, y = Kit:Cursor(self)
+		local cx, cy = Centre()
+		local distance = math.sqrt((x - cx) ^ 2 + (y - cy) ^ 2)
+		-- The ring is the tick band around the cap; the label below drags like the cap.
+		mode = (distance > size * 0.42 and distance <= size * 0.5 + 15) and 'ring' or 'cap'
+		originX, originY, base = x, y, knob.value
+		Kit:Play('down')
+	end, function() Kit:Play('up') end)
+	knob:EnableMouseWheel(true)
+	knob:SetScript('OnMouseWheel', function(_, delta) Nudge(delta * step * (IsShiftKeyDown() and 1 or (opts.wheelStep or 1))) end)
+	knob:SetScript('OnDoubleClick', nil)
+	local lastClick = 0
+	knob:HookScript('OnMouseDown', function()
+		local now = GetTime()
+		if now - lastClick < 0.3 and opts.default ~= nil then Set(opts.default) end
+		lastClick = now
 	end)
-	dial:EnableMouseWheel(true)
-	dial:SetScript('OnMouseWheel', function(_, delta) Nudge(delta * step) end)
+	knob:HookScript('OnEnter', function()
+		if not knob.glow then
+			knob.glow = Kit:Texture(knob, 'glow', 'BACKGROUND', -1)
+			knob.glow:SetPoint('TOPLEFT', dial, 'TOPLEFT', -10, 10)
+			knob.glow:SetPoint('BOTTOMRIGHT', dial, 'BOTTOMRIGHT', 10, -10)
+			Kit:Tint(knob.glow, 'lamp')
+			knob.glow:SetAlpha(0)
+		end
+		Kit:FadeTo(knob.glow, 0.25, 'FAST')
+	end)
+	knob:HookScript('OnLeave', function() if knob.glow then Kit:FadeTo(knob.glow, 0, 'FAST') end end)
 	knob:SetValue(opts.value or low)
 	return knob
 end
