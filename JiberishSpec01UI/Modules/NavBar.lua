@@ -81,28 +81,84 @@ end
 local AUTO_ATTACK = 6603
 local MELEE = 5
 
-local function BuildCheckers()
-	wipe(checkers)
-	local _, class = UnitClass('player')
-	local byRange = {}
-	if Known(AUTO_ATTACK) or IsSpellInRange then
-		byRange[MELEE] = true
-		checkers[#checkers + 1] = {spell = AUTO_ATTACK, range = MELEE}
+-- Every non-passive spell in the player's own spellbook that can reach a unit,
+-- one per distinct range: harmful ones measure enemies, helpful ones friends.
+-- Read from the spellbook, so it works on every client and rank.
+local function SpellbookSpells(visit)
+	local book = C_SpellBook
+	if book and book.GetNumSpellBookSkillLines and book.GetSpellBookSkillLineInfo and book.GetSpellBookItemInfo then
+		local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+		local spellType = Enum and Enum.SpellBookItemType and Enum.SpellBookItemType.Spell
+		for line = 1, Plain(book.GetNumSpellBookSkillLines) or 0 do
+			local info = Plain(book.GetSpellBookSkillLineInfo, line)
+			if type(info) == 'table' and not IsSecret(info.itemIndexOffset) and not IsSecret(info.numSpellBookItems) then
+				local first = (info.itemIndexOffset or 0) + 1
+				for slot = first, first + (info.numSpellBookItems or 0) - 1 do
+					local item = Plain(book.GetSpellBookItemInfo, slot, bank)
+					if type(item) == 'table' and not IsSecret(item.spellID) and not IsSecret(item.isPassive)
+						and (not spellType or item.itemType == spellType) and item.spellID and not item.isPassive then
+						visit(item.spellID)
+					end
+				end
+			end
+		end
+		return
 	end
+	-- Older clients.
+	if GetNumSpellTabs and GetSpellTabInfo and GetSpellBookItemInfo then
+		for tab = 1, Plain(GetNumSpellTabs) or 0 do
+			local ok, _, _, offset, count = pcall(GetSpellTabInfo, tab)
+			if ok and type(offset) == 'number' and type(count) == 'number' then
+				for slot = offset + 1, offset + count do
+					local okItem, kind, id = pcall(GetSpellBookItemInfo, slot, 'spell')
+					if okItem and kind == 'SPELL' and type(id) == 'number' then visit(id) end
+				end
+			end
+		end
+	end
+end
+
+local harmChecks, helpChecks = {}, {}
+
+local function Add(list, byRange, entry)
+	if byRange[entry.range] then return end
+	byRange[entry.range] = true
+	list[#list + 1] = entry
+end
+
+local function BuildCheckers()
+	wipe(harmChecks)
+	wipe(helpChecks)
+	local harmRange, helpRange = {}, {}
+	if Known(AUTO_ATTACK) or IsSpellInRange then Add(harmChecks, harmRange, {spell = AUTO_ATTACK, range = MELEE}) end
+	local isHarmful = C_Spell and C_Spell.IsSpellHarmful
+	local isHelpful = C_Spell and C_Spell.IsSpellHelpful
+	SpellbookSpells(function(spell)
+		local range = SpellRange(spell)
+		if not range or range > 100 then return end
+		if isHarmful and Plain(isHarmful, spell) then Add(harmChecks, harmRange, {spell = spell, range = range}) end
+		if isHelpful and Plain(isHelpful, spell) then Add(helpChecks, helpRange, {spell = spell, range = range}) end
+	end)
+	-- The class list, for anything the spellbook didn't answer.
+	local _, class = UnitClass('player')
 	for _, spell in ipairs(not IsSecret(class) and CLASS_SPELLS[class] or {}) do
 		local range = Known(spell) and SpellRange(spell)
-		if range and not byRange[range] then
-			byRange[range] = true
-			checkers[#checkers + 1] = {spell = spell, range = range}
-		end
+		if range then Add(harmChecks, harmRange, {spell = spell, range = range}) end
 	end
 	for _, interact in ipairs(INTERACT) do
-		if not byRange[interact.range] then
-			byRange[interact.range] = true
-			checkers[#checkers + 1] = {index = interact.index, range = interact.range}
-		end
+		Add(harmChecks, harmRange, {index = interact.index, range = interact.range})
+		Add(helpChecks, helpRange, {index = interact.index, range = interact.range})
 	end
-	table.sort(checkers, function(a, b) return a.range < b.range end)
+	local function Nearest(a, b) return a.range < b.range end
+	table.sort(harmChecks, Nearest)
+	table.sort(helpChecks, Nearest)
+	checkers = harmChecks
+end
+
+-- The checks that fit a unit: harmful spells for enemies, helpful for the rest.
+local function ChecksFor(unit)
+	local hostile = Plain(UnitCanAttack, 'player', unit)
+	checkers = (hostile == false and #helpChecks > 0) and helpChecks or harmChecks
 end
 
 -- Fills `answers` with each checker's answer; returns true when any is secret.
@@ -522,6 +578,7 @@ local function Sense(bar)
 	local unit = bar.unit
 	if not unit then return end
 	if DB().yards then
+		ChecksFor(unit)
 		if Ask(unit, bar.answers) then ShowSecret(bar, bar.answers) else ShowPlain(bar, Bracket(bar.answers)) end
 	end
 	-- The answer may be secret: it goes to SetFacing untested.
