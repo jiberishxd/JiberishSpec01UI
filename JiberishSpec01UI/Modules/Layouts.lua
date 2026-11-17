@@ -350,8 +350,11 @@ local function Solver(preset)
 		opts = opts or {}
 		local width, height = s.size(key)
 		local nudge = opts.nudge or {'up', 'left', 'right'}
+		-- A frame taller than allowed starts at the scale that fits the cap.
+		local start = opts.scale or 1
+		if opts.maxHeight and height * start > opts.maxHeight then start = max(SHRINK[#SHRINK], opts.maxHeight / height) end
 		for _, factor in ipairs(SHRINK) do
-			if factor <= (opts.scale or 1) then
+			if factor <= start + 0.001 then
 				local sw, sh = width * factor, height * factor
 				local bx = x + (width - sw) / 2
 				local fx, fy = Nearest(key, bx, y, sw, sh, nudge, opts.edge)
@@ -386,9 +389,16 @@ local function Solver(preset)
 		return best
 	end
 	-- Place a frame centred above the highest of the given frames.
+	-- Place a frame above the highest of the given frames, centred on the first
+	-- of them that is placed (so it follows a console that isn't centred).
 	function s.above(key, keys, gap, opts)
-		local _, height = s.size(key)
-		return s.put(key, s.mid(key), s.highest(keys, MARGIN) + (gap or GAP), opts or {nudge = {'up'}})
+		local width = s.size(key)
+		local x = s.mid(key)
+		for _, other in ipairs(keys) do
+			local rect = s.rects[other]
+			if rect then x = rect.x + rect.w / 2 - width / 2 break end
+		end
+		return s.put(key, x, s.highest(keys, MARGIN) + (gap or GAP), opts or {nudge = {'up'}})
 	end
 	return s
 end
@@ -412,22 +422,31 @@ local function Edges(s, opts)
 	-- Right edge: side bars centred, the menu in the corner.
 	local sideWidth, sideHeight = s.size('ab.side')
 	s.put('ab.side', W - sideWidth - 6, H / 2 - sideHeight / 2, {nudge = {'down', 'up', 'left'}})
+	-- Bottom-right corner: the menu, the bag keys just left of it. If the
+	-- console reaches the corner, they go up over its right end.
 	local menuWidth = s.size('ab.menu')
-	s.put('ab.menu', W - menuWidth - MARGIN, MARGIN, {nudge = {'left', 'up'}})
-	-- Meters: over the menu in the corner, or a column at the middle right.
+	s.put('ab.menu', W - menuWidth - MARGIN, MARGIN, {nudge = {'up', 'left'}})
+	local bagKeysWidth = s.size('ab.bags')
+	s.put('ab.bags', s.left('ab.menu', W - MARGIN) - bagKeysWidth - GAP, s.bottom('ab.menu', MARGIN), {nudge = {'left', 'up'}})
+	-- Meters: a column at the right edge, stacked upward over the menu (or from
+	-- the middle), each at most a third of the screen tall.
+	local meterCap = H * 0.35
 	local meterWidth, meterHeight = s.size('dm.own')
-	local meterY = opts.meters == 'middle' and H * 0.42 - meterHeight / 2 or s.top('ab.menu', MARGIN) + GAP
-	s.put('dm.own', W - meterWidth - MARGIN - (opts.meters == 'middle' and s.size('ab.side') + 12 or 0), meterY,
-		{nudge = {'up', 'left'}, scale = edge})
-	s.put('dm.dock', s.left('dm.own', W - meterWidth - MARGIN), s.bottom('dm.own', meterY), {nudge = {'up', 'left'}, scale = edge})
+	local sideRoom = opts.meters == 'middle' and s.size('ab.side') + 12 or 0
+	local meterY = opts.meters == 'middle' and H * 0.4 - min(meterHeight, meterCap) / 2
+		or s.highest({'ab.menu', 'ab.bags'}, MARGIN) + GAP
+	s.put('dm.own', W - meterWidth - MARGIN - sideRoom, meterY, {nudge = {'up', 'left'}, scale = edge, maxHeight = meterCap})
+	s.put('dm.dock', s.left('dm.own', W - meterWidth - MARGIN - sideRoom), s.bottom('dm.own', meterY),
+		{nudge = {'up', 'left'}, scale = edge, maxHeight = meterCap})
 	for index = 2, 3 do
 		local key, previous = 'dm.own'..index, index == 2 and 'dm.own' or 'dm.own2'
 		local width = s.size(key)
-		s.put(key, s.left(previous, W) - width - GAP, s.bottom(previous, meterY), {nudge = {'left', 'up'}, scale = edge})
+		s.put(key, s.right(previous, W - MARGIN - sideRoom) - width, s.top(previous, meterY) + GAP,
+			{nudge = {'up', 'left'}, scale = edge, maxHeight = meterCap})
 	end
 	-- Bags over the meters at the right edge.
 	local bagsWidth = s.size('bags.bags')
-	s.put('bags.bags', W - bagsWidth - MARGIN, s.highest({'dm.own', 'dm.dock', 'ab.menu'}, MARGIN) + GAP,
+	s.put('bags.bags', W - bagsWidth - MARGIN, s.highest({'dm.own', 'dm.own2', 'dm.own3', 'dm.dock', 'ab.menu', 'ab.bags'}, MARGIN) + GAP,
 		{nudge = {'up', 'left'}, scale = edge})
 	-- Boss and arena: a column left of the side bars, upper half.
 	local bossWidth, bossHeight = s.size('group.boss')
@@ -509,21 +528,29 @@ PRESETS = {
 		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true, ['actionbars.rows'] = 3, ['actionbars.side'] = true},
 		rules = function(s)
 			Console(s)
-			s.above('tl.player', {'ab.console'}, 24)
-			s.above('group.small', {'tl.player', 'ab.console'}, 16, {nudge = {'up', 'left', 'right'}})
-			s.put('group.large', s.mid('group.large'), s.bottom('group.small', s.top('ab.console', MARGIN) + 16),
-				{nudge = {'up', 'left', 'right'}})
+			-- Strips tucked on the console's top edge, left and right.
 			local console = s.get('ab.console')
 			if console then
-				s.put('uf.targettarget', console.x + console.w - s.size('uf.targettarget'), console.y + console.h + 8, {nudge = {'up', 'right'}})
-				s.put('uf.pet', console.x, console.y + console.h + 8, {nudge = {'up', 'left'}})
-				s.put('ab.stance', console.x, s.top('uf.pet', console.y + console.h) + 8, {nudge = {'up', 'left'}})
-				s.put('ab.pet', console.x + console.w - s.size('ab.pet'), s.top('uf.targettarget', console.y + console.h) + 8,
-					{nudge = {'up', 'right'}})
+				local top = console.y + console.h + 6
+				s.put('ab.stance', console.x, top, {nudge = {'right', 'up'}})
+				s.put('ab.pet', console.x + console.w - s.size('ab.pet'), top, {nudge = {'left', 'up'}})
 			end
-			s.put('uf.focus', s.W * 0.28 - s.size('uf.focus') / 2, s.H * 0.5, {nudge = {'up', 'left'}})
-			s.above('ab.extra', {'group.small', 'group.large', 'tl.player'}, 16)
-			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.H * 0.4), {nudge = {'left', 'up'}})
+			-- The timeline centred just over the console; abilities over it; the raid above.
+			s.above('tl.player', {'ab.console', 'ab.stance', 'ab.pet'}, 12)
+			s.above('ab.extra', {'tl.player', 'ab.console'}, 12)
+			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.top('tl.player', s.H * 0.3) + 12),
+				{nudge = {'left', 'up'}})
+			s.above('group.small', {'tl.player', 'ab.extra', 'ab.zone', 'ab.console'}, 16, {nudge = {'up', 'left', 'right'}})
+			s.put('group.large', s.left('group.small', s.mid('group.large')), s.bottom('group.small', s.top('tl.player', s.H * 0.3) + 16),
+				{nudge = {'up', 'left', 'right'}})
+			-- The small frames near the docked player (left end) and target (right end).
+			if console then
+				local leftTop = s.top('ab.stance', console.y + console.h)
+				local rightTop = s.top('ab.pet', console.y + console.h)
+				s.put('uf.pet', console.x, leftTop + 6, {nudge = {'up', 'left'}})
+				s.put('uf.focus', console.x, s.top('uf.pet', leftTop) + 6, {nudge = {'up', 'left'}})
+				s.put('uf.targettarget', console.x + console.w - s.size('uf.targettarget'), rightTop + 6, {nudge = {'up', 'right'}})
+			end
 			Edges(s, {meters = 'corner', party = 'left'})
 		end},
 	{key = 'cockpit', title = 'Cockpit', model = 'LY-2',
@@ -709,8 +736,68 @@ local function SpotOf(rect, W, H)
 	return point, floor(x * 100 + 0.5) / 100, floor(y * 100 + 0.5) / 100
 end
 
+-- The placed frames as they really are now: {key = {x, y, w, h}}, bottom-left origin.
+local function LiveRects()
+	local W, H = UIParent:GetSize()
+	local rects = {}
+	for _, entry in ipairs(UI:GetMovers()) do
+		if not entry.docked and not Unmanaged(entry.key) then
+			local cx, cy = UI:GetMoverCenter(entry.key)
+			local width, height = UI:GetMoverSize(entry.key)
+			if cx and width and width > 1 and height > 1 then
+				rects[entry.key] = {x = cx + W / 2 - width / 2, y = cy + H / 2 - height / 2, w = width, h = height}
+			end
+		end
+	end
+	return rects
+end
+
+-- Debug only: every pair of placed frames (and game frames) that still overlap.
+local function ReportOverlaps(label)
+	if not DB().debugLayout then return end
+	local rects = LiveRects()
+	local W, H = UIParent:GetSize()
+	for _, spec in ipairs(OBSTACLES) do
+		local cx, cy, width, height = FrameRect(_G[spec[1]])
+		if cx then rects[spec[1]] = {x = cx + W / 2 - width / 2, y = cy + H / 2 - height / 2, w = width, h = height} end
+	end
+	local keys, found = {}, 0
+	for key in pairs(rects) do keys[#keys + 1] = key end
+	table.sort(keys)
+	for i = 1, #keys do
+		for j = i + 1, #keys do
+			local a, b = rects[keys[i]], rects[keys[j]]
+			if EXCLUSIVE[keys[i]] ~= keys[j] and a.x < b.x + b.w - 1 and b.x < a.x + a.w - 1 and a.y < b.y + b.h - 1 and b.y < a.y + a.h - 1 then
+				found = found + 1
+				UI:Print(format('Layout check (%s): %s overlaps %s.', label, keys[i], keys[j]))
+			end
+		end
+	end
+	if found == 0 then UI:Print(format('Layout check (%s): no overlaps.', label)) end
+end
+
+-- Modules lay their frames out after they move (the console grows to hold its
+-- contents, meters resize to their rows): once they have, any frame whose
+-- size differs from what the solver used means the layout is solved again.
+local function Verify(preset, solved, pass)
+	C_Timer.After(pass == 1 and 0.6 or 2, function()
+		if InCombatLockdown() or DB().preset ~= preset.key then return end
+		local live = LiveRects()
+		local changed = false
+		for key, rect in pairs(solved) do
+			local now = live[key]
+			if now and (abs(now.w - rect.w) > 4 or abs(now.h - rect.h) > 4) then changed = true break end
+		end
+		if changed and pass < 3 then
+			ApplyPreset(preset, {quiet = true, keepSettings = true, pass = pass + 1})
+		else
+			ReportOverlaps(preset.title)
+		end
+	end)
+end
+
 -- opts: quiet (no sound or toast), keepSettings (positions only, e.g. after
--- the reload a layout asked for, or a new screen scale).
+-- the reload a layout asked for, or a new screen scale), pass (re-solves so far).
 function ApplyPreset(preset, opts)
 	opts = opts or {}
 	if InCombatLockdown() then return UI:Print('Layouts can be applied once you leave combat.') end
@@ -735,6 +822,7 @@ function ApplyPreset(preset, opts)
 	DB().preset = preset.key
 	DB().resolvePending = reload and preset.key or nil
 	UI:PlaceAllMovers()
+	Verify(preset, s.rects, opts.pass or 1)
 	if #s.missed > 0 then
 		UI:Print(format('%d frame%s could not fit in the %s layout: %s.', #s.missed, #s.missed == 1 and '' or 's', preset.title,
 			table.concat(s.missed, ', ')))
@@ -1366,6 +1454,16 @@ function UI:LayoutPresetMap(key)
 		list[#list + 1] = {key = frameKey, x = rect.x / s.W, y = rect.y / s.H, w = rect.w / s.W, h = rect.h / s.H}
 	end
 	return list
+end
+
+-- Turn the layout overlap check on or off (it prints after each apply), and run it now.
+function UI:LayoutDebug(on)
+	if on == nil then on = not DB().debugLayout end
+	DB().debugLayout = on and true or nil
+	if on then
+		local preset = PRESET_BY_KEY[DB().preset]
+		ReportOverlaps(preset and preset.title or 'current')
+	end
 end
 
 -- Apply a screen layout: size 'auto' | '1080' | '1440' | '2160', density 'compact' | 'comfortable'.
