@@ -2171,7 +2171,7 @@ local LayoutLarge, LayoutCompact, NoPortrait, Gauge, ApplyShell, ResetParts, SHA
 do
 local function ShowGhost(frame, cfg)
 	if not frame.ghost then return end
-	frame.ghost:SetText(cfg.healthText == 'percent' and '888' or '')
+	frame.ghost:SetText('') -- see SyncGhost: no unlit digits behind health readouts
 	if not Kit.Ghost then frame.ghost:Show() end
 end
 
@@ -2180,27 +2180,11 @@ end
 -- outlined or shadowed (an outlined ghost reads as garbled digits). It shows
 -- only behind a percentage (three digits at most) set in the monospaced IBM
 -- Plex Mono, where each digit lands on an unlit one; otherwise it is blank.
-function SyncGhost(frame, cfg)
-	local ghost, digits = frame.ghost, frame.digits
-	if not (ghost and digits) then return end
-	local parent = digits:GetParent()
-	local onLcd = (parent == frame.lcd and frame.lcd:IsShown()) or (frame.shapeName == 'lcdstrip' and parent == frame.face)
-	local path, size = digits:GetFont()
-	local mono = type(path) == 'string' and path:find('IBMPlexMono') ~= nil
-	if not (onLcd and mono and size and cfg.healthText == 'percent') then
-		ghost:SetText('')
-		return
-	end
-	if ghost:GetParent() ~= parent then ghost:SetParent(parent) end
-	ghost:SetFont(path, size, '')
-	ghost:SetShadowOffset(0, 0)
-	ghost:SetText('888')
-	ghost:SetJustifyH('RIGHT')
-	ghost:ClearAllPoints()
-	ghost:SetPoint('RIGHT', digits, 'RIGHT', 0, 0)
-	ghost:SetDrawLayer('ARTWORK')
-	digits:SetDrawLayer('OVERLAY')
-	Kit:Tint(ghost, 'lcdGhost')
+function SyncGhost(frame)
+	-- Unlit digits behind a live, variable-width health readout kept showing
+	-- through it in game (a dark first digit), so health readouts go without
+	-- them; fixed readouts (clocks, timers) keep theirs.
+	if frame.ghost then frame.ghost:SetText('') end
 end
 
 -- A theme repaint re-applies every registered font, ghosts included: put the
