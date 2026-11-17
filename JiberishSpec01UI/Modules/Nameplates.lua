@@ -102,7 +102,7 @@ UI:RegisterDefaults('nameplates', {
 	questStyle = 'glyph', -- 'glyph' | 'led' | 'chip' | 'progress' | 'exclamation' | 'none'
 	questPosition = 'right', -- 'right' | 'left' | 'above' | 'header'
 	questSize = 12, questColor = 'amber', -- 'amber' | 'key' | 'custom'
-	questCustomColor = {1, 0.66, 0}, questBlink = true, questBreathe = false, questLamp = true,
+	questCustomColor = {1, 0.66, 0}, questBlink = false, questBreathe = false, questLamp = true,
 	questHealth = false, questHealthColor = {1, 0.66, 0}, questName = false, questNameColor = {1, 0.78, 0.36},
 	-- The game's own plate settings, set out of combat and put back when turned off.
 	stacking = 'game', -- 'game' | 'stack' | 'overlap'

@@ -162,6 +162,10 @@ function UI:Migrate(db)
 		if db.nameplates.targetScale == 1.12 then db.nameplates.targetScale = 1.05 end
 		db.nameplates.scaleMoved = true
 	end
+	-- Quest markers are a steady symbol: the blink on target goes off once.
+	if type(db.nameplates) == 'table' and not db.nameplates.questStatic then
+		db.nameplates.questBlink, db.nameplates.questBreathe, db.nameplates.questStatic = false, false, true
+	end
 	-- The LV chip and HP legend need room: the old default plate width grows once.
 	if type(db.nameplates) == 'table' and not db.nameplates.widthMoved then
 		if db.nameplates.width == 132 then db.nameplates.width = 156 end
