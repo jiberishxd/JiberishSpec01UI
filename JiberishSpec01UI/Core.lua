@@ -31,7 +31,7 @@ local defaults = {
 	actionbars = {scale = 1, housing = true, hotkeys = true, macros = false, xpbar = true, art = false,
 		layout = 'console', rows = 3, keySize = 34, side = true, pet = true, stance = true, dock = true},
 	minimap = {scale = 1, clock = true, coords = true},
-	nameplates = {width = 132, height = 8, scale = 1, targetScale = 1.05, level = true, castbar = true, debuffs = true,
+	nameplates = {width = 156, height = 8, scale = 1, targetScale = 1.05, level = true, castbar = true, debuffs = true,
 		classColor = true, threat = true},
 	objectives = {scale = 1, collapsed = false},
 	buffs = {size = 30, perRow = 12, scale = 1},
@@ -161,6 +161,11 @@ function UI:Migrate(db)
 	if type(db.nameplates) == 'table' and not db.nameplates.scaleMoved then
 		if db.nameplates.targetScale == 1.12 then db.nameplates.targetScale = 1.05 end
 		db.nameplates.scaleMoved = true
+	end
+	-- The LV chip and HP legend need room: the old default plate width grows once.
+	if type(db.nameplates) == 'table' and not db.nameplates.widthMoved then
+		if db.nameplates.width == 132 then db.nameplates.width = 156 end
+		db.nameplates.widthMoved = true
 	end
 	-- 0.5.1: bag slots match the menu's glyph keys; the bag pictures stay an option.
 	if type(db.actionbars) == 'table' and not db.actionbars.bagGlyphsMoved then

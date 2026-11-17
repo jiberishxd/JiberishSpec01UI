@@ -745,11 +745,27 @@ local function UpdateColor(plate)
 	end
 end
 
+-- A long name steps its font down (to two sizes under the setting, 6 at
+-- least) before it is cut short, so names fit the header where they can.
+local function FitName(plate)
+	local name, base = plate.name, DB().nameSize or 8
+	local room = name:GetWidth()
+	if IsSecret(room) or not room or room <= 0 then return end
+	for size = base, max(6, base - 2), -1 do
+		Kit:Font(name, size, nil, true)
+		local width = name:GetStringWidth()
+		if IsSecret(width) or not width or width <= room then return end
+	end
+end
+
 local function UpdateName(plate)
 	local unit = plate.unit
 	local name = UnitName(unit)
 	if IsSecret(name) then plate.name:SetText(name)
-	else plate.name:SetText(name and Truncate(strupper(name), DB().nameLength) or '') end
+	else
+		plate.name:SetText(name and Truncate(strupper(name), DB().nameLength) or '')
+		UI:Safe(FitName, plate)
+	end
 	local class = Plain(UnitClassification, unit)
 	plate.elite = class == 'elite' or class == 'rareelite' or class == 'worldboss'
 	local chip = plate.chip.text
