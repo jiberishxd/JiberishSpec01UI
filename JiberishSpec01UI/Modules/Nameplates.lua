@@ -111,6 +111,13 @@ UI:RegisterDefaults('nameplates', {
 	-- Scale.
 	eliteScale = 1, minionScale = 0.85,
 	keepDistance = false, -- true keeps the game's distance (and target) scaling on top of ours
+	-- Plate states: non-target plates as slim Compact strips, the target as the Full device.
+	otherPlates = 'compact', -- 'compact' | 'full'
+	compactWidth = 0.7, compactLevel = true, compactMeter = 'hairline', -- 'hairline' | 'dots'
+	compactHousing = 'none', -- 'none' | 'glass'
+	expandMouseover = false, expandFocus = true,
+	housing = 'glass', -- 'glass' | 'none' (Full)
+	targetHeight = 5, levelInline = true,
 	-- Printed legends: LV before the level, HP before the health readout.
 	legends = true,
 })
@@ -390,26 +397,30 @@ end
 
 local function LayoutCast(plate)
 	local db, cast = DB(), plate.cast
-	local height = db.castHeight or 18
+	-- Compact plates cast on a slim bar with no name or icon.
+	local compact = plate.state == 'compact'
+	local height = compact and 8 or (db.castHeight or 18)
 	cast:SetHeight(height)
 	local iconSize = max(8, height - 6)
 	cast.icon:SetSize(iconSize, iconSize)
-	cast.icon:SetShown(db.castIcon and true or false)
-	local left = db.castIcon and cast.icon or nil
+	local showIcon, showName = db.castIcon and not compact, db.castName and not compact
+	cast.icon:SetShown(showIcon and true or false)
+	local left = showIcon and cast.icon or nil
 	cast.label:ClearAllPoints()
 	if left then cast.label:SetPoint('TOPLEFT', left, 'TOPRIGHT', 4, 1) else cast.label:SetPoint('TOPLEFT', 4, -2) end
 	cast.label:SetPoint('RIGHT', cast, 'RIGHT', -4, 0)
-	cast.label:SetShown(db.castName and true or false)
+	cast.label:SetShown(showName and true or false)
 	cast.track:ClearAllPoints()
-	if left then cast.track:SetPoint('BOTTOMLEFT', left, 'BOTTOMRIGHT', 4, 0) else cast.track:SetPoint('BOTTOMLEFT', cast, 'BOTTOMLEFT', 4, 3) end
-	cast.track:SetPoint('BOTTOMRIGHT', cast, 'BOTTOMRIGHT', -4, 3)
+	if left then cast.track:SetPoint('BOTTOMLEFT', left, 'BOTTOMRIGHT', 4, 0) else cast.track:SetPoint('BOTTOMLEFT', cast, 'BOTTOMLEFT', compact and 2 or 4, compact and 2 or 3) end
+	cast.track:SetPoint('BOTTOMRIGHT', cast, 'BOTTOMRIGHT', compact and -2 or -4, compact and 2 or 3)
 	-- Without a name line, the bar takes the height.
-	cast.track:SetHeight(db.castName and 4 or max(4, height - 6))
+	cast.track:SetHeight(showName and 4 or max(4, height - (compact and 4 or 6)))
 end
 
 local function LayoutAuras(plate)
 	local db = DB()
 	local size, count = db.auraSize or 18, min(db.auraCount or 5, AURA_MAX)
+	if plate.state == 'compact' then size = max(10, floor(size * 0.75 + 0.5)) end
 	for index, icon in ipairs(plate.auras) do
 		icon:SetSize(size, size)
 		if icon.cooldown.SetHideCountdownNumbers then icon.cooldown:SetHideCountdownNumbers(not db.auraTime) end
@@ -581,57 +592,141 @@ do
 end
 
 -- Sizes come from the settings, so a change applies to every plate at once.
+-- Two states: every plate is a slim Compact strip (name, a hairline meter, a
+-- small level) until it is your target (or focus, or under the mouse, as
+-- chosen), when it opens into the Full device: lamp, LV and level, name, HP
+-- and readout, and the meter, all in one tight housing.
+local function UnitPlate(unit)
+	if not C_NamePlate or not C_NamePlate.GetNamePlateForUnit then return nil end
+	local ok, nameplate = pcall(C_NamePlate.GetNamePlateForUnit, unit)
+	return ok and nameplate or nil
+end
+
+local function State(plate)
+	if plate.nameOnly then return 'name' end
+	if plate.preview then return plate.previewState or 'full' end
+	local db = DB()
+	if db.otherPlates == 'full' then return 'full' end
+	local nameplate = plate.nameplate
+	if not nameplate then return 'full' end
+	if nameplate == UnitPlate('target') then return 'full' end
+	if db.expandFocus and nameplate == UnitPlate('focus') then return 'full' end
+	if db.expandMouseover and nameplate == UnitPlate('mouseover') then return 'full' end
+	return 'compact'
+end
+module.State = State
+
 local function Layout(plate)
 	local db = DB()
 	local nameOnly = plate.nameOnly
-	local width, height = db.width or 132, db.height or 8
-	plate:SetSize(width, nameOnly and 16 or height + 30)
-	plate.shell:SetShown(not nameOnly)
+	local state = nameOnly and 'name' or (plate.state or State(plate))
+	plate.state = state
+	local compact = state == 'compact'
+	local fullWidth = db.width or 132
+	local width = compact and floor(fullWidth * (db.compactWidth or 0.7) + 0.5) or fullWidth
+	local height = compact and ((db.compactMeter or 'hairline') == 'dots' and 3 or 2) or max(3, db.targetHeight or 5)
+	local nameSize = compact and max(6, (db.nameSize or 8) - 1) or (db.nameSize or 8)
+	local plateHeight = nameOnly and 16 or (compact and (height + nameSize + 5) or (height + 21))
+	plate.stateWidth, plate.stateHeight = width, plateHeight
+	if not plate.morphing then plate:SetSize(width, plateHeight) end
+	-- Housing: a tight glass device in Full; none (or a faint glass) in Compact.
+	local housing = compact and (db.compactHousing or 'none') or (db.housing or 'glass')
+	plate.shell:SetShown(not nameOnly and housing ~= 'none')
+	plate.shell:SetAlpha(compact and 0.4 or 1)
+	-- The meter sits right under the header, inside the same housing.
+	local pad = (compact or housing == 'none') and 0 or 4
 	plate.track:SetShown(not nameOnly)
 	plate.track:ClearAllPoints()
-	plate.track:SetPoint('BOTTOMLEFT', 5, 5)
-	plate.track:SetPoint('BOTTOMRIGHT', -5, 5)
-	plate.track:SetHeight(height + 4)
-	-- Dots: the meter is a whole number of dots (one per meter height) and
-	-- sits centred in the track, so no dot is cut at either end.
-	local avail = width - 10 - plate.side * 2
+	plate.track:SetPoint('BOTTOMLEFT', pad, pad)
+	plate.track:SetPoint('BOTTOMRIGHT', -pad, pad)
+	plate.track:SetHeight(compact and height or height + 2)
+	local dots = Style() == 'dots'
+	local hairline = compact and (db.compactMeter or 'hairline') ~= 'dots'
+	local bar = plate.health
+	-- A hairline hides the dot cover; dots keep it.
+	if bar.kitCover then
+		bar.kitCover:SetAlpha(hairline and 0 or 1)
+		bar.kitUnder:SetAlpha(hairline and 0 or 1)
+	end
+	local side, inset = plate.side, 1
+	if compact then side, inset = 0, 0 end
+	local avail = width - 2 * pad - side * 2
 	plate.fillWidth = avail
-	if Style() == 'dots' and not nameOnly then
+	bar:ClearAllPoints()
+	if dots and not nameOnly and not hairline then
 		local pitch = max(height, 1)
 		local count = max(1, floor(avail / pitch + 0.001))
 		plate.fillWidth = count * pitch
-		plate.health:ClearAllPoints()
-		plate.health:SetPoint('LEFT', plate.track, 'LEFT', plate.side + (avail - plate.fillWidth) / 2, 0)
-		plate.health:SetSize(plate.fillWidth, height)
-	end
-	local chip = db.level and not nameOnly
-	plate.chip:SetShown(chip and true or false)
-	-- With its legend the chip widens and the level sits right of LV.
-	local legends = db.legends ~= false
-	plate.chip.legend:SetShown(legends)
-	plate.chip:SetWidth(legends and 33 or 24)
-	plate.chip.text:ClearAllPoints()
-	if legends then
-		plate.chip.text:SetPoint('RIGHT', plate.chip, 'RIGHT', -3, 0)
-		plate.chip.text:SetJustifyH('RIGHT')
+		bar:SetPoint('LEFT', plate.track, 'LEFT', side + (avail - plate.fillWidth) / 2, 0)
+		bar:SetSize(plate.fillWidth, height)
+		if Kit.SizePerforation then Kit:SizePerforation(bar) end
 	else
-		plate.chip.text:SetPoint('CENTER', 0.5, 0)
-		plate.chip.text:SetJustifyH('CENTER')
+		bar:SetPoint('TOPLEFT', plate.track, 'TOPLEFT', side, -inset)
+		bar:SetPoint('BOTTOMRIGHT', plate.track, 'BOTTOMRIGHT', -side, inset)
 	end
-	Kit:ShowLed(plate.lamp, not nameOnly)
+	-- Level: printed inline (LV and the number, no box) or on its LCD chip in
+	-- Full; just a small dim number in Compact.
+	local legends = db.legends ~= false and not compact
+	local inline = compact or db.levelInline ~= false
+	local chip = (compact and db.compactLevel ~= false or (not compact and db.level)) and not nameOnly
+	plate.chip:SetShown(chip and true or false)
+	if plate.chip.shell then plate.chip.shell:SetShown(not inline) end
+	if plate.chip.inner then plate.chip.inner:SetShown(not inline) end
+	plate.chip.legend:SetShown(legends)
+	Kit:Font(plate.chip.text, compact and max(6, nameSize - 1) or 7, nil, true, 'numbers')
+	plate.chipInk = inline and (compact and 'darkDim' or 'darkInk') or 'lcdInk'
+	Kit:Tint(plate.chip.text, plate.chipInk)
+	Kit:Tint(plate.chip.legend, inline and 'darkDim' or 'lcdDim')
+	plate.chip:ClearAllPoints()
+	plate.chip.text:ClearAllPoints()
+	if compact then
+		plate.chip:SetSize(16, nameSize + 2)
+		plate.chip:SetPoint('TOPLEFT', plate, 'TOPLEFT', 0, 0)
+		plate.chip.text:SetPoint('LEFT', plate.chip, 'LEFT', 0, 0)
+		plate.chip.text:SetJustifyH('LEFT')
+	else
+		plate.chip:SetSize(legends and 30 or 20, 11)
+		plate.chip:SetPoint('TOPLEFT', plate, 'TOPLEFT', 12, -4)
+		if legends then
+			plate.chip.text:SetPoint('RIGHT', plate.chip, 'RIGHT', inline and 0 or -3, 0)
+			plate.chip.text:SetJustifyH('RIGHT')
+		else
+			plate.chip.text:SetPoint('CENTER', 0.5, 0)
+			plate.chip.text:SetJustifyH('CENTER')
+		end
+	end
+	plate.chip.legend:ClearAllPoints()
+	plate.chip.legend:SetPoint('LEFT', plate.chip, 'LEFT', inline and 0 or 3, 0)
+	-- Lamps: the target lamp in Full; threat as a tiny dot in Compact.
+	plate.lamp:ClearAllPoints()
+	plate.lamp:SetPoint('TOPLEFT', plate, 'TOPLEFT', 5, -7)
+	Kit:ShowLed(plate.lamp, not nameOnly and not compact)
+	plate.threat:ClearAllPoints()
+	if compact then
+		plate.threat:SetSize(3, 3)
+		plate.threat:SetPoint('TOPRIGHT', plate, 'TOPRIGHT', 0, -2)
+	else
+		plate.threat:SetSize(4, 4)
+		plate.threat:SetPoint('TOPRIGHT', plate, 'TOPRIGHT', -5, -7)
+	end
 	Kit:ShowLed(plate.threat, db.threat and not nameOnly)
-	-- The health readout: in the header or on the bar.
+	-- The health readout: in the header (Full only) or on the bar.
 	local text, onBar = db.healthText or 'percent', db.healthTextPosition == 'bar'
-	plate.percent:SetShown(not nameOnly and text ~= 'none' and not onBar)
+	plate.percent:SetShown(not nameOnly and not compact and text ~= 'none' and not onBar)
 	plate.percentLegend:SetShown(plate.percent:IsShown() and legends)
-	plate.barText:SetShown(not nameOnly and text ~= 'none' and onBar)
+	plate.barText:SetShown(not nameOnly and not compact and text ~= 'none' and onBar)
 	-- The name: in the header, centred in it, above the plate, or on its own.
-	Kit:Font(plate.name, db.nameSize or 8, nil, true)
+	Kit:Font(plate.name, nameSize, nil, true)
 	plate.name:ClearAllPoints()
 	if nameOnly then
 		plate.name:SetPoint('CENTER')
 		plate.name:SetWidth(width)
 		plate.name:SetJustifyH('CENTER')
+	elseif compact then
+		if chip then plate.name:SetPoint('LEFT', plate.chip, 'LEFT', 14, 0)
+		else plate.name:SetPoint('TOPLEFT', plate, 'TOPLEFT', 0, -1) end
+		plate.name:SetPoint('RIGHT', plate, 'RIGHT', -6, 0)
+		plate.name:SetJustifyH('LEFT')
 	elseif db.namePosition == 'above' then
 		plate.name:SetPoint('BOTTOM', plate, 'TOP', 0, 2)
 		plate.name:SetWidth(width)
@@ -644,13 +739,44 @@ local function Layout(plate)
 	-- Execute hairline at its percentage along the fill.
 	local fill = plate.fillWidth
 	plate.execLine:ClearAllPoints()
-	plate.execLine:SetPoint('TOPLEFT', plate.health, 'TOPLEFT', fill * (db.executePercent or 0.2), 0)
-	plate.execLine:SetPoint('BOTTOMLEFT', plate.health, 'BOTTOMLEFT', fill * (db.executePercent or 0.2), 0)
-	plate.execLine:SetShown(db.execute and not nameOnly and true or false)
+	plate.execLine:SetPoint('TOPLEFT', bar, 'TOPLEFT', fill * (db.executePercent or 0.2), 0)
+	plate.execLine:SetPoint('BOTTOMLEFT', bar, 'BOTTOMLEFT', fill * (db.executePercent or 0.2), 0)
+	plate.execLine:SetShown(db.execute and not nameOnly and not compact and true or false)
 	if not db.execute or nameOnly then plate.exec:SetAlpha(0) end
 	if plate.quest then PlaceQuest(plate) end
 	LayoutCast(plate)
 	LayoutAuras(plate)
+end
+
+-- Opening into Full or folding back to Compact: the plate's size eases and
+-- the header's parts fade in.
+local function Morph(plate, state, animate)
+	local oldWidth, oldHeight = plate:GetSize()
+	plate.state = state
+	plate.morphing = true
+	Layout(plate)
+	local width, height = plate.stateWidth, plate.stateHeight
+	plate.morphKey = plate.morphKey or {}
+	if not animate or Kit:DB().reduceMotion or not oldWidth or oldWidth <= 0 then
+		Kit:Animate(plate.morphKey, 0, 0, 1, function() end)
+		plate.morphing = nil
+		plate:SetSize(width, height)
+		return
+	end
+	Kit:Animate(plate.morphKey, 0.18, 0, 1, function(t)
+		plate:SetSize(oldWidth + (width - oldWidth) * t, oldHeight + (height - oldHeight) * t)
+	end, function()
+		plate.morphing = nil
+		plate:SetSize(width, height)
+	end, 'detent')
+	if state == 'full' then
+		for _, part in ipairs({plate.chip, plate.percent, plate.percentLegend}) do
+			if part:IsShown() then
+				part:SetAlpha(0)
+				Kit:FadeTo(part, 1, 'FAST')
+			end
+		end
+	end
 end
 
 -- Defined further down, with the other target styles.
@@ -769,7 +895,7 @@ local function UpdateName(plate)
 	local class = Plain(UnitClassification, unit)
 	plate.elite = class == 'elite' or class == 'rareelite' or class == 'worldboss'
 	local chip = plate.chip.text
-	Kit:Tint(chip, 'lcdInk')
+	Kit:Tint(chip, plate.chipInk or 'lcdInk')
 	local level = Plain(UnitLevel, unit)
 	if level == nil then
 		-- A secret level is formatted by the client, untested.
@@ -896,13 +1022,25 @@ end
 -- The game eases its plates' scale (targeting, distance): follow it while
 -- plates are up, ten times a second.
 local scaleDriver = CreateFrame('Frame')
-local scaleElapsed = 0
+local scaleElapsed, lastOver = 0, nil
 scaleDriver:SetScript('OnUpdate', function(_, elapsed)
 	scaleElapsed = scaleElapsed + elapsed
 	if scaleElapsed < 0.1 then return end
 	scaleElapsed = 0
 	for _, plate in pairs(byUnit) do
 		if plate.mult and plate:IsShown() then ApplyScale(plate) end
+	end
+	-- Opening on mouseover: follow the plate under the mouse.
+	if DB().expandMouseover then
+		local over = UnitPlate('mouseover')
+		if over ~= lastOver then
+			lastOver = over
+			for _, plate in pairs(byUnit) do
+				if plate.state == 'compact' or plate.state == 'full' then
+					if State(plate) ~= plate.state and module.UpdateTarget then UI:Safe(module.UpdateTarget, plate, true) end
+				end
+			end
+		end
 	end
 end)
 
@@ -1009,6 +1147,9 @@ local function UpdateTarget(plate, animate)
 	local db = DB()
 	local target = plate.preview or (plate.nameplate ~= nil and PlateOf('target') == plate.nameplate)
 	plate.isTarget = target
+	-- Open into Full or fold to Compact when the plate's state changed.
+	local state = State(plate)
+	if state ~= plate.state then Morph(plate, state, animate) end
 	Lamp(plate.lamp, target)
 	HeaderLamp(plate)
 	local style = db.targetStyle or 'lamp'
@@ -1027,6 +1168,7 @@ local function UpdateTarget(plate, animate)
 	Kit:FadeTo(plate, alpha, animate and 'FAST' or 0)
 	QuestMotion(plate)
 end
+module.UpdateTarget = UpdateTarget
 
 -- Your debuffs on the unit. Aura fields may be secret: only the data table is
 -- tested, the icon and count go straight to the client.
@@ -1422,6 +1564,7 @@ local function Release(unit)
 	if plate.nameplate then onPlate[plate.nameplate] = nil end
 	if plate.gameFrame and owner[plate.gameFrame] == plate then owner[plate.gameFrame] = nil end
 	plate.unit, plate.nameplate, plate.gameFrame, plate.threatKey = nil, nil, nil, nil
+	plate.state, plate.morphing = nil, nil
 	plate.events:UnregisterAllEvents()
 	CastClear(plate)
 	Kit:Animate(plate, 0, 0, 0, function() end)
@@ -1512,7 +1655,7 @@ local function ApplySize()
 		local global = tonumber(getCVar and Plain(getCVar, 'nameplateGlobalScale') or nil) or 1
 		local ratio = UIParent:GetEffectiveScale() / max(world * global, 0.01)
 		local width = (db.width or 132) * (db.scale or 1) * ratio
-		local height = ((db.height or 8) + 30) * (db.scale or 1) * ratio
+		local height = (max(3, db.targetHeight or 5) + 21) * (db.scale or 1) * ratio
 		if C_NamePlate.SetNamePlateSize then
 			pcall(C_NamePlate.SetNamePlateSize, width, height)
 		else
@@ -1595,6 +1738,7 @@ function module:Enable()
 	driver:RegisterEvent('NAME_PLATE_UNIT_ADDED')
 	driver:RegisterEvent('NAME_PLATE_UNIT_REMOVED')
 	driver:RegisterEvent('PLAYER_TARGET_CHANGED')
+	pcall(driver.RegisterEvent, driver, 'PLAYER_FOCUS_CHANGED')
 	driver:RegisterEvent('PLAYER_ENTERING_WORLD')
 	driver:RegisterEvent('DISPLAY_SIZE_CHANGED')
 	driver:RegisterEvent('QUEST_LOG_UPDATE')
@@ -1607,7 +1751,7 @@ function module:Enable()
 			C_Timer.After(0, function() if byUnit[unit] then UI:Safe(HandedOut, unit) end end)
 		elseif event == 'NAME_PLATE_UNIT_REMOVED' then
 			if not IsSecret(unit) then UI:Safe(Release, unit) end
-		elseif event == 'PLAYER_TARGET_CHANGED' then
+		elseif event == 'PLAYER_TARGET_CHANGED' or event == 'PLAYER_FOCUS_CHANGED' then
 			for _, plate in pairs(byUnit) do UI:Safe(UpdateTarget, plate, true) end
 		elseif event == 'QUEST_LOG_UPDATE' then
 			-- The quest log updates in bursts; look once they settle.
@@ -1658,7 +1802,7 @@ local function FillSample(plate)
 	Layout(plate)
 	plate.name:SetText(Truncate('TRAINING DUMMY', db.nameLength))
 	Kit:Tint(plate.name, 'darkInk')
-	Kit:Tint(plate.chip.text, 'lcdInk')
+	Kit:Tint(plate.chip.text, plate.chipInk or 'lcdInk')
 	plate.chip.text:SetText('80+')
 	plate.health:SetMinMaxValues(0, 1)
 	plate.health:SetValue(0.62, IMMEDIATE)
@@ -1786,7 +1930,6 @@ UI:RegisterPage('nameplates', {title = 'Nameplates', order = 15,
 		{'segmented', 'Style', 'style.nameplates', items = {{'dots', 'Dots'}, {'pill', 'Pill'}, {'bar', 'Bar'}, {'blizzard', 'Blizzard'}},
 			reload = true, note = 'Each plate is a dark glass device: target lamp, level chip, name, health and a cast bar docked under it.'},
 		{'slider', 'Width', 'nameplates.width', 96, 200, 4, 'Plate width.', format = Int},
-		{'slider', 'Meter height', 'nameplates.height', 4, 16, 1, nil, format = Int},
 		{'slider', 'Scale', 'nameplates.scale', 0.5, 1.5, 0.05, 'Plates follow the UI scale; this sizes them on top of it.', format = Percent},
 		{'switch', 'Legends', 'nameplates.legends', 'LV before the level and HP before the health readout.', since = '0.5.2'},
 	}},
@@ -1860,6 +2003,26 @@ UI:RegisterPage('nameplates', {title = 'Nameplates', order = 15,
 		{'color', 'Safe', 'nameplates.threatSecure'},
 		{'color', 'Close', 'nameplates.threatInsecure'},
 		{'color', 'Aggro', 'nameplates.threatAggro'},
+	}},
+	{title = 'Plate states', rows = {
+		{'segmented', 'Other plates', 'nameplates.otherPlates', items = {{'compact', 'Compact'}, {'full', 'Full'}}, since = '0.5.2',
+			note = 'Compact: plates you have not targeted are a slim name and meter, and open into the full device when targeted.'},
+		{'slider', 'Compact width', 'nameplates.compactWidth', 0.4, 1, 0.05, nil, format = Percent, since = '0.5.2',
+			hidden = function() return Get('otherPlates') == 'full' end},
+		{'switch', 'Compact level', 'nameplates.compactLevel', 'A small level number before the name.', since = '0.5.2',
+			hidden = function() return Get('otherPlates') == 'full' end},
+		{'segmented', 'Compact meter', 'nameplates.compactMeter', items = {{'hairline', 'Hairline'}, {'dots', 'Dots'}}, since = '0.5.2',
+			hidden = function() return Get('otherPlates') == 'full' end},
+		{'segmented', 'Compact housing', 'nameplates.compactHousing', items = {{'none', 'None'}, {'glass', 'Faint glass'}}, since = '0.5.2',
+			hidden = function() return Get('otherPlates') == 'full' end},
+		{'switch', 'Open on mouseover', 'nameplates.expandMouseover', 'The plate under the mouse opens too.', since = '0.5.2'},
+		{'switch', 'Open your focus', 'nameplates.expandFocus', nil, since = '0.5.2'},
+	}},
+	{title = 'Full plate', rows = {
+		{'segmented', 'Housing', 'nameplates.housing', items = {{'glass', 'Glass'}, {'none', 'None'}}, since = '0.5.2',
+			note = 'None: the header and meter on their own, without the dark housing.'},
+		{'slider', 'Meter height', 'nameplates.targetHeight', 3, 10, 1, nil, format = Int, since = '0.5.2'},
+		{'switch', 'Level inline', 'nameplates.levelInline', 'LV and the level printed in the header; off puts them on an LCD chip.', since = '0.5.2'},
 	}},
 	{title = 'Target', rows = {
 		{'segmented', 'Look', 'nameplates.targetStyle', items = {{'lamp', 'Lamp'}, {'glow', 'Ring'}, {'sides', 'Side lamps'}, {'brackets', 'Brackets'}},

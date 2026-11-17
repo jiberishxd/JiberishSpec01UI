@@ -674,6 +674,8 @@ end
 local function Wants(plate, unit)
 	local db = DB()
 	if not db.enable or not plate or plate.nameOnly then return false end
+	-- Only a plate opened into its Full state carries the tape.
+	if plate.state == 'compact' then return false end
 	local nameplate = plate.nameplate
 	if not nameplate then return false end
 	if nameplate == PlateFor('target') then return true end
