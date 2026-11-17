@@ -697,7 +697,25 @@ local function Lamp(device, label)
 end
 
 -- Lamps and the difficulty chip, laid out from the right of the header.
+-- squeeze: 0 everything; 1 lamps without labels; 2+ drops lamps from the
+-- least needed (tracking, invites, the chip, mail) until the row clears the title.
+local LayoutHeaderAt
 local function LayoutHeader(device)
+	LayoutHeaderAt(device, 0)
+	-- Positions settle a frame later; then squeeze until nothing meets the title.
+	C_Timer.After(0, function()
+		for squeeze = 0, 5 do
+			LayoutHeaderAt(device, squeeze)
+			local leftmost = device.headerLeft and device.headerLeft:GetLeft()
+			local modelRight = device.model and device.model:GetRight()
+			if not (leftmost and modelRight) then return end
+			local titleRight = modelRight + 5 + (device.title:GetStringWidth() or 0) + 8
+			if leftmost >= titleRight then return end
+		end
+	end)
+end
+
+function LayoutHeaderAt(device, squeeze)
 	local db = DB()
 	local anchor, x = device, -12
 	local function Next(region, width, gap)
@@ -725,19 +743,26 @@ local function LayoutHeader(device)
 			anchor = apps.count
 		end
 	end
-	device.chip:SetShown(db.difficulty and device.chip.text:GetText() ~= '')
+	device.chip:SetShown(db.difficulty and device.chip.text:GetText() ~= '' and squeeze < 4)
 	if device.chip:IsShown() then Next(device.chip) end
-	for _, spec in ipairs({{device.mail, db.lampMail}, {device.invites, db.lampInvites}, {device.tracking, db.lampTracking}}) do
-		local lamp, shown = spec[1], spec[2] and true or false
+	-- Dropped first to last as the header gets tight: tracking, invites, mail.
+	local drop = {tracking = squeeze >= 2, invites = squeeze >= 3, mail = squeeze >= 5}
+	for _, spec in ipairs({{device.mail, db.lampMail, 'mail'}, {device.invites, db.lampInvites, 'invites'},
+		{device.tracking, db.lampTracking, 'tracking'}}) do
+		local lamp, shown = spec[1], (spec[2] and not drop[spec[3]]) and true or false
 		Kit:ShowLed(lamp, shown)
-		lamp.label:SetShown(shown)
+		local labelled = shown and squeeze < 1
+		lamp.label:SetShown(labelled)
 		if shown then
-			Next(lamp)
-			lamp.label:ClearAllPoints()
-			lamp.label:SetPoint('RIGHT', lamp, 'LEFT', -3, 0)
-			anchor = lamp.label
+			Next(lamp, nil, labelled and 8 or 5)
+			if labelled then
+				lamp.label:ClearAllPoints()
+				lamp.label:SetPoint('RIGHT', lamp, 'LEFT', -3, 0)
+				anchor = lamp.label
+			end
 		end
 	end
+	device.headerLeft = anchor ~= device and anchor or nil
 end
 
 local function Navigator(map)
