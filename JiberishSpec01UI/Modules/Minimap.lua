@@ -868,7 +868,9 @@ local function Navigator(map)
 		Kit:Tint(device.calendarKey.icon, Invites() and 'amber' or 'ink')
 		Kit:SetLed(device.tracking, Tracking())
 		local difficulty = Difficulty()
-		if difficulty ~= device.chip.text:GetText() then
+		-- An empty chip reads back as nil: compare as text, or this re-lays the
+		-- header on every tick.
+		if (difficulty or '') ~= (device.chip.text:GetText() or '') then
 			device.chip.text:SetText(difficulty)
 			LayoutHeader(device)
 		end
