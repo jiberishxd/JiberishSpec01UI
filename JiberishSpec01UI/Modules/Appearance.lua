@@ -100,6 +100,24 @@ end
 local ACCENTS = {{'red', 'Red'}, {'yellow', 'Yellow'}, {'green', 'Green'}, {'blue', 'Blue'}, {'purple', 'Purple'}, {'ink', 'Ink'},
 	{'class', 'Class color'}, {'custom', 'Custom'}}
 
+-- UI scale: rescaling the interface while a slider is dragged moves the
+-- slider out from under the cursor, so presets apply at once and the fine
+-- slider only picks a value until Apply.
+local pendingScale
+local function ApplyScale(value)
+	pendingScale = nil
+	if InCombatLockdown() then
+		UI:Print('The UI scale changes once you leave combat.')
+	end
+	UI.Pixel.SetScale(value)
+	Kit:Play('latch-down', true)
+end
+
+local function ScalePresets()
+	local perfect = math.floor(UI.Pixel.PerfectScale() * 100 + 0.5) / 100
+	return {{perfect, 'Pixel'}, {0.64, '0.64'}, {0.71, '0.71'}, {0.8, '0.80'}, {0.9, '0.90'}, {1, '1.00'}}
+end
+
 UI:RegisterPage('theme', {title = 'Theme', order = 2,
 	onShow = function(area)
 		local hub = area:GetParent()
@@ -136,8 +154,15 @@ UI:RegisterPage('theme', {title = 'Theme', order = 2,
 		{'switch', 'Smooth bars', 'appearance.smoothBars', 'Health and power bars glide to new values.'},
 	}},
 	{title = 'Screen', rows = {
-		{'slider', 'UI scale', 'uiScale', 0.4, 1.15, 0.01, 'Kept even if the game or a resolution change moves it.', format = function(v) return format('%.2f', v) end},
-		{'button', 'Pixel perfect', 'Set', function() UI.db.uiScale = UI.Pixel.PerfectScale(); Kit:Apply() end, 'One UI unit per screen pixel: the sharpest edges.'},
+		{'segmented', 'UI scale', 'uiScale', items = ScalePresets, set = ApplyScale,
+			note = 'Sets the scale at once. Pixel is one UI unit per screen pixel, the sharpest edges.'},
+		{'slider', 'Fine scale', 'uiScale', 0.4, 1.15, 0.01, 'Pick a value, then press Apply below; the interface does not rescale while you drag.',
+			format = function(v) return format('%.2f', v) end,
+			get = function() return pendingScale or UI.db.uiScale or UIParent:GetScale() end,
+			set = function(value) pendingScale = value end},
+		{'button', 'Apply fine scale', 'Apply', function()
+			if pendingScale then ApplyScale(pendingScale) end
+		end, 'Sets the value chosen on the Fine scale slider.'},
 		{'switch', 'Keep UI scale', 'uiScaleLocked', 'Put this scale back whenever the game changes it.'},
 		{'slider', 'Hub scale', 'scale', 0.6, 1.4, 0.05, 'Size of this window.', format = Percent},
 		{'button', 'Frame positions', 'Reset', function() UI:ResetMovers() end, 'Every frame back to its default spot.'},
