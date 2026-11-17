@@ -98,6 +98,12 @@ UI:RegisterDefaults('nameplates', {
 	nonTargetAlpha = 1,
 	-- Execute range and quest units.
 	execute = false, executePercent = 0.2, questMarker = true,
+	-- Quest units: the marker's look and place, and colors for the plate.
+	questStyle = 'glyph', -- 'glyph' | 'led' | 'chip' | 'progress' | 'exclamation' | 'none'
+	questPosition = 'right', -- 'right' | 'left' | 'above' | 'header'
+	questSize = 12, questColor = 'amber', -- 'amber' | 'key' | 'custom'
+	questCustomColor = {1, 0.66, 0}, questBlink = true, questBreathe = false, questLamp = true,
+	questHealth = false, questHealthColor = {1, 0.66, 0}, questName = false, questNameColor = {1, 0.78, 0.36},
 	-- The game's own plate settings, set out of combat and put back when turned off.
 	stacking = 'game', -- 'game' | 'stack' | 'overlap'
 	maxDistance = 0, -- yards; 0 leaves the game's
@@ -160,6 +166,10 @@ local function HealthColor(plate)
 	local db, unit = DB(), plate.unit
 	if db.threatColorBar and plate.threatKey then
 		local r, g, b = RGB(db[plate.threatKey])
+		if r then return r, g, b end
+	end
+	if plate.questOn and db.questHealth then
+		local r, g, b = RGB(db.questHealthColor)
 		if r then return r, g, b end
 	end
 	local isPlayer = Plain(UnitIsPlayer, unit) == true
@@ -419,6 +429,153 @@ local function LayoutAuras(plate)
 end
 module.LayoutAuras = LayoutAuras
 
+-- Quest units --------------------------------------------------------------------
+-- A mark for units your quests need: the quest glyph, a lamp, a printed Q chip,
+-- an LCD with the objective's progress, or the old exclamation mark.
+local QUEST_GLYPH = {6 / 8, 7 / 8, 0, 1 / 4} -- 'quest' in icons-menu.tga (8 x 4)
+local BuildQuest, NameRight, PlaceQuest, PaintQuest, QuestMotion, QuestProgress, HeaderLamp
+do
+	local function MarkerRGB(db, boss)
+		if boss then return Kit:RGB('red') end
+		if db.questColor == 'key' then return Kit:RGB('lamp') end
+		if db.questColor == 'custom' then
+			local r, g, b = RGB(db.questCustomColor)
+			if r then return r, g, b end
+		end
+		return Kit:RGB('amber')
+	end
+
+	function BuildQuest(plate)
+		local mark = CreateFrame('Frame', nil, plate)
+		mark:SetSize(12, 12)
+		mark:EnableMouse(false)
+		mark.bang = Kit:Text(mark, '!', 11, 'amber', true, true)
+		mark.bang:SetPoint('CENTER')
+		mark.glyph = mark:CreateTexture(nil, 'OVERLAY', nil, 2)
+		mark.glyph:SetTexture(Kit.media..'icons-menu.tga')
+		mark.glyph:SetTexCoord(unpack(QUEST_GLYPH))
+		mark.glyph:SetAllPoints()
+		mark.led = Kit:Led(mark, 6, true)
+		mark.led:SetPoint('CENTER')
+		mark.chip = Kit:LCDPanel(mark, {radius = 2})
+		mark.chip:SetAllPoints()
+		mark.chip.text = Kit:Text(mark.chip, 'Q', 7, 'lcdInk', true)
+		mark.chip.text:SetPoint('CENTER', 0.5, 0)
+		mark:Hide()
+		plate.quest = mark
+	end
+
+	-- The name's anchors in the header: it stops before the quest mark when
+	-- the mark sits in the header.
+	function NameRight(plate)
+		local db = DB()
+		if plate.nameOnly or db.namePosition == 'above' then return end
+		plate.name:ClearAllPoints()
+		if db.level then plate.name:SetPoint('LEFT', plate.chip, 'RIGHT', 5, 0)
+		else plate.name:SetPoint('LEFT', plate.lamp, 'RIGHT', 5, 0) end
+		local right = plate.percent:IsShown() and plate.percent or plate.threat
+		if plate.quest and plate.quest:IsShown() and db.questPosition == 'header' then right = plate.quest end
+		plate.name:SetPoint('RIGHT', right, 'LEFT', -4, 0)
+	end
+
+	function PlaceQuest(plate)
+		local db, mark = DB(), plate.quest
+		local size = db.questSize or 12
+		local style = db.questStyle or 'glyph'
+		if style == 'chip' then mark:SetSize(size + 2, max(size - 1, 9))
+		elseif style == 'progress' then mark:SetSize(max(size * 2.4, 24), max(size - 1, 9))
+		else mark:SetSize(size, size) end
+		Kit:Font(mark.bang, size + 1, nil, true)
+		Kit:Font(mark.chip.text, max(6, floor(size * 0.62 + 0.5)), nil, true, 'numbers')
+		local led = max(4, floor(size * 0.5 + 0.5))
+		mark.led:SetSize(led, led)
+		if mark.led.glow and Kit.FitSprite then Kit:FitSprite(mark.led.glow, led, led) end
+		mark:ClearAllPoints()
+		local position = db.questPosition or 'right'
+		if position == 'left' then
+			mark:SetPoint('RIGHT', plate, 'LEFT', -3, 2)
+		elseif position == 'above' then
+			if db.namePosition == 'above' and not plate.nameOnly then mark:SetPoint('BOTTOM', plate.name, 'TOP', 0, 2)
+			else mark:SetPoint('BOTTOM', plate, 'TOP', 0, 2) end
+		elseif position == 'header' then
+			mark:SetPoint('RIGHT', plate.percent:IsShown() and plate.percent or plate.threat, 'LEFT', -4, 0)
+		else
+			mark:SetPoint('LEFT', plate, 'RIGHT', 3, 2)
+		end
+	end
+
+	-- progress: the objective count, when the game shares it plainly; without
+	-- it the Progress style falls back to the glyph.
+	function PaintQuest(plate, boss, progress)
+		local db, mark = DB(), plate.quest
+		local style = db.questStyle or 'glyph'
+		if style == 'progress' and not progress then style = 'glyph' end
+		local r, g, b = MarkerRGB(db, boss)
+		mark.bang:SetShown(style == 'exclamation')
+		mark.bang:SetTextColor(r, g, b)
+		mark.glyph:SetShown(style == 'glyph')
+		mark.glyph:SetVertexColor(r, g, b)
+		Kit:ShowLed(mark.led, style == 'led')
+		if style == 'led' then
+			mark.led:SetVertexColor(r, g, b)
+			if mark.led.glow then mark.led.glow:SetVertexColor(r, g, b) end
+		end
+		local chip = style == 'chip' or style == 'progress'
+		mark.chip:SetShown(chip)
+		if chip then
+			mark.chip.text:SetText(style == 'progress' and progress or 'Q')
+			mark.chip.text:SetTextColor(r, g, b)
+		end
+	end
+
+	-- "3/8" or "40%" from the unit's tooltip objective lines; plain text only.
+	function QuestProgress(unit)
+		if not (C_TooltipInfo and C_TooltipInfo.GetUnit and unit) then return nil end
+		local ok, data = pcall(C_TooltipInfo.GetUnit, unit)
+		if not ok or IsSecret(data) or type(data) ~= 'table' then return nil end
+		local lines = data.lines
+		if IsSecret(lines) or type(lines) ~= 'table' then return nil end
+		local objective = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective
+		for _, line in ipairs(lines) do
+			if type(line) == 'table' then
+				local kind, text, done = line.type, line.leftText, line.completed
+				local isObjective = objective and not IsSecret(kind) and kind == objective
+				local finished = not IsSecret(done) and done == true
+				if isObjective and not finished and not IsSecret(text) and type(text) == 'string' then
+					local have, need = text:match('(%d+)%s*/%s*(%d+)')
+					if have then return have..'/'..need end
+					local percent = text:match('(%d+)%%')
+					if percent then return percent..'%' end
+				end
+			end
+		end
+		return nil
+	end
+
+	-- The header lamp glows amber on quest units you haven't targeted.
+	function HeaderLamp(plate)
+		if plate.isTarget then return end
+		if plate.questOn and DB().questLamp and not plate.nameOnly then Lamp(plate.lamp, true, 'amber')
+		else Lamp(plate.lamp, false) end
+	end
+
+	-- The mark blinks while the unit is your target, or breathes otherwise.
+	function QuestMotion(plate)
+		local db, mark = DB(), plate.quest
+		local want
+		if plate.questOn and mark:IsShown() and not Kit:DB().reduceMotion then
+			if plate.isTarget and db.questBlink then want = 'blink' elseif db.questBreathe then want = 'breathe' end
+		end
+		if plate.questMotion == want then return end
+		if plate.questMotion == 'blink' then Kit:Blink(mark, nil, false)
+		elseif plate.questMotion == 'breathe' then Kit:Breathe(mark, false) end
+		mark:SetAlpha(1)
+		plate.questMotion = want
+		if want == 'blink' then Kit:Blink(mark, 0.8, true)
+		elseif want == 'breathe' then Kit:Breathe(mark, true, {period = 2.2, low = 0.45}) end
+	end
+end
+
 -- Sizes come from the settings, so a change applies to every plate at once.
 local function Layout(plate)
 	local db = DB()
@@ -431,6 +588,18 @@ local function Layout(plate)
 	plate.track:SetPoint('BOTTOMLEFT', 5, 5)
 	plate.track:SetPoint('BOTTOMRIGHT', -5, 5)
 	plate.track:SetHeight(height + 4)
+	-- Dots: the meter is a whole number of dots (one per meter height) and
+	-- sits centred in the track, so no dot is cut at either end.
+	local avail = width - 10 - plate.side * 2
+	plate.fillWidth = avail
+	if Style() == 'dots' and not nameOnly then
+		local pitch = max(height, 1)
+		local count = max(1, floor(avail / pitch + 0.001))
+		plate.fillWidth = count * pitch
+		plate.health:ClearAllPoints()
+		plate.health:SetPoint('LEFT', plate.track, 'LEFT', plate.side + (avail - plate.fillWidth) / 2, 0)
+		plate.health:SetSize(plate.fillWidth, height)
+	end
 	local chip = db.level and not nameOnly
 	plate.chip:SetShown(chip and true or false)
 	Kit:ShowLed(plate.lamp, not nameOnly)
@@ -451,19 +620,18 @@ local function Layout(plate)
 		plate.name:SetWidth(width)
 		plate.name:SetJustifyH('CENTER')
 	else
-		if chip then plate.name:SetPoint('LEFT', plate.chip, 'RIGHT', 5, 0)
-		else plate.name:SetPoint('LEFT', plate.lamp, 'RIGHT', 5, 0) end
-		plate.name:SetPoint('RIGHT', plate.percent:IsShown() and plate.percent or plate.threat, 'LEFT', -4, 0)
 		plate.name:SetWidth(0)
 		plate.name:SetJustifyH(db.namePosition == 'center' and 'CENTER' or 'LEFT')
+		NameRight(plate)
 	end
 	-- Execute hairline at its percentage along the fill.
-	local fill = width - 10 - plate.side * 2
+	local fill = plate.fillWidth
 	plate.execLine:ClearAllPoints()
 	plate.execLine:SetPoint('TOPLEFT', plate.health, 'TOPLEFT', fill * (db.executePercent or 0.2), 0)
 	plate.execLine:SetPoint('BOTTOMLEFT', plate.health, 'BOTTOMLEFT', fill * (db.executePercent or 0.2), 0)
 	plate.execLine:SetShown(db.execute and not nameOnly and true or false)
 	if not db.execute or nameOnly then plate.exec:SetAlpha(0) end
+	if plate.quest then PlaceQuest(plate) end
 	LayoutCast(plate)
 	LayoutAuras(plate)
 end
@@ -503,10 +671,8 @@ local function Build()
 	plate.name = Kit:Text(plate, '', 8, 'darkInk', true)
 	plate.name:SetJustifyH('LEFT')
 	plate.name:SetWordWrap(false)
-	-- A quest unit: an amber mark beside the plate.
-	plate.quest = Kit:Text(plate, '!', 11, 'amber', true, true)
-	plate.quest:SetPoint('BOTTOMLEFT', plate, 'RIGHT', 3, 0)
-	plate.quest:Hide()
+	-- A quest unit: a mark beside the plate (or in its header).
+	BuildQuest(plate)
 	BuildMeter(plate)
 	BuildCast(plate)
 	BuildAuras(plate)
@@ -544,7 +710,15 @@ local function UpdateColor(plate)
 	local r, g, b = HealthColor(plate)
 	plate.health:SetStatusBarColor(r, g, b)
 	-- A name-only plate carries its color in the name.
-	if plate.nameOnly then plate.name:SetTextColor(r, g, b) else Kit:Tint(plate.name, 'darkInk') end
+	if plate.nameOnly then
+		plate.name:SetTextColor(r, g, b)
+	else
+		Kit:Tint(plate.name, 'darkInk')
+		if plate.questOn and DB().questName then
+			local nr, ng, nb = RGB(DB().questNameColor)
+			if nr then plate.name:SetTextColor(nr, ng, nb) end
+		end
+	end
 end
 
 local function UpdateName(plate)
@@ -572,9 +746,25 @@ local function UpdateName(plate)
 end
 
 local function UpdateQuest(plate)
-	local on = DB().questMarker and not plate.nameOnly and C_QuestLog and C_QuestLog.UnitIsRelatedToActiveQuest
-		and Plain(C_QuestLog.UnitIsRelatedToActiveQuest, plate.unit) == true
-	plate.quest:SetShown(on and true or false)
+	local db, unit = DB(), plate.unit
+	local on = false
+	if not plate.nameOnly and unit and C_QuestLog and C_QuestLog.UnitIsRelatedToActiveQuest then
+		on = Plain(C_QuestLog.UnitIsRelatedToActiveQuest, unit) == true
+	end
+	local was = plate.questOn
+	plate.questOn = on
+	local style = db.questStyle or 'glyph'
+	local show = on and db.questMarker and style ~= 'none'
+	if show then
+		local boss = UnitIsQuestBoss and Plain(UnitIsQuestBoss, unit) == true
+		PlaceQuest(plate)
+		PaintQuest(plate, boss, style == 'progress' and QuestProgress(unit) or nil)
+	end
+	plate.quest:SetShown(show and true or false)
+	NameRight(plate)
+	if was ~= on then UpdateColor(plate) end
+	HeaderLamp(plate)
+	QuestMotion(plate)
 end
 
 -- A tank wants to hold aggro; everyone else wants not to have it.
@@ -737,6 +927,7 @@ local function UpdateTarget(plate, animate)
 	local target = plate.preview or (plate.nameplate ~= nil and PlateOf('target') == plate.nameplate)
 	plate.isTarget = target
 	Lamp(plate.lamp, target)
+	HeaderLamp(plate)
 	local style = db.targetStyle or 'lamp'
 	plate.ring:SetShown(target and style == 'glow' and not plate.nameOnly)
 	for _, side in ipairs({plate.sideLeft, plate.sideRight}) do
@@ -751,6 +942,7 @@ local function UpdateTarget(plate, animate)
 	if not target and not plate.preview and PlateOf('target') then alpha = db.nonTargetAlpha or 1 end
 	plate.wantAlpha = alpha
 	Kit:FadeTo(plate, alpha, animate and 'FAST' or 0)
+	QuestMotion(plate)
 end
 
 -- Your debuffs on the unit. Aura fields may be secret: only the data table is
@@ -1399,7 +1591,21 @@ local function FillSample(plate)
 		if tr then plate.threat:SetVertexColor(tr, tg, tb) end
 	end
 	plate.exec:SetAlpha(0)
-	plate.quest:SetShown(db.questMarker and true or false)
+	-- The sample is a quest unit, so every quest setting shows on it.
+	plate.questOn = true
+	local questShown = db.questMarker and (db.questStyle or 'glyph') ~= 'none'
+	PlaceQuest(plate)
+	PaintQuest(plate, false, '3/8')
+	plate.quest:SetShown(questShown and true or false)
+	NameRight(plate)
+	if db.questName then
+		local nr, ng, nb = RGB(db.questNameColor)
+		if nr then plate.name:SetTextColor(nr, ng, nb) end
+	end
+	if db.questHealth then
+		local hr, hg, hb = RGB(db.questHealthColor)
+		if hr then plate.health:SetStatusBarColor(hr, hg, hb) end
+	end
 	for index, icon in ipairs(plate.auras) do
 		local shown = db.debuffs and index <= min(db.auraCount or 5, AURA_MAX)
 		icon.texture:SetTexture(SAMPLE_AURAS[index])
@@ -1470,6 +1676,7 @@ Kit:OnRefresh(function()
 	for _, plate in pairs(byUnit) do
 		UI:Safe(UpdateColor, plate)
 		UI:Safe(PaintThreat, plate)
+		UI:Safe(UpdateQuest, plate)
 	end
 	if preview and preview:IsVisible() then UI:Safe(FillSample, preview) end
 end)
@@ -1498,7 +1705,28 @@ UI:RegisterPage('nameplates', {title = 'Nameplates', order = 15,
 		{'segmented', 'Creatures', 'nameplates.npcColor', items = {{'reaction', 'Reaction'}, {'accent', 'Key color'}},
 			note = 'Red, yellow or green by how they feel about you, or the key color.'},
 		{'switch', 'Level chip', 'nameplates.level', 'The level on a small LCD; + elite, * rare, ?? boss.'},
-		{'switch', 'Quest marker', 'nameplates.questMarker', 'An amber mark beside units your quests need.'},
+	}},
+	{title = 'Quest units', rows = {
+		{'switch', 'Quest marker', 'nameplates.questMarker', 'A mark beside units your quests need.'},
+		{'dropdown', 'Marker', 'nameplates.questStyle', items = {{'glyph', 'Quest glyph'}, {'led', 'Lamp'}, {'chip', 'Q chip'},
+			{'progress', 'Progress LCD'}, {'exclamation', 'Exclamation'}, {'none', 'None'}},
+			note = 'Progress shows the objective count (3/8) on an LCD when the game shares it; otherwise the glyph. Quest bosses show in red.',
+			disabled = function() return not Get('questMarker') end, since = '0.5.2'},
+		{'segmented', 'Position', 'nameplates.questPosition', items = {{'right', 'Right'}, {'left', 'Left'}, {'above', 'Above'},
+			{'header', 'Header'}}, disabled = function() return not Get('questMarker') end, since = '0.5.2'},
+		{'slider', 'Size', 'nameplates.questSize', 8, 20, 1, nil, format = Int, since = '0.5.2'},
+		{'segmented', 'Color', 'nameplates.questColor', items = {{'amber', 'Amber'}, {'key', 'Key color'}, {'custom', 'Custom'}},
+			since = '0.5.2'},
+		{'color', 'Marker color', 'nameplates.questCustomColor', hidden = function() return Get('questColor') ~= 'custom' end,
+			since = '0.5.2'},
+		{'switch', 'Blink on target', 'nameplates.questBlink', 'The mark blinks while the quest unit is your target.', since = '0.5.2'},
+		{'switch', 'Breathe', 'nameplates.questBreathe', 'The mark slowly breathes on every quest unit.', since = '0.5.2'},
+		{'switch', 'Header lamp', 'nameplates.questLamp', 'The plate\'s header lamp glows amber on quest units you haven\'t targeted.',
+			since = '0.5.2'},
+		{'switch', 'Color the meter', 'nameplates.questHealth', 'Quest units\' health in their own color.', since = '0.5.2'},
+		{'color', 'Meter color', 'nameplates.questHealthColor', hidden = function() return not Get('questHealth') end, since = '0.5.2'},
+		{'switch', 'Color the name', 'nameplates.questName', 'Quest units\' names in their own color.', since = '0.5.2'},
+		{'color', 'Name color', 'nameplates.questNameColor', hidden = function() return not Get('questName') end, since = '0.5.2'},
 	}},
 	{title = 'Friends', rows = {
 		{'switch', 'Name only', 'nameplates.friendlyNameOnly', 'Friendly plates are just the name, in its color.'},
