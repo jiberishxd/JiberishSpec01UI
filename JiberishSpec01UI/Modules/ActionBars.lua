@@ -108,14 +108,21 @@ UI:RegisterDefaults('actionbars', {
 	-- The deck along the console's base: the meters' sources and style, the
 	-- stats strip (six chosen readouts), the function keys (slots 1-4 left,
 	-- 5-8 right) and the header panels.
-	barSource = 'auto', barSecond = 'none', barStyle = 'dots', restedOverlay = true, questPreview = false,
+	barSource = 'auto', barSecond = 'none', barStyle = 'slim', restedOverlay = true, questPreview = false,
 	meterColors = 'theme', xpColor = {0.94, 0.25, 0.2}, restedColor = {0.3, 0.55, 1}, repColor = {0.2, 0.75, 0.35},
 	honorColor = {0.95, 0.6, 0.15}, previewColor = {1, 0.8, 0.2},
-	stats = true, statsSize = 'compact', stat1 = 'xph', stat2 = 'ttl', stat3 = 'levelTime', stat4 = 'session',
+	stats = true, statsStyle = 'text', statsSize = 'compact', stat1 = 'xph', stat2 = 'ttl', stat3 = 'levelTime', stat4 = 'session',
 	stat5 = 'rested', stat6 = 'kills',
 	fnKeys = true, fnSize = 22, fn1 = 'mount', fn2 = 'hearth', fn3 = 'map', fn4 = 'bags', fn5 = 'drawer', fn6 = 'move',
 	fn7 = 'calendar', fn8 = 'menu', fnMacro = '',
-	panelZone = true, panelGold = true, panelDurability = true, panelLatency = true,
+	panelZone = false, panelGold = false, panelDurability = false, panelLatency = false,
+	-- With no target, the console shows a dim plate where it appears ('plate') or nothing ('collapse').
+	targetPlate = 'plate',
+	-- The menu (micro buttons) and bags: two small devices of their own.
+	menuEnable = true, menuKeySize = 22, menuScale = 1, menuOrient = 'horizontal', menuColumns = 6, menuGlyph = 0.68,
+	menuHousing = true, menuFade = false, menuHide = {},
+	bagsEnable = true, bagsKeySize = 22, bagsScale = 1, bagsOrient = 'horizontal', bagsColumns = 0, bagsGlyph = 0.6,
+	bagsHousing = true, bagsFade = false, bagsHide = {},
 	bar1 = BarDefaults(5), bar2 = BarDefaults(5), bar3 = BarDefaults(5), bar4 = BarDefaults(5), bar5 = BarDefaults(5),
 	barPet = BarDefaults(4), barStance = BarDefaults(4),
 })
@@ -1510,7 +1517,7 @@ local function Follow(slot, frame)
 	if not frame then return end
 	slot:SetShown(not frame:IsShown())
 	frame:HookScript('OnShow', function() slot:Hide() end)
-	frame:HookScript('OnHide', function() if frame.docked then slot:Show() end end)
+	frame:HookScript('OnHide', function() if frame.docked and slot.enabled ~= false then slot:Show() end end)
 end
 
 -- The console ----------------------------------------------------------------------------
@@ -1552,12 +1559,11 @@ local function LayoutConsole()
 	local pw, ph = Measure(parts.player)
 	local tw, th = Measure(parts.target)
 	local column = max(pw, tw)
-	-- Function keys sit at the top of the side columns; with no docked frames
-	-- they make narrow columns of their own beside the banks.
-	local fnW, fnH, fnColumns = Deck.FnBlock(column > 0 and column or nil)
-	if column == 0 and fnW > 0 then column = fnW end
-	local fnBand = fnH > 0 and fnH + 8 or 0
-	local sideWidth = column > 0 and column + COL_GAP or 0
+	-- Function keys: a small column of their own between each docked frame and
+	-- the banks, centred on the body like everything else.
+	local fnW, fnH, fnColumns = Deck.FnBlock(nil)
+	local fnColumn = fnW > 0 and fnW + COL_GAP or 0
+	local sideWidth = (column > 0 and column + COL_GAP or 0) + fnColumn
 	local _, playerCastHeight = Measure(parts.playerCast)
 	local _, targetCastHeight = Measure(parts.targetCast)
 	local castHeight = max(playerCastHeight, targetCastHeight)
@@ -1606,15 +1612,15 @@ local function LayoutConsole()
 			if count > 1 then LayoutBar(bar, size, max(Gap(bar), (area - count * size) / (count - 1)), count, 12, false) end
 		end
 	end
-	local body = max(height, max(ph, th) > 0 and fnBand + max(ph, th) + AUX or fnBand)
+	local body = max(height, max(ph, th) > 0 and max(ph, th) + AUX or 0, fnH)
 	if fixedH then body = max(fixedH - HEAD - castRow - xpHeight - PAD, 0) end
 	console:SetSize(fixedW or (PAD * 2 + width + sideWidth * 2), fixedH or (HEAD + body + castRow + xpHeight + PAD))
 	local left = PAD + sideWidth
 
 	-- Bar 1 is the bottom row, as on Blizzard's bars. In the Hardware look each
 	-- bank has its printed legend and rule above it. In a taller fixed console
-	-- the banks sit in the middle of the body.
-	local y = -HEAD - (fixedH and max(0, floor((body - height) / 2)) or 0)
+	-- the banks sit in the middle of the body; so they do beside taller frames.
+	local y = -HEAD - max(0, floor((body - height) / 2))
 	for index = #console.bars, 1, -1 do
 		local bar = console.bars[index]
 		local x = align == 'left' and left or left + (area - bar.width) / 2
@@ -1638,22 +1644,26 @@ local function LayoutConsole()
 			docked:SetPoint(point, console, point, x / ratio, y / ratio)
 		end)
 	end
-	-- Each frame is centred on the keyboard's height when it is shorter (a bar or
-	-- square shape), never so low that its class lamps or auras leave the body.
-	-- Below the function keys, when there are any.
+	-- Each frame is centred on the body, never so low that its class lamps or
+	-- auras leave it.
 	local function Drop(frameHeight)
-		if frameHeight <= 0 then return fnBand end
-		return fnBand + max(0, min((height - fnBand - frameHeight) / 2, body - fnBand - frameHeight - AUX))
+		if frameHeight <= 0 then return 0 end
+		return max(0, floor(min((body - frameHeight) / 2, body - frameHeight - AUX)))
 	end
 	Dock(parts.player, 'uf.player', 'TOPLEFT', PAD + (column - pw) / 2, -HEAD - Drop(ph))
 	Dock(parts.target, 'uf.target', 'TOPRIGHT', -PAD - (column - tw) / 2, -HEAD - Drop(th))
-	if parts.target and console.targetSlot then
-		console.targetSlot:SetSize(tw, th)
-		console.targetSlot:ClearAllPoints()
-		console.targetSlot:SetPoint('TOPRIGHT', console, 'TOPRIGHT', -PAD - (column - tw) / 2, -HEAD - Drop(th))
+	-- With no target: a slim, dim plate the player's size, or nothing.
+	local slot = console.targetSlot
+	if parts.target and slot then
+		local slotW, slotH = pw > 0 and pw or tw, ph > 0 and ph or th
+		slot.enabled = db.targetPlate ~= 'collapse'
+		slot:SetSize(slotW, slotH)
+		slot:ClearAllPoints()
+		slot:SetPoint('TOPRIGHT', console, 'TOPRIGHT', -PAD - (column - slotW) / 2, -HEAD - Drop(slotH))
+		slot:SetShown(slot.enabled and not parts.target:IsShown())
 	end
-	if fnW > 0 then Deck.PlaceFn(console, PAD + (column - fnW) / 2, PAD + (column - fnW) / 2, -HEAD, fnColumns)
-	else Deck.PlaceFn(console, PAD, PAD, -HEAD, 1) end
+	local fnX = PAD + (column > 0 and column + COL_GAP or 0)
+	Deck.PlaceFn(console, fnX, fnX, -HEAD - max(0, floor((body - fnH) / 2)), fnColumns)
 	local castWidth = (width - 8) / 2
 	local castY = -HEAD - body - ROW_GAP
 	for index, cast in ipairs({parts.playerCast or false, parts.targetCast or false}) do
@@ -1725,6 +1735,9 @@ local function BuildConsole()
 	local parts = UnitParts()
 	if parts.target then
 		console.targetSlot = Slot(console, 'No target')
+		-- A dim plate, not a box: it only marks where the target appears.
+		console.targetSlot:SetAlpha(0.5)
+		Kit:Font(console.targetSlot.text, 7, nil, true)
 		Follow(console.targetSlot, parts.target)
 	end
 	-- The cast slots only hold the space: a cast bar appears there when a cast
@@ -1914,9 +1927,9 @@ end
 -- its window is open and breathes amber when the game flashes the button
 -- (talent points to spend, an unread guild or friend notice).
 -- Glyphs in atlas order: the same list as MENU_ICONS in tools/build-hardware-art.py.
--- Kept in a block of its own: the main chunk may hold at most 200 locals.
+-- Kept in a function of its own: the main chunk may hold at most 200 locals.
 local RepaintMenu, LayoutMenu, BuildMenu
-do
+;(function()
 local MENU_ICONS = {'character', 'spellbook', 'talents', 'professions', 'achievements', 'legacy', 'quest', 'guild',
 	'social', 'finder', 'journal', 'collections', 'menu', 'help', 'store', 'house',
 	'map', 'pvp', 'backpack', 'bag', 'reagent', 'key', 'mount', 'hearth',
@@ -2007,7 +2020,8 @@ local function PaintMenuButton(button)
 	end
 	key.glyph:SetShown(showGlyph)
 	if showGlyph then
-		local size = floor(min(button:GetWidth(), button:GetHeight()) * (isBag and 0.6 or 0.68) + 0.5)
+		local share = tonumber(DB()[isBag and 'bagsGlyph' or 'menuGlyph']) or (isBag and 0.6 or 0.68)
+		local size = floor(min(button:GetWidth(), button:GetHeight()) * share + 0.5)
 		key.glyph:SetSize(size, size)
 		local enabled = not button.IsEnabled or button:IsEnabled()
 		local hovered = button.IsMouseOver and button:IsMouseOver()
@@ -2151,35 +2165,112 @@ local function Guard(button)
 		if not laying and parent ~= menu then Relayout() end
 	end)
 end
+-- Two small devices: the menu (micro buttons) and the bags (bag slots), each
+-- with its own mover, key size, scale, orientation, columns, glyph size,
+-- housing, mouseover fade and buttons to leave out. A button left out is
+-- faded and loses the mouse (the game may show it again; it stays invisible).
+local MENU_PAD, MENU_GAP = 6, 3
+local bagsDevice
+local hoverHooked = setmetatable({}, {__mode = 'k'})
+local GROUPS = {menu = MICRO, bags = BAGS}
+
+local function Opt(group, field) return DB()[group..field] end
+local function LeftOut(group, name)
+	local list = Opt(group, 'Hide')
+	return type(list) == 'table' and list[name] and true or false
+end
+
+-- Mouseover fade: the device shows while the mouse is over it or a key on it.
+local function FadeDevice(device)
+	if not device then return end
+	local group = device.group
+	local target = 1
+	if Opt(group, 'Fade') and not device.hovered then target = 0.15 end
+	if device.faded ~= target then
+		device.faded = target
+		Kit:FadeTo(device, target, 'FAST')
+	end
+end
+
+local function Hover(device, on)
+	if on then device.hovered = true; return FadeDevice(device) end
+	C_Timer.After(0.15, function()
+		device.hovered = device:IsMouseOver() and true or false
+		FadeDevice(device)
+	end)
+end
+
+local function HookHover(button, device)
+	if hoverHooked[button] then return end
+	hoverHooked[button] = true
+	button:HookScript('OnEnter', function() Hover(device, true) end)
+	button:HookScript('OnLeave', function() Hover(device, false) end)
+end
+
+-- Lay one device's keys out in a grid: `columns` across (0: all in one line),
+-- or down for a vertical device.
+local function Lay(device, group, extra)
+	local size = Kit:Clamp(floor(tonumber(Opt(group, 'KeySize')) or 22), 16, 40)
+	local vertical = Opt(group, 'Orient') == 'vertical'
+	local columns = floor(tonumber(Opt(group, 'Columns')) or 0)
+	local shown = {}
+	local names = GROUPS[group]
+	local list = {}
+	for _, name in ipairs(names) do list[#list + 1] = name end
+	if extra then list[#list + 1] = extra end
+	for _, name in ipairs(list) do
+		local button = _G[name]
+		if button and not Forbidden(button) then
+			Guard(button)
+			if button:GetParent() ~= device then button:SetParent(device) end
+			button:SetSize(size, size)
+			DressMenuButton(button)
+			HookHover(button, device)
+			if group == 'bags' and name ~= 'KeyRingButton' then button:Show() end
+			if LeftOut(group, name) then
+				button:SetAlpha(0)
+				button:EnableMouse(false)
+				button:ClearAllPoints()
+				button:SetPoint('CENTER', device, 'CENTER')
+			else
+				button:SetAlpha(1)
+				button:EnableMouse(true)
+				if button:IsShown() then shown[#shown + 1] = button end
+			end
+		end
+	end
+	local count = #shown
+	local line = (columns > 0) and min(columns, max(count, 1)) or max(count, 1)
+	local lines = math.ceil(count / line)
+	for index, button in ipairs(shown) do
+		local along, across = (index - 1) % line, floor((index - 1) / line)
+		local x, y
+		if vertical then x, y = across, along else x, y = along, across end
+		button:ClearAllPoints()
+		button:SetPoint('TOPLEFT', device, 'TOPLEFT', MENU_PAD + x * (size + MENU_GAP), -MENU_PAD - y * (size + MENU_GAP))
+	end
+	local wide, tall = line, lines
+	if vertical then wide, tall = lines, line end
+	device:SetSize(MENU_PAD * 2 + max(wide, 1) * size + max(wide - 1, 0) * MENU_GAP,
+		MENU_PAD * 2 + max(tall, 1) * size + max(tall - 1, 0) * MENU_GAP)
+	local housing = Opt(group, 'Housing') ~= false and DB().housing ~= false
+	if device.shell then device.shell:SetShown(housing) end
+	device:SetShown(Opt(group, 'Enable') ~= false)
+	-- Only a new scale re-places the device (its mover keeps the spot).
+	local scale = Kit:Clamp(tonumber(Opt(group, 'Scale')) or 1, 0.5, 1.5)
+	if device.baseScale ~= scale then
+		device.baseScale = scale
+		UI:SetMoverBaseScale(device.moverKey, scale, device)
+	end
+	FadeDevice(device)
+end
+
 function LayoutMenu()
 	if not menu or laying then return end
 	laying = true
 	local ok, problem = pcall(function()
-	local x, tallest = PAD, 0
-	local function Place(button, size)
-		if not button or Forbidden(button) then return end
-		Guard(button)
-		if button:GetParent() ~= menu then button:SetParent(menu) end
-		if size then button:SetSize(size, size) end
-		DressMenuButton(button)
-		if not button:IsShown() then return end
-		button:ClearAllPoints()
-		button:SetPoint('BOTTOMLEFT', menu, 'BOTTOMLEFT', x, PAD)
-		x = x + button:GetWidth() + 3
-		tallest = max(tallest, button:GetHeight())
-	end
-	for _, name in ipairs(MICRO) do Place(_G[name]) end
-	x = x + 8
-	-- Bag slots match the menu keys: one size, one row.
-	local keySize = tallest > 0 and tallest or 30
-	for _, name in ipairs(BAGS) do
-		local button = _G[name]
-		if button then button:Show() end
-		Place(button, keySize)
-	end
-	-- Clients with a key ring: placed only while the game shows it.
-	Place(_G.KeyRingButton, keySize)
-	menu:SetSize(x - 3 + PAD, HEAD + tallest + PAD)
+		Lay(menu, 'menu')
+		if bagsDevice then Lay(bagsDevice, 'bags', 'KeyRingButton') end
 	end)
 	laying = nil
 	if not ok then error(problem, 0) end
@@ -2189,12 +2280,25 @@ end
 
 local function QueueMenu() C_Timer.After(0, function() UI:Safe(LayoutMenu) end) end
 
+local function MenuDevice(name, group, moverKey)
+	local device = Device(name, '', '', {header = false, radius = 8, level = 6})
+	device.group, device.moverKey = group, moverKey
+	device:EnableMouse(true)
+	device:SetScript('OnEnter', function(self) Hover(self, true) end)
+	device:SetScript('OnLeave', function(self) Hover(self, false) end)
+	device:SetScale(1)
+	return device
+end
+
 function BuildMenu()
-	menu = Device('JiberishSpec01Menu', 'MN-1', 'Menu', {radius = 12})
-	HW.Decorate(menu, 12)
-	menu:SetScale((DB().scale or 1) * 0.8)
+	menu = MenuDevice('JiberishSpec01Menu', 'menu', 'ab.menu')
+	bagsDevice = MenuDevice('JiberishSpec01Bags', 'bags', 'ab.bags')
 	LayoutMenu()
-	UI:RegisterMover(menu, 'ab.menu', 'Menu and bags', {'BOTTOMRIGHT', -12, 12})
+	-- The menu in the bottom-right corner, the bags just above it: out of the
+	-- console's way on every screen.
+	local menuHeight = menu:GetHeight() * menu:GetScale()
+	UI:RegisterMover(menu, 'ab.menu', 'Menu', {'BOTTOMRIGHT', -12, 12})
+	UI:RegisterMover(bagsDevice, 'ab.bags', 'Bags', {'BOTTOMRIGHT', -12, 12 + floor(menuHeight + 6)})
 	-- Blizzard re-lays its micro menu and bag bar now and then; take the buttons back each time.
 	if _G.UpdateMicroButtons then hooksecurefunc('UpdateMicroButtons', QueueMenu) end
 	for _, owner in ipairs({_G.MicroMenu, _G.BagsBar}) do
@@ -2224,7 +2328,34 @@ function BuildMenu()
 	end)
 end
 
+-- The hub's rows to leave buttons out, one per button this client has.
+local LABELS = {CharacterMicroButton = 'Character', SpellbookMicroButton = 'Spellbook', PlayerSpellsMicroButton = 'Talents and spells',
+	ProfessionMicroButton = 'Professions', TalentMicroButton = 'Talents', AchievementMicroButton = 'Achievements',
+	LegacyMicroButton = 'Legacy', QuestLogMicroButton = 'Quest log', GuildMicroButton = 'Guild', SocialsMicroButton = 'Social',
+	LFDMicroButton = 'Group finder', LFGMicroButton = 'Group finder', EJMicroButton = 'Adventure guide',
+	CollectionsMicroButton = 'Collections', MainMenuMicroButton = 'Game menu', HelpMicroButton = 'Help', StoreMicroButton = 'Shop',
+	HousingMicroButton = 'Housing', WorldMapMicroButton = 'World map', PVPMicroButton = 'PvP',
+	MainMenuBarBackpackButton = 'Backpack', CharacterBag0Slot = 'Bag 1', CharacterBag1Slot = 'Bag 2', CharacterBag2Slot = 'Bag 3',
+	CharacterBag3Slot = 'Bag 4', CharacterReagentBag0Slot = 'Reagent bag', KeyRingButton = 'Key ring'}
+function Deck.ButtonRows(group)
+	local rows = {}
+	local names = {}
+	for _, name in ipairs(GROUPS[group]) do names[#names + 1] = name end
+	if group == 'bags' then names[#names + 1] = 'KeyRingButton' end
+	for _, name in ipairs(names) do
+		rows[#rows + 1] = {'switch', LABELS[name] or name, 'actionbars.'..group..'Hide', since = '0.5.1',
+			get = function() return not LeftOut(group, name) end,
+			set = function(value)
+				local list = DB()[group..'Hide']
+				if type(list) ~= 'table' then list = {}; DB()[group..'Hide'] = list end
+				list[name] = (not value) or nil
+			end,
+			hidden = function() return _G[name] == nil end}
+	end
+	return rows
 end
+
+end)()
 -- Extra ability and zone ability ------------------------------------------------------------
 -- Blizzard's own buttons keep working; their style frames go, they sit on a key,
 -- and our holder (a mover) carries them.
@@ -2695,7 +2826,7 @@ local STAT_SLOTS = 6
 
 local function StatsWanted()
 	local db = DB()
-	if db.stats == false then return false end
+	if db.stats == false or db.statsStyle == 'hidden' then return false end
 	for index = 1, STAT_SLOTS do
 		local id = db['stat'..index]
 		if id and STATS[id] then return true end
@@ -2817,6 +2948,24 @@ local function Style(meter)
 		end
 	end
 	meter.shell:SetAlpha(style == 'slim' and 0.6 or 1)
+	-- Slim: the fill takes the whole hairline, and the percent is printed in the
+	-- numbers face at the end, with no LCD box round it.
+	bar:ClearAllPoints()
+	if style == 'slim' then
+		bar:SetPoint('TOPLEFT', 0, 0)
+		bar:SetPoint('BOTTOMRIGHT', 0, 0)
+	else
+		bar:SetPoint('TOPLEFT', 3, -2)
+		bar:SetPoint('BOTTOMRIGHT', -3, 2)
+	end
+	local lcd = meter.lcd
+	if lcd then
+		local boxed = style ~= 'slim'
+		if lcd.shell then lcd.shell:SetShown(boxed) end
+		if lcd.inner then lcd.inner:SetShown(boxed) end
+		Kit:Font(meter.percent, 8, nil, true, not boxed and 'numbers' or nil)
+		Kit:Tint(meter.percent, boxed and 'lcdInk' or (onDark and 'darkInk' or 'ink'))
+	end
 end
 
 -- Overlays from the fill's end: rested XP, quests ready.
@@ -2941,14 +3090,26 @@ local function BuildStrip(parent)
 		cell.value:SetPoint('RIGHT', -4, 0)
 		cell.value:SetJustifyH('RIGHT')
 		cell.value:SetWordWrap(false)
+		-- Minimal text: the value printed in the numbers face, a hairline dot
+		-- between readouts, no boxes.
+		cell.plain = Kit:Text(cell, '', 8, dark and 'darkInk' or 'ink', true)
+		Kit:Font(cell.plain, 8, nil, true, 'numbers')
+		cell.plain:SetWordWrap(false)
+		cell.dot = cell:CreateTexture(nil, 'ARTWORK')
+		cell.dot:SetColorTexture(1, 1, 1, 1)
+		cell.dot:SetSize(2, 2)
+		Kit:Tint(cell.dot, dark and 'darkDim' or 'dim', 0.6)
 		strip.cells[index] = cell
 	end
 	strips[#strips + 1] = strip
 	return strip
 end
 
+local function TextStrip() return (DB().statsStyle or 'text') == 'text' end
+
 function Deck.StripHeight()
 	if not StatsWanted() then return 0 end
+	if TextStrip() then return 10 end
 	return DB().statsSize == 'comfortable' and 25 or 14
 end
 
@@ -2961,8 +3122,9 @@ local function LayoutStrip(strip, width)
 	end
 	strip.ids = ids
 	local count = #ids
-	local comfortable = db.statsSize == 'comfortable'
-	local height = comfortable and 25 or 14
+	local text = TextStrip()
+	local comfortable = not text and db.statsSize == 'comfortable'
+	local height = text and 10 or (comfortable and 25 or 14)
 	strip:SetHeight(height)
 	local gap = 8
 	local cellWidth = count > 0 and (width - gap * (count - 1)) / count or 0
@@ -2977,7 +3139,21 @@ local function LayoutStrip(strip, width)
 			cell.led:ClearAllPoints()
 			cell.legend:ClearAllPoints()
 			cell.lcd:ClearAllPoints()
-			if comfortable then
+			cell.plain:ClearAllPoints()
+			cell.dot:ClearAllPoints()
+			cell.led:SetShown(not text)
+			cell.lcd:SetShown(not text)
+			cell.plain:SetShown(text)
+			cell.dot:SetShown(text and index > 1)
+			if text then
+				-- Legend and value meet at the cell's middle; a dot marks the cell's start.
+				cell.legend:SetWidth(0)
+				cell.legend:SetJustifyH('RIGHT')
+				cell.legend:SetPoint('RIGHT', cell, 'CENTER', -3, 0)
+				cell.plain:SetPoint('LEFT', cell, 'CENTER', 3, 0)
+				cell.plain:SetJustifyH('LEFT')
+				cell.dot:SetPoint('CENTER', cell, 'LEFT', -gap / 2, 0)
+			elseif comfortable then
 				-- Lamp and legend on a printed line, the LCD under them.
 				cell.led:SetPoint('TOPLEFT', 1, -2)
 				cell.legend:SetPoint('LEFT', cell.led, 'RIGHT', 4, 0)
@@ -3007,7 +3183,7 @@ local function UpdateStrip(strip)
 		local cell = strip.cells[index]
 		local ok, text, lamp = pcall(STATS[id][2])
 		if not ok then text, lamp = '--', nil end
-		if cell.text ~= text then cell.text = text; cell.value:SetText(text or '') end
+		if cell.text ~= text then cell.text = text; cell.value:SetText(text or ''); cell.plain:SetText(text or '') end
 		if cell.lamp ~= lamp then
 			cell.lamp = lamp
 			Kit:SetLed(cell.led, lamp ~= nil, lamp)
@@ -3494,6 +3670,13 @@ function module:Enable()
 		return
 	end
 	local db = DB()
+	-- Once: earlier saves move to the minimal deck (text stats, slim meter, a
+	-- quiet header). A flag outside the defaults marks it done.
+	if not db.minimalDeck then
+		db.minimalDeck = true
+		db.statsStyle, db.barStyle = 'text', 'slim'
+		db.panelZone, db.panelGold, db.panelDurability, db.panelLatency = false, false, false, false
+	end
 	if Docking() then BuildConsole() else BuildFree() end
 	if db.side then BuildSide() end
 	if db.stance then BuildStance() end
@@ -3549,12 +3732,7 @@ function module:Refresh()
 			HW.ShowDecor(device, DB().housing ~= false)
 		end
 	end
-	if menu then
-		UI:SetMoverBaseScale('ab.menu', scale * 0.8, menu)
-		if menu.shell then menu.shell:SetShown(DB().housing ~= false) end
-		HW.ShowDecor(menu, DB().housing ~= false)
-		RepaintMenu()
-	end
+	if menu then UI:Safe(LayoutMenu) end
 	Deck.ConfigureFn()
 	LayoutConsole()
 	LayoutFree()
@@ -3577,6 +3755,26 @@ function module:Refresh()
 end
 
 local function Percent(v) return format('%d%%', v * 100 + 0.5) end
+-- A Menu or Bags card: its device's options, `extra`, then a switch per button.
+local function MenuRows(group, extra)
+	local path = 'actionbars.'..group
+	local rows = {
+		{'switch', group == 'menu' and 'Menu' or 'Bags', path..'Enable', group == 'menu' and 'The micro buttons on a small device of their own.'
+			or 'The bag slots on a small device of their own.', since = '0.5.1'},
+		{'slider', 'Key size', path..'KeySize', 16, 40, 1, since = '0.5.1'},
+		{'slider', 'Scale', path..'Scale', 0.5, 1.5, 0.05, format = Percent, since = '0.5.1'},
+		{'segmented', 'Orientation', path..'Orient', items = {{'horizontal', 'Across'}, {'vertical', 'Down'}}, since = '0.5.1'},
+		{'slider', 'Keys per line', path..'Columns', 0, 12, 1, 'Before a new line starts. Auto keeps them in one line.',
+			format = function(v) return v == 0 and 'Auto' or tostring(v) end, since = '0.5.1'},
+		{'slider', 'Glyph size', path..'Glyph', 0.4, 0.9, 0.02, format = Percent, since = '0.5.1'},
+		{'switch', 'Housing', path..'Housing', 'The device housing round the keys.', since = '0.5.1'},
+		{'switch', 'Show on mouseover', path..'Fade', 'Faint until the mouse is over it.', since = '0.5.1'},
+	}
+	for _, row in ipairs(extra or {}) do rows[#rows + 1] = row end
+	rows[#rows + 1] = {'note', 'Buttons on this device:'}
+	for _, row in ipairs(Deck.ButtonRows(group)) do rows[#rows + 1] = row end
+	return rows
+end
 local function Auto(v) return v == 0 and 'Auto' or tostring(v) end
 local function Seconds(v) return v == 0 and 'All' or (v..' s') end
 local POSITIONS = {{'TOPLEFT', 'Top left'}, {'TOP', 'Top'}, {'TOPRIGHT', 'Top right'}}
@@ -3631,6 +3829,8 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 				if v == 0 then return height and format('Auto (%d)', height) or 'Auto' end
 				return tostring(v)
 			end, since = '0.5.1'},
+		{'segmented', 'No target', 'actionbars.targetPlate', items = {{'plate', 'Dim plate'}, {'collapse', 'Nothing'}}, since = '0.5.1',
+			note = 'With no target, a dim plate the player frame\'s size marks where it appears, or the space stays empty.'},
 		{'segmented', 'Banks', 'actionbars.bankAlign', items = {{'center', 'Centre'}, {'left', 'Left'}, {'spread', 'Spread'}}, since = '0.5.1',
 			note = 'Where the key banks sit in the console. Spread shares a fixed width out between the keys.'},
 		{'slider', 'Side padding', 'actionbars.padding', 0, 60, 2, 'Extra room at the console\'s sides.'},
@@ -3643,8 +3843,8 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 			note = 'Auto: experience while levelling, the watched reputation at the level cap (honor if there is none).'},
 		{'dropdown', 'Second meter', 'actionbars.barSecond', items = {{'none', 'None'}, {'auto', 'Auto'}, {'xp', 'Experience'},
 			{'rep', 'Reputation'}, {'honor', 'Honor'}}, since = '0.5.1', note = 'A second meter stacked above the first, e.g. reputation while levelling.'},
-		{'segmented', 'Style', 'actionbars.barStyle', items = {{'dots', 'LED dots'}, {'flat', 'Flat'}, {'segments', 'Segments'}, {'slim', 'Slim'}},
-			since = '0.5.1', note = 'LED dots, a flat bar with a lit edge, segments, or a slim hairline meter.'},
+		{'segmented', 'Style', 'actionbars.barStyle', items = {{'slim', 'Slim'}, {'flat', 'Flat'}, {'dots', 'LED dots'}, {'segments', 'Segments'}},
+			since = '0.5.1', note = 'Slim: a hairline meter with a lit edge and the percent printed at its end. Flat, LED dots or segments in a track with an LCD.'},
 		{'slider', 'Meter height', 'actionbars.xpHeight', 4, 16, 1},
 		{'switch', 'Rested XP', 'actionbars.restedOverlay', 'Rested experience as a lighter stretch past the fill.', since = '0.5.1'},
 		{'switch', 'Quests ready', 'actionbars.questPreview', 'The XP of quests ready to hand in, as a second stretch.', since = '0.5.1'},
@@ -3658,8 +3858,11 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 			note = 'Level and progress, the time, or no LCD.'},
 	}},
 	{title = 'Stats strip', rows = {
-		{'switch', 'Stats strip', 'actionbars.stats', 'A row of small LCD readouts above the meter.', since = '0.5.1'},
-		{'segmented', 'Size', 'actionbars.statsSize', items = {{'compact', 'Compact'}, {'comfortable', 'Comfortable'}}, since = '0.5.1',
+		{'switch', 'Stats strip', 'actionbars.stats', 'A line of readouts above the meter.', since = '0.5.1'},
+		{'segmented', 'Style', 'actionbars.statsStyle', items = {{'text', 'Minimal text'}, {'chips', 'LCD chips'}, {'hidden', 'Hidden'}}, since = '0.5.1',
+			note = 'Minimal text: printed legends and values separated by dots. LCD chips: each readout on a small LCD with a lamp.'},
+		{'segmented', 'Chip size', 'actionbars.statsSize', items = {{'compact', 'Compact'}, {'comfortable', 'Comfortable'}}, since = '0.5.1',
+			hidden = function() return (DB().statsStyle or 'text') ~= 'chips' end,
 			note = 'Compact: legend and LCD on one line. Comfortable: the legend printed over the LCD.'},
 		{'dropdown', 'Slot 1', 'actionbars.stat1', items = Deck.STAT_ITEMS, since = '0.5.1'},
 		{'dropdown', 'Slot 2', 'actionbars.stat2', items = Deck.STAT_ITEMS, since = '0.5.1'},
@@ -3752,11 +3955,13 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 		{'switch', 'Show on mouseover', 'actionbars.barStance.mouseover'},
 		{'slider', 'Faded opacity', 'actionbars.barStance.fadeAlpha', 0, 1, 0.05, nil, format = Percent},
 	}},
-	{title = 'Menu and bags', rows = {
+	{title = 'Menu', rows = MenuRows('menu', {
 		{'segmented', 'Icons', 'actionbars.menuIcons', items = {{'glyphs', 'SPEC-01'}, {'blizzard', 'Blizzard'}}, since = '0.5.1',
 			note = 'Printed SPEC-01 glyphs on the menu and bag keys, with a lamp that lights while a window is open and breathes when the game asks for attention.'},
+	})},
+	{title = 'Bags', rows = MenuRows('bags', {
 		{'segmented', 'Bag slots', 'actionbars.bagIcons', items = {{'items', 'Bag icons'}, {'glyphs', 'Glyphs'}}, since = '0.5.1',
 			note = 'Each bag\'s own icon, with a glyph only in an empty slot, or a glyph in every slot.',
 			hidden = function() return DB().menuIcons == 'blizzard' end},
-	}},
+	})},
 }})
