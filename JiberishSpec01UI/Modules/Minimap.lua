@@ -700,10 +700,14 @@ end
 -- squeeze: 0 everything; 1 lamps without labels; 2+ drops lamps from the
 -- least needed (tracking, invites, the chip, mail) until the row clears the title.
 local LayoutHeaderAt
+-- Squeeze in one pass, before anything shows: each level is laid out and
+-- measured at once (anchors resolve on query), and the first that clears the
+-- title is kept. Re-entrant calls are ignored, so nothing can flicker.
+local laying
 local function LayoutHeader(device)
-	LayoutHeaderAt(device, 0)
-	-- Positions settle a frame later; then squeeze until nothing meets the title.
-	C_Timer.After(0, function()
+	if laying then return end
+	laying = true
+	local ok, problem = pcall(function()
 		for squeeze = 0, 5 do
 			LayoutHeaderAt(device, squeeze)
 			local leftmost = device.headerLeft and device.headerLeft:GetLeft()
@@ -713,6 +717,8 @@ local function LayoutHeader(device)
 			if leftmost >= titleRight then return end
 		end
 	end)
+	laying = nil
+	if not ok then error(problem, 0) end
 end
 
 function LayoutHeaderAt(device, squeeze)
