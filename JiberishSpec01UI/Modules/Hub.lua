@@ -95,6 +95,7 @@ function UI:NeedsReload()
 	if hub then
 		hub.reload:Show()
 		hub.reload:SetTone('primary')
+		if hub.layoutHeader then hub.layoutHeader() end
 		-- A lamp on the key blinks until the reload.
 		if hub.reload.led then
 			Kit:SetLed(hub.reload.led, true, 'amber')
@@ -469,6 +470,7 @@ end
 local function BuildRow(card, row, y, width, page)
 	local kind = row[1]
 	if kind == 'note' then return Note(card, row, y, width, card.fullNotes) end
+	card.rowDesc, card.rowDescHeight = nil, nil
 	if kind == 'header' then return Header(card, row, y) end
 	local control = Control(card, row, width)
 	if not control then
@@ -514,15 +516,18 @@ local function BuildRow(card, row, y, width, page)
 		control:SetPoint('TOPRIGHT', card.body, 'TOPRIGHT', kind == 'switch' and -2 or 0, -y + nudge + (control.lift or 0))
 		height = max(ROW_HEIGHT[kind], textHeight + 10)
 	end
-	-- Descriptions: under the whole row, the card's full width, two lines at most.
-	if noteText and HubDB().describe then
+	-- Descriptions: under the whole row, the card's full width, two lines at most;
+	-- made now and shown while the hub's Descriptions key is on.
+	card.rowDesc, card.rowDescHeight = nil, nil
+	if noteText then
 		local line = Kit:Text(card.body, noteText, 9, 'dim')
 		line:SetPoint('TOPLEFT', left, -y - height + 4)
 		line:SetWidth(width - left)
 		line:SetJustifyH('LEFT')
 		line:SetWordWrap(true)
 		if line.SetMaxLines then line:SetMaxLines(2) end
-		height = height + min(line:GetStringHeight(), 26) + 6
+		line:Hide()
+		card.rowDesc, card.rowDescHeight = line, min(line:GetStringHeight(), 26) + 6
 	end
 	Lockable(control, label, row)
 	if control.refresh and row.disabled then control.refresh() end
@@ -530,7 +535,7 @@ local function BuildRow(card, row, y, width, page)
 	return height
 end
 
--- Which rows are hidden right now, as one string; a change rebuilds the page.
+-- Which rows are hidden right now, as one string; a change re-lays the page out.
 local function HiddenSignature(page)
 	local marks = {}
 	for _, card in ipairs(page.cards or {}) do
@@ -541,20 +546,13 @@ local function HiddenSignature(page)
 	return table.concat(marks)
 end
 
-local RebuildPage
+local RebuildPage, Relayout
 
 -- Card state, per page and card: collapsed, or showing every option.
 local function CardState(page, index)
 	local db = HubDB()
 	local id = page.key..':'..index
 	return db.collapsed[id], db.expanded[id], id
-end
-
-local function Expander(card, y, width, text, onClick)
-	local key = Kit:Key(card.body, {text = text, width = min(width, #text * 7 + 34), height = 22, textSize = 8})
-	key:SetPoint('TOPLEFT', 0, -y - 4)
-	key.onClick = onClick
-	return 32
 end
 
 -- A page's printed model code: the title's initials, e.g. Unit frames -> UF.
@@ -577,111 +575,269 @@ local function PageRunning(page)
 	return (module.enabled or module.ready) and true or false
 end
 
--- Cards in one grid row share the tallest one's height, so bottoms line up.
-local function EvenRows(cards)
-	local column, row = 0, {}
+-- Pages are built once. Every row of every card is made up front, each on a
+-- holder frame of its own (hidden rows and those behind More options too);
+-- folding, More options, Advanced, Descriptions and rows that show or hide with
+-- other settings only re-lay the page out: rows ease to their new places,
+-- appearing ones fade in, leaving ones fade out, cards ease to their new
+-- heights and the grid re-flows, with the scroll position kept.
+local function Unit(card, row, width, page)
+	local holder = CreateFrame('Frame', nil, card.body)
+	holder:SetSize(width, 1)
+	holder:Hide()
+	local unit = {row = row, holder = holder, kind = row[1], setting = row[1] ~= 'note' and row[1] ~= 'header'}
+	local function Shim(body) return {body = body, controls = card.controls, title = card.title} end
+	if row[1] == 'note' then
+		unit.compact = CreateFrame('Frame', nil, holder)
+		unit.compact:SetAllPoints()
+		unit.full = CreateFrame('Frame', nil, holder)
+		unit.full:SetAllPoints()
+		unit.compactHeight = Note(Shim(unit.compact), row, 0, width, false)
+		unit.fullHeight = Note(Shim(unit.full), row, 0, width, true)
+	else
+		local shim = Shim(holder)
+		unit.base = BuildRow(shim, row, 0, width, page)
+		unit.desc, unit.descHeight = shim.rowDesc, shim.rowDescHeight
+	end
+	return unit
+end
+
+-- The row's height as things stand, showing the parts that apply.
+local function UnitHeight(unit, card)
+	if unit.expander then return 32 end
+	if unit.compact then
+		local full = card.preview or Advanced()
+		unit.compact:SetShown(not full)
+		unit.full:SetShown(full)
+		return full and unit.fullHeight or unit.compactHeight
+	end
+	local described = unit.desc and HubDB().describe and true or false
+	if unit.desc then unit.desc:SetShown(described) end
+	return unit.base + (described and unit.descHeight or 0)
+end
+
+-- Which rows a card shows: hidden() rows never; past the first few settings
+-- only with Advanced or More options.
+local function PlanCard(page, card)
+	local advanced = Advanced()
+	local _, expanded = CardState(page, card.index)
+	local shown, skipped = 0, 0
+	for _, unit in ipairs(card.units) do
+		local want = false
+		if not Test(unit.row.hidden) then
+			if advanced or expanded or shown < CARD_ROWS or (not unit.setting and skipped == 0) then
+				want = true
+				if unit.setting then shown = shown + 1 end
+			elseif unit.setting then
+				skipped = skipped + 1
+			end
+		end
+		unit.want = want
+	end
+	local expander = card.expander
+	if skipped > 0 then
+		expander.want, expander.more = true, true
+		expander.key:SetKeyText(format('More options (%d)', skipped))
+	elseif expanded and not advanced then
+		expander.want, expander.more = true, false
+		expander.key:SetKeyText('Fewer options')
+	else
+		expander.want = false
+	end
+end
+
+local function PlaceUnit(unit, body, y)
+	unit.atY = y
+	unit.holder:ClearAllPoints()
+	unit.holder:SetPoint('TOPLEFT', body, 'TOPLEFT', 0, -y)
+	unit.holder:SetPoint('TOPRIGHT', body, 'TOPRIGHT', 0, -y)
+end
+
+local function PlaceCard(card, content, x, y, height)
+	card.atX, card.atY, card.atH = x, y, height
+	card:ClearAllPoints()
+	card:SetPoint('TOPLEFT', content, 'TOPLEFT', x, -y)
+	card:SetHeight(max(height, 1))
+end
+
+local function Lerp(a, b, t) return a + (b - a) * t end
+
+-- Work out where everything goes, then move there (eased, or at once).
+function Relayout(page, animate)
+	local area, cards = page.area, page.cardFrames
+	if not cards or #cards == 0 then return 40 end
+	local content = area and area.content or cards[1]:GetParent()
+	animate = animate and Kit:Faithful('slide') and area and area:IsVisible()
+	page.hiddenSignature = HiddenSignature(page)
+	-- Rows and card heights.
+	for _, card in ipairs(cards) do
+		PlanCard(page, card)
+		local collapsed = CardState(page, card.index)
+		card.folded = collapsed and true or false
+		local y = 0
+		local list = card.allUnits
+		for _, unit in ipairs(list) do
+			local wanted = unit.want and not card.folded
+			unit.toY = y
+			if wanted then
+				unit.height = UnitHeight(unit, card)
+				unit.holder:SetHeight(unit.height)
+				y = y + unit.height
+			end
+			unit.wanted = wanted
+		end
+		card.toH = card.folded and 34 or (28 + y + 10)
+		Kit:SetIcon(card.chevron, card.folded and 'chevron-right' or 'chevron-down')
+	end
+	-- Cards in one grid row share the tallest one's height; then the grid flows.
+	local column, rowCards, y, rowHeight = 0, {}, 0, 0
 	local function Settle()
 		local tallest = 0
-		for _, card in ipairs(row) do tallest = max(tallest, card:GetHeight()) end
-		for _, card in ipairs(row) do if not card.folded then card:SetHeight(tallest) end end
+		for _, card in ipairs(rowCards) do tallest = max(tallest, card.toH) end
+		for _, card in ipairs(rowCards) do if not card.folded then card.toH = tallest end end
+		local settled = 0
+		for _, card in ipairs(rowCards) do settled = max(settled, card.toH) end
+		return settled
 	end
 	for _, card in ipairs(cards) do
 		local span = card.span or 1
-		if column + span > CONTENT_COLUMNS then Settle(); row, column = {}, 0 end
-		row[#row + 1] = card
+		if column + span > CONTENT_COLUMNS then
+			y = y + Settle() + Kit.GAP
+			rowCards, column = {}, 0
+		end
+		rowCards[#rowCards + 1] = card
+		card.toX, card.toY = Kit.PAD / 2 + column * (Kit.COLUMN + Kit.GAP), 8 + y
 		column = column + span
 	end
-	Settle()
+	rowHeight = Settle()
+	local total = 8 + y + rowHeight + 24
+	-- Move.
+	local fromTotal = content:GetHeight() or total
+	if not animate then
+		for _, card in ipairs(cards) do
+			for _, unit in ipairs(card.allUnits) do
+				unit.holder:SetShown(unit.wanted)
+				unit.holder:SetAlpha(1)
+				if unit.wanted then PlaceUnit(unit, card.body, unit.toY) end
+			end
+			card.body:SetShown(not card.folded)
+			card.body:SetAlpha(1)
+			PlaceCard(card, content, card.toX, card.toY, card.toH)
+		end
+		content:SetHeight(total)
+		if area then area:Refresh() end
+		return total
+	end
+	-- Eased: everything from where it is now to where it goes, in one animation.
+	for _, card in ipairs(cards) do
+		card.fromX, card.fromY, card.fromH = card.atX or card.toX, card.atY or card.toY, card.atH or card.toH
+		if not card.folded then card.body:Show() end
+		for _, unit in ipairs(card.allUnits) do
+			local shown = unit.holder:IsShown()
+			unit.fromA = shown and unit.holder:GetAlpha() or 0
+			unit.toA = unit.wanted and 1 or 0
+			unit.fromY = (shown and unit.atY) or unit.toY
+			if unit.wanted and not shown then
+				unit.holder:SetAlpha(0)
+				unit.holder:Show()
+				PlaceUnit(unit, card.body, unit.toY)
+			end
+		end
+	end
+	content:SetHeight(max(fromTotal, total))
+	area:Refresh()
+	Kit:Animate(page, 0.22, 0, 1, function(t)
+		for _, card in ipairs(cards) do
+			PlaceCard(card, content, Lerp(card.fromX, card.toX, t), Lerp(card.fromY, card.toY, t), Lerp(card.fromH, card.toH, t))
+			if card.folded then card.body:SetAlpha(1 - t) end
+			for _, unit in ipairs(card.allUnits) do
+				if unit.holder:IsShown() then
+					if unit.fromY ~= unit.toY then PlaceUnit(unit, card.body, Lerp(unit.fromY, unit.toY, t)) end
+					if unit.fromA ~= unit.toA then unit.holder:SetAlpha(Lerp(unit.fromA, unit.toA, t)) end
+				end
+			end
+		end
+	end, function()
+		for _, card in ipairs(cards) do
+			card.body:SetShown(not card.folded)
+			card.body:SetAlpha(1)
+			for _, unit in ipairs(card.allUnits) do
+				unit.holder:SetShown(unit.wanted)
+				unit.holder:SetAlpha(1)
+				if unit.wanted then PlaceUnit(unit, card.body, unit.toY) end
+			end
+			PlaceCard(card, content, card.toX, card.toY, card.toH)
+		end
+		content:SetHeight(total)
+		area:Refresh()
+	end, 'detent')
+	return total
 end
 
 local function BuildCards(content, page)
 	local cards = {}
 	local span = page.span or 2
 	local width = span * Kit.COLUMN + (span - 1) * Kit.GAP
-	local advanced = Advanced()
+	local bodyWidth = width - 24
 	page.controls = {}
-	page.hiddenSignature = HiddenSignature(page)
 	for index, spec in ipairs(page.cards) do
 		local card = Kit.CardShell(content, index, spec.title, width, 200)
-		card.span, card.controls = span, {}
-		local collapsed, expanded, id = CardState(page, index)
+		card.span, card.controls, card.index = span, {}, index
+		-- Rows past the card's edge while it eases smaller are cut off, not drawn over.
+		card.body:SetClipsChildren(true)
 		-- Printed model code (UF-01), and a lamp lit while the page's module runs.
 		card.number:SetText(format('%s-%02d', PageCode(page), index))
 		card.lamp = Kit:Led(card, 5, PageRunning(page))
 		card.lamp:SetPoint('TOPRIGHT', -28, -12)
 		-- Preview cards keep their notes whole: they reserve room for a live sample.
-		card.fullNotes = advanced or (type(spec.title) == 'string' and strupper(spec.title) == 'PREVIEW')
+		card.preview = type(spec.title) == 'string' and strupper(spec.title) == 'PREVIEW'
 		-- The header folds the card; a chevron shows which way.
 		local fold = CreateFrame('Button', nil, card)
 		fold:SetPoint('TOPLEFT', 4, -4)
 		fold:SetPoint('TOPRIGHT', -4, -4)
 		fold:SetHeight(20)
-		fold.chevron = Kit:Icon(card, collapsed and 'chevron-right' or 'chevron-down', 9, 'dim')
-		fold.chevron:SetPoint('TOPRIGHT', -12, -10)
+		card.chevron = Kit:Icon(card, 'chevron-down', 9, 'dim')
+		card.chevron:SetPoint('TOPRIGHT', -12, -10)
 		card.rule:SetWidth(max(width - 50 - card.number:GetStringWidth() - card.title:GetStringWidth() - 34, 1))
 		fold:SetScript('OnClick', function()
+			local collapsed = CardState(page, index)
 			Kit:Play(collapsed and 'latch-down' or 'latch-up')
-			HubDB().collapsed[id] = not collapsed or nil
-			if collapsed then page.animateCard = index end
-			RebuildPage(page)
+			HubDB().collapsed[page.key..':'..index] = not collapsed or nil
+			Relayout(page, true)
 		end)
-		fold:SetScript('OnEnter', function() Kit:Tint(fold.chevron, 'ink') end)
-		fold:SetScript('OnLeave', function() Kit:Tint(fold.chevron, 'dim') end)
-		local y = 0
-		if not collapsed then
-			local bodyWidth = width - 24
-			local shown, skipped = 0, 0
-			for _, row in ipairs(spec.rows) do
-				if not Test(row.hidden) then
-					local setting = row[1] ~= 'note' and row[1] ~= 'header'
-					if advanced or expanded or shown < CARD_ROWS or (not setting and skipped == 0) then
-						if setting then shown = shown + 1 end
-						y = y + BuildRow(card, row, y, bodyWidth, page)
-					else
-						if setting then skipped = skipped + 1 end
-					end
-				end
-			end
-			if skipped > 0 then
-				y = y + Expander(card, y, bodyWidth, format('More options (%d)', skipped), function()
-					Kit:Play('down')
-					HubDB().expanded[id] = true
-					page.animateCard = index
-					Kit:Play('latch-down')
-					RebuildPage(page)
-				end)
-			elseif expanded and not advanced then
-				y = y + Expander(card, y, bodyWidth, 'Fewer options', function()
-					Kit:Play('up')
-					HubDB().expanded[id] = nil
-					RebuildPage(page)
-				end)
-			end
-			card:SetHeight(28 + y + 10)
-		else
-			card.body:Hide()
-			card:SetHeight(34)
-			card.folded = true
+		fold:SetScript('OnEnter', function() Kit:Tint(card.chevron, 'ink') end)
+		fold:SetScript('OnLeave', function() Kit:Tint(card.chevron, 'dim') end)
+		-- Every row, built once.
+		card.units, card.allUnits = {}, {}
+		for _, row in ipairs(spec.rows) do
+			local unit = Unit(card, row, bodyWidth, page)
+			card.units[#card.units + 1] = unit
+			card.allUnits[#card.allUnits + 1] = unit
 		end
-		-- A card just opened (More options, unfolding) slides its rows in like a drawer.
-		if page.animateCard == index and not collapsed then
-			page.animateCard = nil
-			card.body:SetAlpha(0)
-			C_Timer.After(0, function()
-				card.body:SetAlpha(1)
-				if Kit:Faithful('slide') then Kit:SlideIn(card.body, 0, 10, 0.28) end
-			end)
+		-- More options / Fewer options.
+		local holder = CreateFrame('Frame', nil, card.body)
+		holder:SetSize(bodyWidth, 32)
+		holder:Hide()
+		local key = Kit:Key(holder, {text = 'More options', width = 140, height = 22, textSize = 8})
+		key:SetPoint('TOPLEFT', 0, -4)
+		card.expander = {holder = holder, key = key, expander = true, row = {}}
+		key.onClick = function()
+			local id = page.key..':'..index
+			local more = card.expander.more
+			Kit:Play(more and 'latch-down' or 'latch-up')
+			HubDB().expanded[id] = more and true or nil
+			Relayout(page, true)
 		end
+		card.allUnits[#card.allUnits + 1] = card.expander
 		cards[#cards + 1] = card
 		for _, control in ipairs(card.controls) do page.controls[#page.controls + 1] = control end
 	end
 	page.cardFrames = cards
-	EvenRows(cards)
-	return Kit:FlowCards(content, cards, CONTENT_COLUMNS)
+	return Relayout(page, false)
 end
 
 -- Window ------------------------------------------------------------------------
-local Search, ClearSearch, GroupOf, BuildNav, CascadeCards, MarkNav
+local Search, ClearSearch, GroupOf, BuildNav, LayoutNav, CascadeCards, MarkNav, LayoutHeader
 
 -- Cards deal in one after another on the detent curve: each rises 8 px and fades in.
 function CascadeCards(cards)
@@ -738,15 +894,16 @@ local function SelectPage(key)
 		Kit:Tint(entry.label, selected and 'ink' or 'dim')
 	end
 	HideAreas(page)
-	-- Rows that show or hide with other settings changed while this page was away.
-	if page.area and page.cards and page.hiddenSignature ~= HiddenSignature(page) then
-		page.area:Hide()
-		page.area, page.controls = nil, nil
+	-- Rows that show or hide with other settings, or the hub's Advanced and
+	-- Descriptions keys, changed while this page was away: lay it out again.
+	if page.area and page.cards and (page.layoutDirty or page.hiddenSignature ~= HiddenSignature(page)) then
+		page.layoutDirty = nil
+		Relayout(page, false)
 	end
 	if not page.area then
-		local area = Kit:ScrollArea(hub, {width = hub:GetWidth() - SIDEBAR - Kit.PAD * 2, height = hub:GetHeight() - 78, step = 60,
+		local area = Kit:ScrollArea(hub, {width = hub:GetWidth() - SIDEBAR - Kit.PAD * 2, height = hub:GetHeight() - 104, step = 60,
 			smooth = true})
-		area:SetPoint('TOPLEFT', SIDEBAR + Kit.PAD, -66)
+		area:SetPoint('TOPLEFT', SIDEBAR + Kit.PAD, -92)
 		local ok, height = pcall(page.build or BuildCards, area.content, page)
 		if not ok then
 			local message = Kit:Text(area.content, 'This page failed to build: '..tostring(height), 10, 'red')
@@ -761,8 +918,12 @@ local function SelectPage(key)
 	page.area:Show()
 	-- side-panel-in: a new page fades in with a 6 px rise (240 ms); with the
 	-- Staggered entrance extra its cards follow one after another.
-	if Kit.SlideIn and Kit:Faithful('slide') then Kit:SlideIn(page.area) end
-	CascadeCards(page.cardFrames)
+	if page.noCascade then
+		page.noCascade = nil
+	else
+		if Kit.SlideIn and Kit:Faithful('slide') then Kit:SlideIn(page.area) end
+		CascadeCards(page.cardFrames)
+	end
 	if page.onShow then page.onShow(page.area) end
 	for _, control in ipairs(page.controls or {}) do
 		if control.refresh then pcall(control.refresh) end
@@ -773,19 +934,25 @@ local function SelectPage(key)
 	-- NEW marks show until a page has been opened once.
 	if not UI.db.hub.seen[key] then
 		UI.db.hub.seen[key] = true
-		hub.navDirty = true
+		local entry = hub.nav and hub.nav[key]
+		if entry and entry.new then entry.new:Hide() end
 	end
-	if hub.navGroup ~= nil and hub.navGroup ~= GroupOf(key) then BuildNav() end
+	if hub.navGroup ~= nil and hub.navGroup ~= GroupOf(key) then
+		UI.db.hub.group = false
+		LayoutNav(true)
+	end
 end
 
--- A page whose hidden rows changed is built again (its old frames stay hidden).
+-- Only for a real change of what a page holds (it was registered again): built
+-- afresh, in place, without the opening cascade.
 function RebuildPage(page)
 	if not page.area then return end
 	local scroll = page.area.offset
 	page.area:Hide()
 	if page.onHide then page.onHide(page.area) end
-	page.area, page.controls = nil, nil
+	page.area, page.controls, page.cardFrames = nil, nil, nil
 	if UI.db.hub.page == page.key and hub:IsShown() then
+		page.noCascade = true
 		SelectPage(page.key)
 		if scroll and page.area then page.area:ScrollTo(scroll, true) end
 	end
@@ -857,11 +1024,7 @@ local function ResultRow(parent)
 			local changed = db.collapsed[id] or (not db.advanced and entry.setting > CARD_ROWS and not db.expanded[id])
 			db.collapsed[id] = nil
 			if not db.advanced and entry.setting > CARD_ROWS then db.expanded[id] = true end
-			if changed and page.area then
-				page.area:Hide()
-				if page.onHide then page.onHide(page.area) end
-				page.area, page.controls = nil, nil
-			end
+			if changed and page.area then page.layoutDirty = true end
 		end
 		SelectPage(self.pageKey)
 		-- Scroll to the card and light it.
@@ -877,9 +1040,9 @@ end
 
 local function Results()
 	if hub.results then return hub.results end
-	local area = Kit:ScrollArea(hub, {width = hub:GetWidth() - SIDEBAR - Kit.PAD * 2, height = hub:GetHeight() - 78, step = 60,
+	local area = Kit:ScrollArea(hub, {width = hub:GetWidth() - SIDEBAR - Kit.PAD * 2, height = hub:GetHeight() - 104, step = 60,
 		smooth = true})
-	area:SetPoint('TOPLEFT', SIDEBAR + Kit.PAD, -66)
+	area:SetPoint('TOPLEFT', SIDEBAR + Kit.PAD, -92)
 	area.rows = {}
 	area.empty = Kit:Text(area.content, '', 10, 'dim')
 	area.empty:SetPoint('TOPLEFT', 16, -16)
@@ -959,7 +1122,7 @@ end
 -- A page no section names falls into Interface.
 function GroupOf(key) return GROUP_OF[key] or 'interface' end
 
-local NAV_TOP, NAV_ROW, NAV_HEAD = 106, 20, 22
+local NAV_TOP, NAV_ROW, NAV_HEAD = 128, 20, 22
 
 local function NavEntry(key, page)
 	local entry = CreateFrame('Button', nil, hub)
@@ -991,65 +1154,92 @@ local function NavEntry(key, page)
 	return entry
 end
 
-local function NavHeader(group, open)
+local function NavHeader(group)
 	local head = CreateFrame('Button', nil, hub)
 	head:SetSize(SIDEBAR - 20, NAV_HEAD)
+	head.group = group
 	head.lamp = Kit:Led(head, 4, true)
 	head.lamp:SetPoint('LEFT', 2, 0)
-	head.label = Kit:Label(head, group[2], open and 'ink' or 'dim', 8, true)
+	head.label = Kit:Label(head, group[2], 'dim', 8, true)
 	head.label:SetPoint('LEFT', 10, 0)
-	head.chevron = Kit:Icon(head, open and 'chevron-down' or 'chevron-right', 8, 'dim')
+	head.chevron = Kit:Icon(head, 'chevron-right', 8, 'dim')
 	head.chevron:SetPoint('RIGHT', -2, 0)
 	head:SetScript('OnEnter', function(self) Kit:Tint(self.label, 'ink') end)
-	head:SetScript('OnLeave', function(self) if not open then Kit:Tint(self.label, 'dim') end end)
+	head:SetScript('OnLeave', function(self) if hub.navGroup ~= group[1] then Kit:Tint(self.label, 'dim') end end)
 	head:SetScript('OnClick', function()
+		local open = hub.navGroup == group[1]
 		Kit:Play(open and 'latch-up' or 'latch-down')
 		UI.db.hub.group = not open and group[1] or false
 		hub.navOpenOverride = true
-		BuildNav()
+		LayoutNav(true)
 	end)
 	return head
 end
 
+-- Entries and headers are made once (again only when pages are registered);
+-- opening a section only re-lays the sidebar out.
 function BuildNav()
 	for _, entry in pairs(hub.nav or {}) do entry:Hide() end
 	for _, head in ipairs(hub.navHeads or {}) do head:Hide() end
-	hub.nav, hub.navHeads = {}, {}
-	-- Which pages exist, by section, in page order.
-	local members = {}
+	hub.nav, hub.navHeads, hub.navMembers = {}, {}, {}
 	for _, key in ipairs(pageOrder) do
 		local page = pages[key]
 		if not page.hidden then
 			local group = GroupOf(key)
-			members[group] = members[group] or {}
-			table.insert(members[group], key)
+			hub.navMembers[group] = hub.navMembers[group] or {}
+			table.insert(hub.navMembers[group], key)
+			-- Every page has an entry (the tour points at one); folded ones stay hidden.
+			local entry = NavEntry(key, page)
+			entry:Hide()
+			hub.nav[key] = entry
 		end
 	end
+	for _, group in ipairs(GROUPS) do
+		if hub.navMembers[group[1]] then hub.navHeads[#hub.navHeads + 1] = NavHeader(group) end
+	end
+	hub.navDirty = nil
+	LayoutNav(false)
+end
+
+-- Places the headers and the open section's entries: eased, or at once.
+function LayoutNav(animate)
+	if not hub.navHeads then return end
 	-- The open section: the one last clicked, else the current page's.
 	local current = GroupOf(UI.db.hub.page or 'overview')
 	local open = UI.db.hub.group
 	if not hub.navOpenOverride or open == nil then open = current end
 	hub.navOpenOverride = nil
 	hub.navGroup = open or false
-	local y = -NAV_TOP
-	for _, group in ipairs(GROUPS) do
-		local list = members[group[1]]
-		if list then
-			local isOpen = open == group[1]
-			local head = NavHeader(group, isOpen)
-			head:SetPoint('TOPLEFT', Kit.PAD + 4, y)
-			hub.navHeads[#hub.navHeads + 1] = head
-			y = y - NAV_HEAD
-			for _, key in ipairs(list) do
-				-- Every page has an entry (the tour points at one); folded ones stay hidden.
-				local entry = NavEntry(key, pages[key])
-				entry:SetPoint('TOPLEFT', Kit.PAD + 4, y)
-				entry:SetShown(isOpen)
-				if isOpen then y = y - NAV_ROW end
-				hub.nav[key] = entry
-			end
-			y = y - 4
+	animate = animate and Kit:Faithful('slide') and hub:IsVisible()
+	local moves, y = {}, -NAV_TOP
+	local function Move(frame, toY, show)
+		local shown = frame:IsShown()
+		moves[#moves + 1] = {frame = frame, fromY = shown and frame.navY or toY, toY = toY, show = show,
+			fromA = shown and frame:GetAlpha() or 0}
+		if show and not shown then frame:SetAlpha(0); frame:Show() end
+		if not animate then
+			frame:SetShown(show)
+			frame:SetAlpha(1)
 		end
+	end
+	for _, head in ipairs(hub.navHeads) do
+		local group = head.group
+		local isOpen = open == group[1]
+		Kit:Tint(head.label, isOpen and 'ink' or 'dim')
+		Kit:SetIcon(head.chevron, isOpen and 'chevron-down' or 'chevron-right')
+		Move(head, y, true)
+		y = y - NAV_HEAD
+		for _, key in ipairs(hub.navMembers[group[1]] or {}) do
+			local entry = hub.nav[key]
+			Move(entry, y, isOpen)
+			if isOpen then y = y - NAV_ROW end
+		end
+		y = y - 4
+	end
+	local function Place(frame, at)
+		frame.navY = at
+		frame:ClearAllPoints()
+		frame:SetPoint('TOPLEFT', hub, 'TOPLEFT', Kit.PAD + 4, at)
 	end
 	-- Paint the current page's lamp.
 	for pageKey, entry in pairs(hub.nav) do
@@ -1057,31 +1247,80 @@ function BuildNav()
 		Kit:SetLed(entry.led, selected)
 		Kit:Tint(entry.label, selected and 'ink' or 'dim')
 	end
-	hub.navDirty = nil
-	-- The lit plate lands on the current page without sliding.
-	if hub.navMarker then
-		hub.navMarker:Hide()
+	if hub.navMarker then hub.navMarker:Hide() end
+	if not animate then
+		for _, move in ipairs(moves) do Place(move.frame, move.toY) end
 		MarkNav(UI.db.hub.page)
+		return
 	end
+	Kit:Animate(hub.navHeads, 0.22, 0, 1, function(t)
+		for _, move in ipairs(moves) do
+			Place(move.frame, move.fromY + (move.toY - move.fromY) * t)
+			local toA = move.show and 1 or 0
+			if move.fromA ~= toA then move.frame:SetAlpha(move.fromA + (toA - move.fromA) * t) end
+		end
+	end, function()
+		for _, move in ipairs(moves) do
+			Place(move.frame, move.toY)
+			move.frame:SetShown(move.show)
+			move.frame:SetAlpha(1)
+		end
+		MarkNav(UI.db.hub.page)
+	end, 'detent')
 end
 
 -- Header toggles: Advanced shows every option and whole notes; Descriptions adds a
 -- line under each label. Built pages are rebuilt the next time they show.
 local function ForgetPages()
+	local current = pages[UI.db.hub.page]
 	for _, page in pairs(pages) do
 		if page.area and page.cards then
-			page.area:Hide()
-			if page.onHide then page.onHide(page.area) end
-			page.area, page.controls = nil, nil
+			if page == current and page.area:IsShown() then Relayout(page, true) else page.layoutDirty = true end
 		end
 	end
-	if hub:IsShown() and not hub.searching then SelectPage(UI.db.hub.page) end
+end
+
+-- The header grid, right to left: close, sound | Move UI | finish | key colors |
+-- Reload UI on the first row; Advanced, Descriptions | LCD on the second. Gaps
+-- are fixed (4-6 px within a group, 12 between groups) and widths measured, so
+-- nothing overlaps at any scale; when the first row would reach the brand, the
+-- Reload key moves down to the second row.
+local ROW1_Y, ROW2_Y, GAP_IN, GAP_OUT = -14, -54, 6, 12
+function LayoutHeader()
+	if not hub or not hub.close then return end
+	local x = -Kit.PAD
+	local function Put(frame, y, gapBefore)
+		if not frame:IsShown() then return end
+		x = x - (gapBefore or 0)
+		frame:ClearAllPoints()
+		frame:SetPoint('TOPRIGHT', hub, 'TOPRIGHT', x, y)
+		x = x - frame:GetWidth()
+	end
+	local KEY_TOP = ROW1_Y
+	Put(hub.close, KEY_TOP, 0)
+	Put(hub.sound, KEY_TOP, GAP_IN)
+	Put(hub.move, KEY_TOP, GAP_OUT)
+	Put(hub.finish, KEY_TOP, GAP_OUT)
+	for index = #Kit.accentOrder, 1, -1 do
+		local swatch = hub.accents[Kit.accentOrder[index]]
+		-- Centered on the keys' row.
+		Put(swatch, KEY_TOP - 4, index == #Kit.accentOrder and GAP_OUT + 4 or GAP_IN + 2)
+	end
+	local brandRight = Kit.PAD + 4 + (hub.brand:GetStringWidth() or 200) + 16
+	local reloadOnTop = hub.reload:IsShown() and (hub:GetWidth() + x - GAP_OUT - hub.reload:GetWidth()) > brandRight
+	if reloadOnTop then Put(hub.reload, KEY_TOP, GAP_OUT + 2) end
+	-- Second row.
+	x = -Kit.PAD
+	Put(hub.advanced, ROW2_Y, 0)
+	Put(hub.describe, ROW2_Y, GAP_IN)
+	Put(hub.lcd, ROW2_Y - 3, GAP_OUT)
+	if hub.reload:IsShown() and not reloadOnTop then Put(hub.reload, ROW2_Y + 1, GAP_OUT) end
 end
 
 local function Build()
 	local width = Kit.PAD * 2 + SIDEBAR + CONTENT_COLUMNS * Kit.COLUMN + (CONTENT_COLUMNS - 1) * Kit.GAP + 14
 	hub = Kit:Panel(UIParent, {radius = 10, fill = 'page', border = 'hair', name = 'JiberishSpec01Hub'})
-	hub:SetSize(width, 680)
+	hub:SetSize(width, 712)
 	hub:SetPoint('CENTER')
 	-- Menus, pop-ups and dialogs opened from here draw above it (same strata, higher levels).
 	hub:SetFrameStrata('FULLSCREEN_DIALOG')
@@ -1120,31 +1359,32 @@ local function Build()
 	hub.brand = Kit:Text(hub, 'JIBERISH / SPEC-01', 20, 'ink', true)
 	hub.brand:SetPoint('TOPLEFT', Kit.PAD + 4, -18)
 	hub.heading = Kit:Label(hub, '', 'dim', 9)
-	hub.heading:SetPoint('TOPLEFT', Kit.PAD + 5, -44)
+	hub.heading:SetPoint('TOPLEFT', Kit.PAD + 5, -48)
 
-	hub.close = Kit:Button(hub, {round = true, icon = 'close', width = 28, height = 28, iconSize = 12})
-	hub.close:SetPoint('TOPRIGHT', -Kit.PAD, -14)
+	-- The header's keys are the reference's own baked keycaps at their full
+	-- height (so the lip and depth read): round keys for sound and close, a
+	-- legend key for Move UI, latching keys with lamps for the finish and the
+	-- page toggles, and round color keys for the key colors. They are laid out
+	-- right to left on a grid with measured widths, so nothing overlaps.
+	local KEY_H = 32
+	hub.close = Kit:Key(hub, {round = true, icon = 'close', width = KEY_H, height = KEY_H, iconSize = 12})
 	hub.close.onClick = function()
 		Kit:Play('latch-up')
 		Kit:Close(hub)
 	end
-	hub.sound = Kit:Key(hub, {width = 34, height = 26, icon = 'speaker', toggle = true, checked = Kit:DB().sound.enable})
-	hub.sound:SetPoint('RIGHT', hub.close, 'LEFT', -10, 0)
-	hub.sound.onClick = function(self) Kit:SetOption('sound.enable', self.checked) end
+	Kit:AttachTooltip(hub.close, 'Close')
+	hub.sound = Kit:Key(hub, {round = true, icon = 'speaker', width = KEY_H, height = KEY_H, iconSize = 13, toggle = true,
+		checked = Kit:DB().sound.enable})
+	hub.sound.onClick = function(self)
+		Kit:SetOption('sound.enable', self.checked)
+		if self.icon then Kit:Tint(self.icon, self.checked and 'ink' or 'dim') end
+	end
 	Kit:AttachTooltip(hub.sound, 'Sounds')
-	local finishes = {'paper', 'graphite'}
-	hub.finish = Kit:Segmented(hub, {items = {'Paper', 'Graphite'}, width = 140, value = Kit:DB().finish == 'graphite' and 2 or 1,
-		onChange = function(index, self)
-			UI.changing = self
-			Kit:SetOption('finish', finishes[index])
-			UI.changing = nil
-		end})
 	-- Move UI: closes the hub and unlocks every frame; lit while frames are unlocked.
-	hub.move = Kit:Key(hub, {text = 'Move UI', icon = 'grip', iconSize = 11, width = 96, height = 26, led = true})
-	hub.move:SetPoint('RIGHT', hub.sound, 'LEFT', -10, 0)
+	hub.move = Kit:Key(hub, {text = 'Move UI', icon = 'grip', iconSize = 11, width = 112, height = KEY_H, led = true})
 	if hub.move.led then
 		hub.move.led:ClearAllPoints()
-		hub.move.led:SetPoint('TOPRIGHT', hub.move.face or hub.move, 'TOPRIGHT', -6, -6)
+		hub.move.led:SetPoint('TOPRIGHT', hub.move.face, 'TOPRIGHT', -7, -7)
 		Kit:SetLed(hub.move.led, UI.MoversUnlocked and UI:MoversUnlocked() and true or false)
 	end
 	hub.move.onClick = function()
@@ -1166,41 +1406,80 @@ local function Build()
 			if what == '__lock' and hub.move.led then Kit:SetLed(hub.move.led, UI:MoversUnlocked() and true or false) end
 		end)
 	end
-	hub.finish:SetPoint('RIGHT', hub.move, 'LEFT', -12, 1)
+	-- The finish: two latching keys, one lit.
+	local finishes = {'paper', 'graphite'}
+	hub.finish = CreateFrame('Frame', nil, hub)
+	hub.finish.keys = {}
+	for index, name in ipairs({'Paper', 'Graphite'}) do
+		local key = Kit:Key(hub.finish, {text = name, width = index == 1 and 78 or 96, height = KEY_H, led = true, sound = false})
+		key.onClick = function()
+			if hub.finish.value == index then return end
+			Kit:Play('latch-down')
+			hub.finish:SetValue(index)
+			UI.changing = hub.finish
+			Kit:SetOption('finish', finishes[index])
+			UI.changing = nil
+		end
+		hub.finish.keys[index] = key
+	end
+	hub.finish.keys[1]:SetPoint('LEFT', hub.finish, 'LEFT', 0, 0)
+	hub.finish.keys[2]:SetPoint('LEFT', hub.finish.keys[1], 'RIGHT', 4, 0)
+	hub.finish:SetSize(hub.finish.keys[1]:GetWidth() + 4 + hub.finish.keys[2]:GetWidth(), KEY_H)
+	function hub.finish:SetValue(index)
+		self.value = index
+		for i, key in ipairs(self.keys) do key:SetChecked(i == index) end
+	end
+	hub.finish:SetValue(Kit:DB().finish == 'graphite' and 2 or 1)
+	-- Key colors: the reference's round keys in each color, a lit ring on the chosen one.
 	hub.accents = {}
-	for index, name in ipairs(Kit.accentOrder) do
+	local SWATCH = 24
+	local roundInfo = Kit.skin['key-round']
+	for _, name in ipairs(Kit.accentOrder) do
 		local swatch = CreateFrame('Button', nil, hub)
-		swatch:SetSize(16, 16)
-		swatch:SetPoint('RIGHT', hub.finish, 'LEFT', -14 - (#Kit.accentOrder - index) * 20, 0)
+		swatch:SetSize(SWATCH, SWATCH)
+		swatch.face = CreateFrame('Frame', nil, swatch)
+		swatch.face:SetAllPoints()
+		swatch.cap = swatch.face:CreateTexture(nil, 'ARTWORK')
+		swatch.cap:SetTexture(Kit.media..[[Skin\key-round.tga]])
+		local k = SWATCH / roundInfo.w
+		Kit:Place(swatch.cap, swatch.face, roundInfo.l * k, roundInfo.t * k, roundInfo.r * k, roundInfo.b * k)
+		local color = Kit.accentSkin[name].key
+		swatch.cap:SetVertexColor(color[1], color[2], color[3])
 		swatch.ring = Kit:Texture(swatch, 'circle-ring', 'BACKGROUND')
-		swatch.ring:SetPoint('TOPLEFT', -3, 3); swatch.ring:SetPoint('BOTTOMRIGHT', 3, -3)
-		Kit:Tint(swatch.ring, 'ink')
-		swatch.dot = Kit:Texture(swatch, 'circle', 'ARTWORK')
-		swatch.dot:SetAllPoints()
-		Kit:Tint(swatch.dot, Kit.accentSkin[name].key)
-		swatch:SetScript('OnClick', function()
+		swatch.ring:SetPoint('TOPLEFT', -4, 4)
+		swatch.ring:SetPoint('BOTTOMRIGHT', 4, -4)
+		Kit:Tint(swatch.ring, 'lamp')
+		swatch:SetScript('OnMouseDown', function(self)
+			self.face:ClearAllPoints()
+			self.face:SetPoint('TOPLEFT', 0, -1)
+			self.face:SetPoint('BOTTOMRIGHT', 0, -1)
 			Kit:Play('down')
-			Kit:SetOption('accent', name)
 		end)
+		swatch:SetScript('OnMouseUp', function(self)
+			self.face:ClearAllPoints()
+			self.face:SetAllPoints()
+			Kit:Play('up')
+		end)
+		swatch:SetScript('OnEnter', function(self) self.cap:SetAlpha(0.85) end)
+		swatch:SetScript('OnLeave', function(self) self.cap:SetAlpha(1) end)
+		swatch:SetScript('OnClick', function() Kit:SetOption('accent', name) end)
+		Kit:AttachTooltip(swatch, Kit.accents[name] and Kit.accents[name].name or name)
 		hub.accents[name] = swatch
 	end
-	hub.reload = Kit:Button(hub, {text = 'Reload UI', width = 104, height = 26, led = true})
-	hub.reload:SetPoint('RIGHT', hub.accents[Kit.accentOrder[1]], 'LEFT', -18, 0)
+	hub.reload = Kit:Key(hub, {text = 'Reload UI', width = 112, height = KEY_H, led = true})
 	hub.reload.onClick = function() ReloadUI() end
 	Kit:AttachTooltip(hub.reload, 'Style changes apply after a reload')
 	hub.reload:SetShown(UI.reloadPending and true or false)
 	-- How much each page shows: every option (Advanced), and a line of description.
-	hub.advanced = Kit:Key(hub, {text = 'Advanced', width = 92, height = 20, textSize = 8, toggle = true,
+	hub.advanced = Kit:Key(hub, {text = 'Advanced', width = 104, height = 30, textSize = 8, toggle = true,
 		checked = UI.db.hub.advanced and true or false})
-	hub.advanced:SetPoint('TOPRIGHT', -Kit.PAD, -40)
 	hub.advanced.onClick = function(self)
 		UI.db.hub.advanced = self.checked and true or false
 		ForgetPages()
 	end
 	Kit:AttachTooltip(hub.advanced, 'Every option and whole notes')
-	hub.describe = Kit:Key(hub, {text = 'Descriptions', width = 108, height = 20, textSize = 8, toggle = true,
+	hub.describe = Kit:Key(hub, {text = 'Descriptions', width = 122, height = 30, textSize = 8, toggle = true,
 		checked = UI.db.hub.describe and true or false})
-	hub.describe:SetPoint('RIGHT', hub.advanced, 'LEFT', -8, 0)
 	hub.describe.onClick = function(self)
 		UI.db.hub.describe = self.checked and true or false
 		ForgetPages()
@@ -1208,8 +1487,7 @@ local function Build()
 	Kit:AttachTooltip(hub.describe, 'A line under each setting')
 	-- An LCD strip: the page's code and how many settings changed since opening.
 	hub.lcd = Kit:LCDPanel(hub, {radius = 3})
-	hub.lcd:SetSize(150, 20)
-	hub.lcd:SetPoint('RIGHT', hub.describe, 'LEFT', -10, 0)
+	hub.lcd:SetSize(150, 24)
 	hub.lcd.text = Kit:Text(hub.lcd, '', 9, 'lcdInk', true)
 	hub.lcd.text:SetPoint('CENTER')
 	Kit:Font(hub.lcd.text, 9, nil, true, 'numbers')
@@ -1223,11 +1501,13 @@ local function Build()
 		for _ in pairs(changedPaths) do count = count + 1 end
 		Kit:PrintText(hub.lcd.text, format('%s-%02d  %02d CHG', page and PageCode(page) or '--', position, count), {minGap = 0.2})
 	end
+	hub.layoutHeader = LayoutHeader
+	LayoutHeader()
 
 	-- Sidebar: a search field over the reference's nav items (a lamp and a printed label).
 	local divider = Kit:Solid(hub, 'line')
 	divider:SetWidth(1)
-	divider:SetPoint('TOPLEFT', Kit.PAD + SIDEBAR - 8, -70)
+	divider:SetPoint('TOPLEFT', Kit.PAD + SIDEBAR - 8, -92)
 	divider:SetPoint('BOTTOMLEFT', Kit.PAD + SIDEBAR - 8, 18)
 	hub.search = Kit:TextField(hub, {width = SIDEBAR - 20, placeholder = 'Search', onChange = function(text)
 		if hub.searchTimer then hub.searchTimer:Cancel() end
@@ -1236,7 +1516,7 @@ local function Build()
 			UI:Safe(Search, text)
 		end)
 	end})
-	hub.search:SetPoint('TOPLEFT', Kit.PAD + 2, -68)
+	hub.search:SetPoint('TOPLEFT', Kit.PAD + 2, -90)
 	hub.search.edit:SetScript('OnEscapePressed', function(self)
 		self:ClearFocus()
 		ClearSearch()
@@ -1275,6 +1555,7 @@ function UI:UpdateHub()
 	for name, swatch in pairs(hub.accents) do swatch.ring:SetShown(db.accent == name) end
 	if UI.changing ~= hub.finish then hub.finish:SetValue(db.finish == 'graphite' and 2 or 1) end
 	hub.sound:SetChecked(db.sound.enable)
+	if hub.sound.icon then Kit:Tint(hub.sound.icon, db.sound.enable and 'ink' or 'dim') end
 	-- A red status lamp beside any section whose module failed to start.
 	for key, entry in pairs(hub.nav) do
 		local module = UI.modules[key]
@@ -1289,7 +1570,7 @@ function UI:UpdateHub()
 		rebuildQueued = true
 		C_Timer.After(0, function()
 			rebuildQueued = nil
-			UI:Safe(RebuildPage, page)
+			UI:Safe(Relayout, page, true)
 		end)
 	end
 	for _, control in ipairs(page and page.controls or {}) do
