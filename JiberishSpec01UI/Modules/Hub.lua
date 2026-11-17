@@ -389,7 +389,7 @@ local function Control(card, row, width)
 		control.refresh = function() control:SetValue(Get(row) and true or false) end
 	elseif kind == 'segmented' then
 		local values, names, current = {}, {}, 1
-		for index, item in ipairs(row.items) do
+		for index, item in ipairs(Items(row)) do
 			values[index], names[index] = item[1], item[2]
 			if item[1] == Get(row) then current = index end
 		end
