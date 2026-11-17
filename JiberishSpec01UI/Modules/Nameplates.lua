@@ -110,6 +110,9 @@ UI:RegisterDefaults('nameplates', {
 	savedCVars = {},
 	-- Scale.
 	eliteScale = 1, minionScale = 0.85,
+	keepDistance = false, -- true keeps the game's distance (and target) scaling on top of ours
+	-- Printed legends: LV before the level, HP before the health readout.
+	legends = true,
 })
 -- defaults:end
 
@@ -474,6 +477,7 @@ do
 		if db.level then plate.name:SetPoint('LEFT', plate.chip, 'RIGHT', 5, 0)
 		else plate.name:SetPoint('LEFT', plate.lamp, 'RIGHT', 5, 0) end
 		local right = plate.percent:IsShown() and plate.percent or plate.threat
+		if plate.percent:IsShown() and plate.percentLegend and plate.percentLegend:IsShown() then right = plate.percentLegend end
 		if plate.quest and plate.quest:IsShown() and db.questPosition == 'header' then right = plate.quest end
 		plate.name:SetPoint('RIGHT', right, 'LEFT', -4, 0)
 	end
@@ -602,11 +606,24 @@ local function Layout(plate)
 	end
 	local chip = db.level and not nameOnly
 	plate.chip:SetShown(chip and true or false)
+	-- With its legend the chip widens and the level sits right of LV.
+	local legends = db.legends ~= false
+	plate.chip.legend:SetShown(legends)
+	plate.chip:SetWidth(legends and 33 or 24)
+	plate.chip.text:ClearAllPoints()
+	if legends then
+		plate.chip.text:SetPoint('RIGHT', plate.chip, 'RIGHT', -3, 0)
+		plate.chip.text:SetJustifyH('RIGHT')
+	else
+		plate.chip.text:SetPoint('CENTER', 0.5, 0)
+		plate.chip.text:SetJustifyH('CENTER')
+	end
 	Kit:ShowLed(plate.lamp, not nameOnly)
 	Kit:ShowLed(plate.threat, db.threat and not nameOnly)
 	-- The health readout: in the header or on the bar.
 	local text, onBar = db.healthText or 'percent', db.healthTextPosition == 'bar'
 	plate.percent:SetShown(not nameOnly and text ~= 'none' and not onBar)
+	plate.percentLegend:SetShown(plate.percent:IsShown() and legends)
 	plate.barText:SetShown(not nameOnly and text ~= 'none' and onBar)
 	-- The name: in the header, centred in it, above the plate, or on its own.
 	Kit:Font(plate.name, db.nameSize or 8, nil, true)
@@ -663,11 +680,18 @@ local function Build()
 	plate.chip:SetPoint('TOPLEFT', 14, -5.5)
 	plate.chip.text = Kit:Text(plate.chip, '', 7, 'lcdInk', true)
 	plate.chip.text:SetPoint('CENTER', 0.5, 0)
+	-- Printed legends: LV in the chip before the level, HP before the readout.
+	-- Each is its own string, so a secret value is never joined to it.
+	plate.chip.legend = Kit:Label(plate.chip, 'Lv', 'lcdDim', 5, true)
+	plate.chip.legend:SetPoint('LEFT', 3, 0)
 	plate.threat = Kit:Led(plate, 4, false)
 	plate.threat:SetPoint('TOPRIGHT', -6, -9)
 	plate.percent = Kit:Text(plate, '', 7, 'darkDim', true)
 	plate.percent:SetPoint('RIGHT', plate.threat, 'LEFT', -4, 0)
 	plate.percent:SetJustifyH('RIGHT')
+	plate.percentLegend = Kit:Label(plate, 'Hp', 'darkDim', 5, true)
+	plate.percentLegend:SetPoint('RIGHT', plate.percent, 'LEFT', -2, 0)
+	plate.percentLegend:SetAlpha(0.7)
 	plate.name = Kit:Text(plate, '', 8, 'darkInk', true)
 	plate.name:SetJustifyH('LEFT')
 	plate.name:SetWordWrap(false)
@@ -814,14 +838,57 @@ local function UpdateThreat(plate)
 	if changed and db.threatColorBar then UpdateColor(plate) end
 end
 
+-- The game's plate frames are scaled by its own nameplate settings (global,
+-- selected and distance scale), not by the interface's UI scale. Our plate
+-- undoes that: its size on screen follows the UI scale times our own
+-- multiplier, so a plate matches the rest of the interface and the target
+-- grows only by the Target scale set here. With "keep distance scaling" on,
+-- the game's scaling stays on top.
+local function Factor(plate)
+	local parent = plate:GetParent()
+	if plate.preview or not parent or parent == UIParent then return 1 end
+	local ui = UIParent:GetEffectiveScale()
+	local base
+	if DB().keepDistance then
+		base = Plain(WorldFrame.GetEffectiveScale, WorldFrame)
+	else
+		base = Plain(parent.GetEffectiveScale, parent)
+	end
+	if type(base) ~= 'number' or base <= 0 then return 1 end
+	return ui / base
+end
+
+local function ApplyScale(plate)
+	local scale = max((plate.mult or 1) * Factor(plate), 0.01)
+	local current = Plain(plate.GetScale, plate)
+	if not current or math.abs(current - scale) > 0.002 then plate:SetScale(scale) end
+end
+
 local function SetScaleTo(plate, scale, animate)
-	local from = Plain(plate.GetScale, plate) or scale
+	local from = plate.mult or scale
+	local function Step(value)
+		plate.mult = value
+		ApplyScale(plate)
+	end
 	if not animate or Kit:DB().reduceMotion then
-		Kit:Animate(plate.scaleKey, 0, from, scale, function(value) plate:SetScale(max(value, 0.01)) end)
+		Kit:Animate(plate.scaleKey, 0, from, scale, Step)
 		return
 	end
-	Kit:Animate(plate.scaleKey, Kit:Speed('FAST'), from, scale, function(value) plate:SetScale(max(value, 0.01)) end, nil, 'cubic')
+	Kit:Animate(plate.scaleKey, Kit:Speed('FAST'), from, scale, Step, nil, 'cubic')
 end
+
+-- The game eases its plates' scale (targeting, distance): follow it while
+-- plates are up, ten times a second.
+local scaleDriver = CreateFrame('Frame')
+local scaleElapsed = 0
+scaleDriver:SetScript('OnUpdate', function(_, elapsed)
+	scaleElapsed = scaleElapsed + elapsed
+	if scaleElapsed < 0.1 then return end
+	scaleElapsed = 0
+	for _, plate in pairs(byUnit) do
+		if plate.mult and plate:IsShown() then ApplyScale(plate) end
+	end
+end)
 
 local function PlateOf(unit)
 	if not C_NamePlate or not C_NamePlate.GetNamePlateForUnit then return nil end
@@ -1422,7 +1489,14 @@ local function ApplySize()
 	if not C_NamePlate then return end
 	UI:AfterCombat(function()
 		local db = DB()
-		local width, height = (db.width or 132) * (db.scale or 1), ((db.height or 8) + 30) * (db.scale or 1)
+		-- In the game plate's own units: our plate's screen size divided by
+		-- the game's plate scale (taken at the world's scale and the global CVar).
+		local world = Plain(WorldFrame.GetEffectiveScale, WorldFrame) or 1
+		local getCVar = (C_CVar and C_CVar.GetCVar) or GetCVar
+		local global = tonumber(getCVar and Plain(getCVar, 'nameplateGlobalScale') or nil) or 1
+		local ratio = UIParent:GetEffectiveScale() / max(world * global, 0.01)
+		local width = (db.width or 132) * (db.scale or 1) * ratio
+		local height = ((db.height or 8) + 30) * (db.scale or 1) * ratio
 		if C_NamePlate.SetNamePlateSize then
 			pcall(C_NamePlate.SetNamePlateSize, width, height)
 		else
@@ -1697,7 +1771,8 @@ UI:RegisterPage('nameplates', {title = 'Nameplates', order = 15,
 			reload = true, note = 'Each plate is a dark glass device: target lamp, level chip, name, health and a cast bar docked under it.'},
 		{'slider', 'Width', 'nameplates.width', 96, 200, 4, 'Plate width.', format = Int},
 		{'slider', 'Meter height', 'nameplates.height', 4, 16, 1, nil, format = Int},
-		{'slider', 'Scale', 'nameplates.scale', 0.6, 1.6, 0.05, nil, format = Percent},
+		{'slider', 'Scale', 'nameplates.scale', 0.5, 1.5, 0.05, 'Plates follow the UI scale; this sizes them on top of it.', format = Percent},
+		{'switch', 'Legends', 'nameplates.legends', 'LV before the level and HP before the health readout.', since = '0.5.2'},
 	}},
 	{title = 'Enemies', rows = {
 		{'switch', 'Class and reaction colors', 'nameplates.classColor', 'Off: every plate lights in the key color.'},
@@ -1784,6 +1859,15 @@ UI:RegisterPage('nameplates', {title = 'Nameplates', order = 15,
 	{title = 'Scale', rows = {
 		{'slider', 'Elites and bosses', 'nameplates.eliteScale', 0.6, 1.6, 0.05, nil, format = Percent},
 		{'slider', 'Minions and pets', 'nameplates.minionScale', 0.5, 1.2, 0.05, nil, format = Percent},
+		{'switch', 'Keep distance scaling', 'nameplates.keepDistance', 'Off: every plate is one size, whatever its distance, and the target grows only by Target scale. On: the game\'s own plate scaling stays on top.', since = '0.5.2'},
+		{'button', 'Game plate scale', 'Reset', function()
+			if InCombatLockdown() then return UI:Print('The game\'s plate scale can be reset once you leave combat.') end
+			local setCVar = (C_CVar and C_CVar.SetCVar) or SetCVar
+			for _, name in ipairs({'nameplateGlobalScale', 'nameplateSelectedScale', 'nameplateLargerScale'}) do
+				if setCVar then pcall(setCVar, name, 1) end
+			end
+			Kit:Play('latch-up', true)
+		end, 'Sets the game\'s own nameplate global, target and larger scale back to 100%.', since = '0.5.2'},
 	}},
 	{title = 'Game settings', rows = {
 		{'segmented', 'Stacking', 'nameplates.stacking', items = {{'game', 'Game\'s'}, {'stack', 'Stack'}, {'overlap', 'Overlap'}},
