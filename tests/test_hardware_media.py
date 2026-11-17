@@ -53,6 +53,48 @@ class HardwareMedia(unittest.TestCase):
             self.assertEqual(width & (width - 1), 0)
             self.assertEqual(height & (height - 1), 0)
 
+    def test_materials_match_manifest_tile_and_match_the_lua_table(self):
+        records = FIXTURE['materials']
+        folder = ADDON / 'Media/Hardware/Materials'
+        self.assertEqual({p.name for p in folder.glob('*')}, {Path(r['path']).name for r in records})
+        theme = lua_sources()['Theme.lua']
+        table = re.search(r'Kit\.MATERIALS = \{(.*?)\n\}', theme, re.S)[1]
+        declared = {key: (int(w), int(h)) for key, w, h in
+                    re.findall(r"key = '([\w-]+)', name = '[^']*', w = (\d+), h = (\d+)", table)}
+        self.assertEqual(set(declared), {r['name'] for r in records})
+        self.assertIn("key = 'matte'", table)
+        total = 0
+        for record in records:
+            data = (ADDON / record['path']).read_bytes()
+            total += len(data)
+            self.assertEqual(hashlib.sha256(data).hexdigest(), record['sha256'], record['path'])
+            self.assertEqual(data[1:3], bytes((0, 10)), record['path'])
+            self.assertEqual(data[16:18], bytes((32, 8)), record['path'])
+            width, height, raw = decode(data)
+            self.assertEqual([width, height], record['size'])
+            self.assertEqual(declared[record['name']], (width, height), record['name'])
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), record['bgraSha256'])
+            self.assertEqual(width & (width - 1), 0)
+            self.assertEqual(height & (height - 1), 0)
+            # Detail only: white lightens, black darkens, alpha is how much.
+            self.assertLessEqual({raw[i:i + 3] for i in range(0, len(raw), 4)}, {b'\x00\x00\x00', b'\xff\xff\xff'})
+            # Seamless: the step across the wrap is no larger than an ordinary step inside the tile.
+            def signed(x, y):
+                i = (y * width + x) * 4
+                return (raw[i + 3] if raw[i] else -raw[i + 3]) / 255
+            def mean_step(pairs):
+                pairs = list(pairs)
+                return sum(abs(signed(*a) - signed(*b)) for a, b in pairs) / len(pairs)
+            rows = range(0, height, max(1, height // 64))
+            cols = range(0, width, max(1, width // 64))
+            for wrap, inside in (
+                    (mean_step(((width - 1, y), (0, y)) for y in rows),
+                     mean_step(((width // 2 - 1, y), (width // 2, y)) for y in rows)),
+                    (mean_step(((x, height - 1), (x, 0)) for x in cols),
+                     mean_step(((x, height // 2 - 1), (x, height // 2)) for x in cols))):
+                self.assertLess(wrap, inside * 1.6 + 0.02, record['name'])
+        self.assertLess(total, 8_000_000)  # the whole set stays a reasonable download
+
     def test_tintable_art_is_white_and_shadows_are_black(self):
         dark = {'shadow', 'shell-shadow', 'inset-3', 'inset-6', 'grain', 'bezel-shade'}
         for record in FIXTURE['textures']:
@@ -217,7 +259,9 @@ class HardwareMedia(unittest.TestCase):
                     used |= set(pair)
         used = {name for name in used if name and not name.startswith(('mask-', 'bar-', 'tile-'))}
         used -= {'HARMFUL', 'HELPFUL', 'primary', 'dark', 'default', 'round', 'tick', 'down', 'up', 'latch-down', 'latch-up',
-                 'down-primary', 'open', 'success', 'warning', 'error', 'blip', 'type', 'type-space', 'ink', 'dim', 'red'}
+                 'down-primary', 'open', 'success', 'warning', 'error', 'blip', 'type', 'type-space', 'ink', 'dim', 'red',
+                 # housing groups (Kit:Shell opts.group), not sprites
+                 'console', 'unitframes', 'devices', 'screens'}
         self.assertGreater(len(used), 15)
         self.assertLessEqual(used, baked, sorted(used - baked))
 

@@ -772,6 +772,202 @@ local function ScaleTo(texture, scale)
 	end
 end
 
+-- Housings: color, gradient and material per group --------------------------------------
+-- Every housing belongs to a group: the console (CX-1), the unit frames, every
+-- other device, and screens and LCDs. Each group may take its own color (a
+-- preset shade, a key color full or muted, or the player's own), a two-stop
+-- gradient and a material laid over the fill. Kit:Shell opts.group picks the
+-- group; without one a housing is a 'device' and a screen or LCD a 'screen'.
+Kit.HOUSING_GROUPS = {'console', 'unitframes', 'devices', 'screens'}
+
+-- Materials: seamless detail drawn one texel per physical pixel over the fill
+-- (tools/build-hardware-materials.py). gain: the strength at 100%.
+Kit.MATERIALS = {
+	{key = 'matte', name = 'Matte'},
+	{key = 'machined', name = 'Machined', w = 1024, h = 256, gain = 0.55},
+	{key = 'brushed', name = 'Brushed metal', w = 1024, h = 256, gain = 0.6},
+	{key = 'etched', name = 'Etched', w = 256, h = 256, gain = 0.5},
+	{key = 'worn', name = 'Worn metal', w = 1024, h = 512, gain = 0.65},
+	{key = 'bead', name = 'Bead-blasted', w = 512, h = 512, gain = 0.4},
+	{key = 'paper', name = 'Paper', w = 512, h = 512, gain = 0.45},
+	{key = 'plastic', name = 'Molded plastic', w = 512, h = 512, gain = 0.45},
+	{key = 'carbon', name = 'Carbon fibre', w = 128, h = 128, gain = 0.75},
+}
+Kit.MATERIAL = {}
+for _, entry in ipairs(Kit.MATERIALS) do Kit.MATERIAL[entry.key] = entry end
+
+-- Housing shades: studio whites through greys and metals to black, then every
+-- key color, full and muted.
+Kit.HOUSING_COLORS = {
+	{'default', 'Finish'}, {'studio', 'Studio white', Hex('f4f4f1')}, {'offwhite', 'Off-white', Hex('fbfbfa')},
+	{'bone', 'Bone', Hex('e8e2d4')}, {'warmgrey', 'Warm grey', Hex('b8b3a8')}, {'coolgrey', 'Cool grey', Hex('a9afb5')},
+	{'aluminium', 'Aluminium', Hex('cfd1d2')}, {'steel', 'Steel', Hex('8d9399')}, {'gunmetal', 'Gunmetal', Hex('3b3e42')},
+	{'graphite', 'Graphite', Hex('2c2c2a')}, {'carbon', 'Carbon', Hex('1c1d1f')}, {'black', 'Black', Hex('0b0b0b')},
+}
+for _, name in ipairs(Kit.accentOrder) do
+	local accent = Kit.accents[name]
+	local r, g, b = accent[1], accent[2], accent[3]
+	local gray = 0.299 * r + 0.587 * g + 0.114 * b
+	local list = Kit.HOUSING_COLORS
+	list[#list + 1] = {name, accent.name, {r, g, b}, accent = name}
+	list[#list + 1] = {'muted-'..name, accent.name..' (muted)', {(r + (gray - r) * 0.55) * 0.9, (g + (gray - g) * 0.55) * 0.9, (b + (gray - b) * 0.55) * 0.9}}
+end
+Kit.HOUSING_COLORS[#Kit.HOUSING_COLORS + 1] = {'custom', 'Custom'}
+Kit.HOUSING_COLOR = {}
+for _, entry in ipairs(Kit.HOUSING_COLORS) do Kit.HOUSING_COLOR[entry[1]] = entry end
+
+local looks = {}
+-- {color = {r, g, b} or nil, gradient = {from, to, dir} or nil, material = key, strength = 0..1}
+function Kit:HousingLook(group)
+	group = group or 'devices'
+	local look = looks[group]
+	if not look then look = {}; looks[group] = look end
+	local db = UI.db and UI.db.housing
+	local entry = type(db) == 'table' and db[group]
+	look.color, look.gradient, look.material, look.strength = nil, nil, 'matte', 0
+	if type(entry) ~= 'table' then return look end
+	local shade = self.HOUSING_COLOR[entry.color]
+	if entry.color == 'custom' and type(entry.custom) == 'table' then
+		local c = entry.custom
+		look.color = {c.r or c[1] or 1, c.g or c[2] or 1, c.b or c[3] or 1}
+	elseif shade and shade.accent and self.accentSkin and self.accentSkin[shade.accent] then
+		look.color = self.accentSkin[shade.accent].key
+	elseif shade then
+		look.color = shade[3]
+	end
+	local gradient = entry.gradient and entry.gradientColors
+	if type(gradient) == 'table' and type(gradient.from) == 'table' and type(gradient.to) == 'table' then look.gradient = gradient end
+	if self.MATERIAL[entry.material] then look.material = entry.material end
+	look.strength = min(max(tonumber(entry.strength) or 0, 0), 1)
+	return look
+end
+
+local SCREEN_SURFACES = {glass = true, screen = true, lcd = true}
+local function GroupOf(opts, name)
+	if opts.group then return opts.group end
+	if SCREEN_SURFACES[name] then return 'screens' end
+	if name == 'paper' or name == 'dark' then return 'devices' end
+end
+
+local function Parts(color)
+	return color.r or color[1] or 1, color.g or color[2] or 1, color.b or color[3] or 1, color.a or color[4] or 1
+end
+
+-- A gradient over a housing: down, across, or corner to corner (two washes,
+-- across and down at half strength, which together run diagonally).
+local function Wash(shell, gradient, alpha)
+	local fr, fg, fb, fa = Parts(gradient.from)
+	local tr, tg, tb, ta = Parts(gradient.to)
+	local from, to = CreateColor(fr, fg, fb, fa * alpha), CreateColor(tr, tg, tb, ta * alpha)
+	shell.tint:SetVertexColor(1, 1, 1, 1)
+	if gradient.dir == 'HORIZONTAL' or gradient.dir == 'DIAGONAL' then
+		shell.tint:SetGradient('HORIZONTAL', from, to)
+	else
+		-- A vertical gradient's first color is its bottom.
+		shell.tint:SetGradient('VERTICAL', to, from)
+	end
+	shell.tint:Show()
+	if gradient.dir == 'DIAGONAL' then
+		if not shell.tint2 then
+			shell.tint2 = shell:CreateTexture(nil, 'BACKGROUND', nil, -4)
+			shell.tint2:SetTexture(Kit.media..'shell.tga', 'CLAMP', 'CLAMP')
+			if shell.tint2.SetTextureSliceMargins then
+				shell.tint2:SetTextureSliceMargins(SHELL_SLICE, SHELL_SLICE, SHELL_SLICE, SHELL_SLICE)
+				if STRETCHED and shell.tint2.SetTextureSliceMode then shell.tint2:SetTextureSliceMode(STRETCHED) end
+			end
+			shell.tint2.refit = true
+		end
+		shell.tint2:SetVertexColor(1, 1, 1, 1)
+		shell.tint2:SetGradient('VERTICAL', CreateColor(tr, tg, tb, ta * alpha * 0.5), CreateColor(fr, fg, fb, fa * alpha * 0.5))
+		shell.tint2:Show()
+	elseif shell.tint2 then
+		shell.tint2:Hide()
+	end
+end
+
+-- Material pieces: the fill's area cut into a middle, a top and a bottom band
+-- and four corners, each corner masked by a circle so the material keeps the
+-- housing's rounded shape. All seven share one texture grid, so the pattern
+-- runs on unbroken from piece to piece.
+local function MaterialPieces(shell)
+	if shell.material then return shell.material end
+	local set = {masks = {}}
+	for index = 1, 7 do set[index] = shell:CreateTexture(nil, 'BACKGROUND', nil, -4) end
+	for index = 1, 4 do
+		local mask = shell:CreateMaskTexture()
+		mask:SetTexture(Kit.media..'circle.tga', 'CLAMPTOBLACKADDITIVE', 'CLAMPTOBLACKADDITIVE')
+		set[3 + index]:AddMaskTexture(mask)
+		set.masks[index] = mask
+	end
+	shell.material = set
+	return set
+end
+
+local function PaintMaterial(shell, look, alpha)
+	local entry = look and Kit.MATERIAL[look.material]
+	if not (entry and entry.w) or look.strength <= 0 then
+		if shell.material then for index = 1, 7 do shell.material[index]:Hide() end end
+		local was = shell.materialKey
+		shell.materialKey = nil
+		return was ~= nil
+	end
+	local set = MaterialPieces(shell)
+	local changed = shell.materialKey ~= entry.key
+	shell.materialKey = entry.key
+	for index = 1, 7 do
+		local piece = set[index]
+		if changed then piece:SetTexture(Kit.media..'Materials\\'..entry.key..'.tga', 'REPEAT', 'REPEAT', 'NEAREST') end
+		piece:SetAlpha(min(1, entry.gain * look.strength) * alpha)
+	end
+	return changed
+end
+
+local CORNERS = {{'TOPLEFT', 1, -1}, {'TOPRIGHT', -1, -1}, {'BOTTOMLEFT', 1, 1}, {'BOTTOMRIGHT', -1, 1}}
+-- b: the border, r: the fill's corner radius, px: one physical pixel (all in the owner's units).
+local function FitMaterial(shell, width, height, b, r, px)
+	local set, entry = shell.material, shell.materialKey and Kit.MATERIAL[shell.materialKey]
+	if not (set and entry) then return end
+	local owner = shell.owner
+	local plain = width and height and not (issecretvalue and (issecretvalue(width) or issecretvalue(height)))
+	if not plain or width <= 2 * (b + r) + px or height <= 2 * (b + r) + px then
+		for index = 1, 7 do set[index]:Hide() end
+		return
+	end
+	-- One texel per physical pixel: the texture's size in the owner's units.
+	local tw, th = entry.w * px, entry.h * px
+	local function Place(piece, x0, y0, x1, y1)
+		piece:SetTexCoord(x0 / tw, x1 / tw, y0 / th, y1 / th)
+		piece:Show()
+	end
+	local W, H, e = width, height, b + r
+	local middle, top, bottom = set[1], set[2], set[3]
+	middle:ClearAllPoints()
+	middle:SetPoint('TOPLEFT', owner, 'TOPLEFT', b, -e)
+	middle:SetPoint('BOTTOMRIGHT', owner, 'BOTTOMRIGHT', -b, e)
+	Place(middle, b, e, W - b, H - e)
+	top:ClearAllPoints()
+	top:SetPoint('TOPLEFT', owner, 'TOPLEFT', e, -b)
+	top:SetPoint('BOTTOMRIGHT', owner, 'TOPRIGHT', -e, -e)
+	Place(top, e, b, W - e, e)
+	bottom:ClearAllPoints()
+	bottom:SetPoint('TOPLEFT', owner, 'BOTTOMLEFT', e, e)
+	bottom:SetPoint('BOTTOMRIGHT', owner, 'BOTTOMRIGHT', -e, b)
+	Place(bottom, e, H - e, W - e, H - b)
+	for index, corner in ipairs(CORNERS) do
+		local piece, mask = set[3 + index], set.masks[index]
+		local point, sx, sy = corner[1], corner[2], corner[3]
+		piece:ClearAllPoints()
+		piece:SetSize(r, r)
+		piece:SetPoint(point, owner, point, sx * b, sy * b)
+		local x0 = sx > 0 and b or W - e
+		local y0 = sy < 0 and b or H - e
+		Place(piece, x0, y0, x0 + r, y0 + r)
+		mask:ClearAllPoints()
+		mask:SetSize(2 * r, 2 * r)
+		mask:SetPoint('CENTER', owner, point, sx * e, sy * e)
+	end
+end
+
 function Kit:FitShell(shell)
 	local owner, opts = shell.owner, shell.opts
 	local Pixel = UI.Pixel
@@ -793,10 +989,11 @@ function Kit:FitShell(shell)
 	self:Place(shell.edge, owner, 0, 0, 0, 0)
 	ScaleTo(shell.fill, inner / SHELL_ART_RADIUS)
 	self:Place(shell.fill, owner, -border, -border, -border, -border)
-	if shell.tint then
-		ScaleTo(shell.tint, inner / SHELL_ART_RADIUS)
-		self:Place(shell.tint, owner, -border, -border, -border, -border)
+	for _, tint in ipairs({shell.tint, shell.tint2}) do
+		ScaleTo(tint, inner / SHELL_ART_RADIUS)
+		self:Place(tint, owner, -border, -border, -border, -border)
 	end
+	FitMaterial(shell, width, height, border, inner, px)
 	-- A wall shows only on a paper housing; the shadow then starts under it.
 	local wall = 0
 	if shell.wall then
@@ -834,7 +1031,25 @@ function Kit:PaintShell(shell)
 	if name == 'paper' and self:DB().finish == 'graphite' then name = 'dark' end
 	local surface = self.SURFACES[name] or self.SURFACES.paper
 	local alpha = opts.alpha or (name == 'paper' or name == 'dark') and (self:DB().housingAlpha or 0.95) or 1
-	self:Tint(shell.fill, opts.fill or surface.fill, alpha)
+	local group = GroupOf(opts, name)
+	local look = group and self:HousingLook(group)
+	-- A group's own color (screens and housings; an LCD keeps its gray glass).
+	if look and look.color and not opts.fill and name ~= 'lcd' then
+		self:Tint(shell.fill, look.color, alpha)
+	else
+		self:Tint(shell.fill, opts.fill or surface.fill, alpha)
+	end
+	-- A device's printed header reads on its housing: light print on a dark color.
+	local owner = shell.owner
+	if owner.kitHeader and owner.model and owner.title then
+		local ink = self.INK[owner.surface] or self.INK.paper
+		if look and look.color and name ~= 'lcd' then
+			local c = look.color
+			ink = (0.299 * c[1] + 0.587 * c[2] + 0.114 * c[3]) < 0.5 and self.INK.dark or self.INK.paper
+		end
+		self:Tint(owner.model, ink[1])
+		self:Tint(owner.title, ink[2])
+	end
 	-- An edge color override recolors housing edges too (at least half strength, so it shows).
 	local housing = name == 'paper' or name == 'dark'
 	if not opts.edge and housing and self:Overridden('edge') then
@@ -842,26 +1057,22 @@ function Kit:PaintShell(shell)
 	else
 		self:Tint(shell.edge, opts.edge or surface.edge, surface.edgeAlpha * min(1, alpha + 0.05))
 	end
-	-- The interface gradient on housings: a top-to-bottom (or across) wash over the fill.
-	if shell.tint then
+	-- A gradient over the fill: the group's own, else the interface gradient on housings.
+	local gradient = look and look.gradient
+	if not gradient and housing then
 		local colors = UI.db and UI.db.colors
-		local gradient = housing and type(colors) == 'table' and colors.gradient and colors.gradientColors
-		if type(gradient) == 'table' and type(gradient.from) == 'table' and type(gradient.to) == 'table' then
-			local from, to = gradient.from, gradient.to
-			local fr, fg, fb, fa = from.r or from[1] or 1, from.g or from[2] or 1, from.b or from[3] or 1, from.a or from[4] or 1
-			local tr, tg, tb, ta = to.r or to[1] or 1, to.g or to[2] or 1, to.b or to[3] or 1, to.a or to[4] or 1
-			shell.tint:SetVertexColor(1, 1, 1, 1)
-			if gradient.dir == 'HORIZONTAL' then
-				shell.tint:SetGradient('HORIZONTAL', CreateColor(fr, fg, fb, fa * alpha), CreateColor(tr, tg, tb, ta * alpha))
-			else
-				-- A vertical gradient's first color is its bottom.
-				shell.tint:SetGradient('VERTICAL', CreateColor(tr, tg, tb, ta * alpha), CreateColor(fr, fg, fb, fa * alpha))
-			end
-			shell.tint:Show()
-		else
-			shell.tint:Hide()
-		end
+		local shared = type(colors) == 'table' and colors.gradient and colors.gradientColors
+		if type(shared) == 'table' and type(shared.from) == 'table' and type(shared.to) == 'table' then gradient = shared end
 	end
+	local refitTint = false
+	if gradient then
+		Wash(shell, gradient, alpha)
+		if shell.tint2 and shell.tint2.refit then shell.tint2.refit, refitTint = nil, true end
+	else
+		shell.tint:Hide()
+		if shell.tint2 then shell.tint2:Hide() end
+	end
+	local refitMaterial = PaintMaterial(shell, look, alpha)
 	if surface.recessed then
 		-- Sunk into the panel: dark under the top edge, a white catch-light at the foot.
 		shell.lit:SetColorTexture(0, 0, 0, surface.lit * alpha)
@@ -875,7 +1086,7 @@ function Kit:PaintShell(shell)
 		if wallShown then self:Tint(shell.wall, surface.wall, alpha) end
 		shell.wall:SetShown(wallShown)
 	end
-	local refit = shell.wallShown ~= wallShown or shell.warm ~= (surface.warm or nil)
+	local refit = shell.wallShown ~= wallShown or shell.warm ~= (surface.warm or nil) or refitTint or refitMaterial
 	shell.wallShown, shell.warm = wallShown, surface.warm or nil
 	if shell.shadow then
 		local opacity = min((opts.shadowAlpha or 0.35) * (self:Look('shadowOpacity') or 1), 1) * alpha
@@ -893,7 +1104,10 @@ end
 
 -- opts: surface ('paper' | 'dark' | 'lcd' | 'glass' | 'screen'), radius (physical px), alpha,
 --       fill / edge (token overrides), shadow (false to omit), shadowAlpha,
---       wall (true: a device's molded side wall, shown on paper housings).
+--       wall (true: a device's molded side wall, shown on paper housings),
+--       group ('console' | 'unitframes' | 'devices' | 'screens': whose color,
+--       gradient and material it wears; by default 'devices' for housings and
+--       'screens' for screens and LCDs).
 function Kit:Shell(owner, opts)
 	opts = opts or {}
 	local shell = CreateFrame('Frame', nil, owner)
@@ -940,7 +1154,8 @@ end
 -- PLAYER", "TM-1 TIMER"): a housing with a printed header (status lamp, bold
 -- model code, dim name) holding displays, LCDs, keys and meters.
 -- opts: model ('UF-1'), title ('Player'), surface ('paper' | 'dark' | 'lcd'), radius,
---       name, frameType, template, width, height, header (false hides it)
+--       name, frameType, template, width, height, header (false hides it),
+--       group (the housing group whose color and material it wears; see Kit:Shell)
 Kit.INK = {paper = {'ink', 'dim'}, dark = {'darkInk', 'darkDim'}, lcd = {'lcdInk', 'lcdDim'}, glass = {'darkInk', 'darkDim'}}
 
 function Kit:Device(parent, opts)
@@ -948,7 +1163,8 @@ function Kit:Device(parent, opts)
 	local device = CreateFrame(opts.frameType or 'Frame', opts.name, parent, opts.template)
 	device:SetSize(opts.width or 200, opts.height or 100)
 	device.surface = opts.surface or 'paper'
-	device.shell = self:Shell(device, {surface = device.surface, radius = opts.radius or opts.corner or 10, wall = opts.wall ~= false})
+	device.shell = self:Shell(device, {surface = device.surface, radius = opts.radius or opts.corner or 10, wall = opts.wall ~= false,
+		group = opts.group})
 	device.housing = device.shell
 	if self.devices then self.devices[device] = true end
 	local ink = self.INK[device.surface] or self.INK.paper
@@ -962,6 +1178,9 @@ function Kit:Device(parent, opts)
 		device.title:SetPoint('RIGHT', device, 'TOPRIGHT', -10, -11.5)
 		device.title:SetJustifyH('LEFT')
 		device.title:SetWordWrap(false)
+		-- The header's print follows the housing's color (see PaintShell).
+		device.kitHeader = true
+		self:PaintShell(device.shell)
 	end
 	return device
 end

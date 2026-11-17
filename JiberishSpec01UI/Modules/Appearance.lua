@@ -41,6 +41,17 @@ UI:RegisterDefaults('colors', {
 	gradient = false,
 	gradientColors = {from = {r = 1, g = 1, b = 1, a = 0.10}, to = {r = 0.33, g = 0.31, b = 0.27, a = 0.10}, dir = 'VERTICAL'},
 })
+-- Housings per group: a color ('default' keeps the finish's), a gradient, a material and its strength.
+UI:RegisterDefaults('housing', {
+	console = {color = 'default', custom = {r = 0.957, g = 0.957, b = 0.945}, gradient = false, material = 'matte', strength = 0.5,
+		gradientColors = {from = {r = 1, g = 1, b = 1, a = 0.12}, to = {r = 0, g = 0, b = 0, a = 0.12}, dir = 'VERTICAL'}},
+	unitframes = {color = 'default', custom = {r = 0.957, g = 0.957, b = 0.945}, gradient = false, material = 'matte', strength = 0.5,
+		gradientColors = {from = {r = 1, g = 1, b = 1, a = 0.12}, to = {r = 0, g = 0, b = 0, a = 0.12}, dir = 'VERTICAL'}},
+	devices = {color = 'default', custom = {r = 0.957, g = 0.957, b = 0.945}, gradient = false, material = 'matte', strength = 0.5,
+		gradientColors = {from = {r = 1, g = 1, b = 1, a = 0.12}, to = {r = 0, g = 0, b = 0, a = 0.12}, dir = 'VERTICAL'}},
+	screens = {color = 'default', custom = {r = 0, g = 0, b = 0}, gradient = false, material = 'matte', strength = 0.3,
+		gradientColors = {from = {r = 1, g = 1, b = 1, a = 0.06}, to = {r = 0, g = 0, b = 0, a = 0}, dir = 'VERTICAL'}},
+})
 -- Per-area typefaces ('__inherit' follows the interface's) and size multipliers.
 UI:RegisterDefaults('fonts', {
 	unitframes = '__inherit', nameplates = '__inherit', chat = '__inherit', keys = '__inherit', numbers = '__inherit', windows = '__inherit',
@@ -229,6 +240,140 @@ UI:RegisterPage('colors', {title = 'Colors', order = 2.05, since = '0.5.1', card
 		{'note', 'Every color opens the CX-1 color instrument: turn the hue ring, set lightness, chroma and hue (or red, green and blue) on the encoders, type a hex code on the LCD, or pick a key, class or recent color. Changes show as you make them; Cancel puts the old color back.'},
 	}},
 }})
+
+-- The Housing page --------------------------------------------------------------
+-- Color, gradient and material for each group of housings, a live preview of
+-- all four, and presets that set them together.
+local GROUPS = {
+	{'console', 'Console', 'The CX-1 console along the bottom, and the bars and menu devices.'},
+	{'unitframes', 'Unit frames', 'Player, target, party, raid, boss and arena devices.'},
+	{'devices', 'Other devices', 'Every other housing: windows, the hub, bags, the minimap, meters, the info panel.'},
+	{'screens', 'Screens and LCDs', 'Black glass displays (color and material) and the gray LCDs (material only).'},
+}
+
+local function ColorItems()
+	local items = {}
+	for _, entry in ipairs(Kit.HOUSING_COLORS) do items[#items + 1] = {entry[1], entry[2]} end
+	return items
+end
+local function MaterialItems()
+	local items = {}
+	for _, entry in ipairs(Kit.MATERIALS) do items[#items + 1] = {entry.key, entry.name} end
+	return items
+end
+
+local function Group(key) return UI.db.housing[key] end
+
+local function ResetGroup(key)
+	local defaults = UI.defaults and UI.defaults.housing and UI.defaults.housing[key]
+	local entry = Group(key)
+	entry.color, entry.gradient, entry.material = 'default', false, 'matte'
+	entry.strength = defaults and defaults.strength or 0.5
+	Kit:Apply()
+end
+
+-- Presets: a color and a material for the console, unit frames and devices
+-- (screens keep theirs). Light presets suit Paper, dark ones Graphite.
+local PRESETS = {
+	{'Studio white', 'studio', 'plastic', 0.35, 'Clean molded white, as the reference.'},
+	{'Graphite', 'graphite', 'bead', 0.45, 'Charcoal, bead-blasted.'},
+	{'Brushed steel', 'steel', 'brushed', 0.7, 'Cool grey with a long brushed grain.'},
+	{'Machined aluminium', 'aluminium', 'machined', 0.6, 'Bright metal with fine tool marks.'},
+	{'Etched black', 'black', 'etched', 0.55, 'Black anodized with fine engraved hatching.'},
+	{'Worn gunmetal', 'gunmetal', 'worn', 0.7, 'Dark brushed metal, scuffed and polished by use.'},
+	{'Paper', 'bone', 'paper', 0.6, 'Warm bone white with a paper tooth.'},
+	{'Carbon', 'carbon', 'carbon', 0.75, 'A 2 x 2 carbon fibre twill.'},
+}
+
+local function ApplyPreset(preset)
+	for _, key in ipairs({'console', 'unitframes', 'devices'}) do
+		local entry = Group(key)
+		entry.color, entry.material, entry.strength, entry.gradient = preset[2], preset[3], preset[4], false
+	end
+	Kit:Apply()
+	UI:Print(format('Housings: %s.', preset[1]))
+end
+
+local function ResetHousing()
+	for _, group in ipairs(GROUPS) do ResetGroup(group[1]) end
+	UI:Print('Housings back to the finish.')
+end
+
+-- The live preview: one small device per group, each wearing its group's look.
+local preview
+local function ShowPreview(area)
+	local card
+	for _, child in ipairs({area.content:GetChildren()}) do
+		local title = child.title and child.title.GetText and child.title:GetText()
+		if type(title) == 'string' and strupper(title) == 'PREVIEW' then card = child break end
+	end
+	if not card then return end
+	if not preview then
+		preview = CreateFrame('Frame', nil, card.body)
+		preview.devices = {}
+		for index, group in ipairs(GROUPS) do
+			local surface = group[1] == 'screens' and 'dark' or 'paper'
+			local device = Kit:Device(preview, {model = ({'CX-1', 'UF-1', 'DV-1', 'SC-1'})[index], title = group[2],
+				width = 132, height = 70, radius = 12, group = group[1] ~= 'screens' and group[1] or nil, surface = surface})
+			device:SetPoint('LEFT', (index - 1) * 142, 0)
+			if group[1] == 'screens' then
+				local glass = Kit:Screen(device, {inset = 3, radius = 6})
+				glass:SetPoint('TOPLEFT', 10, -24)
+				glass:SetPoint('BOTTOMRIGHT', -10, 10)
+				local text = Kit:Text(glass.screen, '88:88', 12, 'darkInk', true)
+				text:SetPoint('CENTER')
+			else
+				local key = Kit:Key(device, {text = 'Key', width = 44, height = 22, tone = index == 1 and 'primary' or nil})
+				key:SetPoint('BOTTOMLEFT', 10, 10)
+				local lcd = Kit:LCD(device, {ghost = '888', text = '042', size = 'sm', width = 56})
+				lcd:SetPoint('BOTTOMRIGHT', -10, 8)
+			end
+			preview.devices[index] = device
+		end
+		preview:SetSize(142 * #GROUPS - 10, 76)
+	end
+	preview:SetParent(card.body)
+	preview:ClearAllPoints()
+	preview:SetPoint('TOP', card.body, 'TOP', 0, -6)
+	preview:SetFrameLevel(card.body:GetFrameLevel() + 4)
+	preview:Show()
+end
+
+local housingCards = {
+	{title = 'Preview', rows = {
+		{'note', 'Each group as it looks now. Changes show as you make them.\n \n \n \n \n '},
+	}},
+	{title = 'Presets', rows = {}},
+}
+for _, preset in ipairs(PRESETS) do
+	local cards = housingCards[2].rows
+	cards[#cards + 1] = {'button', preset[1], 'Apply', function() ApplyPreset(preset) end, preset[5], since = '0.5.1'}
+end
+housingCards[2].rows[#housingCards[2].rows + 1] = {'button', 'Every housing', 'Reset', ResetHousing, 'Back to the finish\'s own color, no gradient, matte.'}
+
+for _, group in ipairs(GROUPS) do
+	local key = group[1]
+	local path = 'housing.'..key..'.'
+	housingCards[#housingCards + 1] = {title = group[2], rows = {
+		{'note', group[3]},
+		{'dropdown', 'Color', path..'color', items = ColorItems, since = '0.5.1',
+			note = 'Finish keeps the Paper or Graphite housing. Dark colors read best with the Graphite finish, light ones with Paper.'},
+		{'color', 'Custom color', path..'custom', hidden = function() return Group(key).color ~= 'custom' end},
+		{'switch', 'Gradient', path..'gradient', 'A two-stop wash over the housing: down, across or corner to corner. Alpha sets each end\'s strength.', since = '0.5.1'},
+		{'color', 'Gradient colors', path..'gradientColors', hidden = function() return not Group(key).gradient end},
+		{'dropdown', 'Material', path..'material', items = MaterialItems, since = '0.5.1',
+			note = 'Surface detail drawn one texel per screen pixel, so it stays sharp at any size and UI scale.'},
+		{'slider', 'Strength', path..'strength', 0, 1, 0.05, nil, format = Percent,
+			hidden = function() return Group(key).material == 'matte' end},
+		{'button', group[2], 'Reset', function() ResetGroup(key) end},
+	}}
+end
+
+UI:RegisterPage('housing', {title = 'Housing', order = 2.07, since = '0.5.1',
+	onShow = function(area) ShowPreview(area) end,
+	onHide = function() if preview then preview:Hide() end end,
+	cards = housingCards,
+})
 
 -- The Fonts page ----------------------------------------------------------------
 -- One typeface for the whole interface, and per area a typeface and size of its

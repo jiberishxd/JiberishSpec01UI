@@ -287,7 +287,7 @@ end
 
 -- Color ------------------------------------------------------------------------------------
 -- A color value is {r, g, b} or {r =, g =, b =}, either with an optional alpha
--- ([4] or a =). A gradient is {from = color, to = color, dir = 'VERTICAL' | 'HORIZONTAL'};
+-- ([4] or a =). A gradient is {from = color, to = color, dir = 'VERTICAL' | 'HORIZONTAL' | 'DIAGONAL'};
 -- 'VERTICAL' runs from the top (from) to the bottom (to).
 local function ColorParts(color)
 	if type(color) ~= 'table' then return 1, 1, 1, 1 end
@@ -391,6 +391,7 @@ Kit.Color = Color
 -- Every change shows at once (onChange runs live); Cancel or Escape puts the
 -- color it opened with back.
 local picker, ctx
+local DIRECTIONS = {'VERTICAL', 'HORIZONTAL', 'DIAGONAL'}
 local RING, DOT, SWATCH = 58, 5, 60
 local CLASSES = {'WARRIOR', 'PALADIN', 'HUNTER', 'ROGUE', 'PRIEST', 'DEATHKNIGHT', 'SHAMAN', 'MAGE', 'WARLOCK', 'MONK',
 	'DRUID', 'DEMONHUNTER', 'EVOKER'}
@@ -629,9 +630,9 @@ local function Build()
 	picker.bar.fill:SetPoint('TOPLEFT', 1, -1)
 	picker.bar.fill:SetPoint('BOTTOMRIGHT', -1, 1)
 	picker.bar.fill:SetColorTexture(1, 1, 1, 1)
-	picker.direction = Kit:Segmented(picker, {items = {'Down', 'Across'}, width = 120, value = 1, onChange = function(index)
+	picker.direction = Kit:Segmented(picker, {items = {'Down', 'Across', 'Diagonal'}, width = 150, value = 1, onChange = function(index)
 		if not ctx then return end
-		ctx.dir = index == 2 and 'HORIZONTAL' or 'VERTICAL'
+		ctx.dir = DIRECTIONS[index] or 'VERTICAL'
 		Paint()
 		Emit()
 	end})
@@ -789,8 +790,9 @@ function Kit:OpenColorPicker(opts)
 		local fr, fg, fb, fa = ColorParts(from)
 		local tr, tg, tb, ta = ColorParts(to)
 		ctx.stops = {from = {fr, fg, fb, fa}, to = {tr, tg, tb, ta}}
-		ctx.dir = type(value) == 'table' and value.dir == 'HORIZONTAL' and 'HORIZONTAL' or 'VERTICAL'
-		picker.direction:SetValue(ctx.dir == 'HORIZONTAL' and 2 or 1)
+		local dir = type(value) == 'table' and value.dir
+		ctx.dir = (dir == 'HORIZONTAL' or dir == 'DIAGONAL') and dir or 'VERTICAL'
+		picker.direction:SetValue(ctx.dir == 'DIAGONAL' and 3 or ctx.dir == 'HORIZONTAL' and 2 or 1)
 	end
 	local r, g, b, a = ColorParts(first)
 	state.a = alpha and a or 1
