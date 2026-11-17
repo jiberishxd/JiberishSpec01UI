@@ -59,163 +59,10 @@ local function ReloadToast()
 		action = {text = 'Reload', onClick = function() ReloadUI() end}})
 end
 
--- Screen helpers for the presets ------------------------------------------------------
--- A preset key may name a mover a module registers under its own key: '@boss'
--- is the first mover whose key contains 'boss'.
-local function FindMover(token)
-	if token:sub(1, 1) ~= '@' then return token end
-	local word = token:sub(2):lower()
-	for _, entry in ipairs(UI:GetMovers()) do
-		if entry.key:lower():find(word, 1, true) then return entry.key end
-	end
-end
-
-local function Screen()
-	local width, height = UIParent:GetSize()
-	local screen = {W = width, H = height}
-	-- On a wider than 16:9 screen, the 16:9 band in the middle and its margin.
-	screen.inset = max(0, (width - height * 16 / 9) / 2)
-	-- A frame's size in UIParent units, or a fair guess for one not built yet.
-	function screen.size(key, guessWidth, guessHeight)
-		key = FindMover(key)
-		local frameWidth, frameHeight
-		if key then frameWidth, frameHeight = UI:GetMoverSize(key) end
-		if frameWidth and frameWidth > 1 then return frameWidth, frameHeight end
-		return guessWidth or 120, guessHeight or 40
-	end
-	return screen
-end
-
--- Presets: our own arrangements ------------------------------------------------------
--- positions(screen) returns {[moverKey] = {anchor, x, y}} in UIParent units;
--- every other frame goes back to its default spot.
-local PRESETS = {
-	{key = 'console', title = 'Console', model = 'LY-1',
-		note = 'One console along the bottom with the player and target docked into it.',
-		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true, ['actionbars.rows'] = 3, ['actionbars.side'] = true},
-		positions = function() return {} end},
-	{key = 'classic', title = 'Classic', model = 'LY-2',
-		note = 'Three bars stacked at the bottom, unit frames above them either side of centre.',
-		settings = {['actionbars.layout'] = 'free', ['actionbars.dock'] = false, ['actionbars.rows'] = 3, ['actionbars.side'] = true},
-		positions = function(s)
-			local barWidth, bar = s.size('ab.bar1', 480, 50)
-			local top = 12 + 3 * (bar + 6)
-			local playerWidth, playerHeight = s.size('uf.player', 224, 70)
-			local smallWidth = s.size('uf.targettarget', 128, 30)
-			local petWidth = s.size('uf.pet', 128, 30)
-			local x = max(Round(s.W * 0.13), Round(playerWidth / 2 + 40))
-			local y = top + 28
-			local stanceWidth = s.size('ab.stance', 200, 40)
-			local petKeysWidth = s.size('ab.pet', 280, 40)
-			return {
-				['ab.bar1'] = {'BOTTOM', 0, 12}, ['ab.bar2'] = {'BOTTOM', 0, 12 + bar + 6}, ['ab.bar3'] = {'BOTTOM', 0, 12 + 2 * (bar + 6)},
-				['uf.player'] = {'BOTTOM', -x, y}, ['uf.target'] = {'BOTTOM', x, y},
-				['uf.targettarget'] = {'BOTTOM', x + playerWidth / 2 + smallWidth / 2 + 12, y},
-				['uf.pet'] = {'BOTTOM', -x - playerWidth / 2 - petWidth / 2 - 12, y},
-				['uf.focus'] = {'BOTTOM', -x, y + playerHeight + 40},
-				['cb.player'] = {'BOTTOM', 0, top + 20},
-				['cb.target'] = {'BOTTOM', x, y + playerHeight + 10},
-				['ab.stance'] = {'BOTTOM', -barWidth / 2 - stanceWidth / 2 - 12, 12},
-				['ab.pet'] = {'BOTTOM', barWidth / 2 + petKeysWidth / 2 + 12, 12},
-			}
-		end},
-	{key = 'healer', title = 'Healer', model = 'LY-3',
-		note = 'Raid frames at the bottom centre above the keys; player and target out to the sides.',
-		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = false, ['actionbars.rows'] = 2, ['actionbars.side'] = true,
-			['group.partyAsRaid'] = true},
-		positions = function(s)
-			local _, console = s.size('ab.console', 600, 150)
-			local top = 12 + console
-			local _, castHeight = s.size('cb.player', 240, 20)
-			local _, raidHeight = s.size('group.small', 420, 200)
-			local playerWidth = s.size('uf.player', 224, 70)
-			local x = max(Round(s.W * 0.3), Round(playerWidth / 2 + 320))
-			return {
-				['cb.player'] = {'BOTTOM', 0, top + 10},
-				['group.small'] = {'BOTTOM', 0, top + castHeight + 24},
-				['uf.player'] = {'BOTTOM', -x, top + 30}, ['uf.target'] = {'BOTTOM', x, top + 30},
-				['uf.targettarget'] = {'BOTTOM', x, top + 120},
-				['uf.focus'] = {'BOTTOM', -x, top + 120},
-				['cb.target'] = {'BOTTOM', x, top + 10},
-				['@boss'] = {'RIGHT', -40, 120},
-				_raidTop = top + castHeight + 24 + raidHeight,
-			}
-		end},
-	{key = 'centre', title = 'Tank / DPS centre', model = 'LY-4',
-		note = 'Player and target tight around the middle of the screen, where your eyes already are.',
-		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = false, ['actionbars.side'] = false,
-			['nameplates.scale'] = 1.1, ['nameplates.targetScale'] = 1.25},
-		positions = function(s)
-			local playerWidth, playerHeight = s.size('uf.player', 224, 70)
-			local smallWidth = s.size('uf.targettarget', 128, 30)
-			local x = Round(playerWidth / 2 + 70)
-			local y = Round(s.H * 0.27)
-			return {
-				['uf.player'] = {'BOTTOM', -x, y}, ['uf.target'] = {'BOTTOM', x, y},
-				['uf.targettarget'] = {'BOTTOM', x + playerWidth / 2 + smallWidth / 2 + 10, y},
-				['uf.focus'] = {'BOTTOM', -x - playerWidth / 2 - smallWidth / 2 - 10, y + playerHeight + 12},
-				['cb.player'] = {'BOTTOM', 0, y - 34},
-				['cb.target'] = {'BOTTOM', x, y + playerHeight + 8},
-			}
-		end},
-	{key = 'minimal', title = 'Minimal', model = 'LY-5',
-		note = 'One row of keys, no side bars or info panel, compact frames that fade when idle.',
-		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true, ['actionbars.rows'] = 1, ['actionbars.side'] = false,
-			['style.infopanel'] = 'blizzard', ['unitframes.scale'] = 0.9, ['appearance.fade.enable'] = true},
-		positions = function() return {} end},
-	{key = 'wide', title = 'Widescreen', model = 'LY-6',
-		note = 'On ultrawide screens, everything kept inside the 16:9 band in the middle.',
-		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true},
-		positions = function(s)
-			local spots = {}
-			if s.inset < 1 then return spots end
-			for _, entry in ipairs(UI:GetMovers()) do
-				local anchor, x, y = UI:GetMoverDefault(entry.key)
-				if anchor then
-					if anchor:find('LEFT') then spots[entry.key] = {anchor, x + s.inset, y}
-					elseif anchor:find('RIGHT') then spots[entry.key] = {anchor, x - s.inset, y} end
-				end
-			end
-			return spots
-		end},
-}
-local PRESET_BY_KEY = {}
-for _, preset in ipairs(PRESETS) do PRESET_BY_KEY[preset.key] = preset end
-
--- A preset's spots, with '@' keys resolved and helper entries dropped.
-local function PresetSpots(preset)
-	local spots = {}
-	local ok, list = pcall(preset.positions, Screen())
-	if not ok or type(list) ~= 'table' then return spots end
-	for token, spot in pairs(list) do
-		if type(token) == 'string' and token:sub(1, 1) ~= '_' and type(spot) == 'table' then
-			local key = FindMover(token)
-			if key then spots[key] = spot end
-		end
-	end
-	return spots
-end
-
+-- Presets (defined with the solver below) ----------------------------------------------
 local Refresh -- the page's refresh, set when it is built
-
-local function ApplyPreset(preset)
-	if InCombatLockdown() then return UI:Print('Layouts can be applied once you leave combat.') end
-	local reload = ApplySettings(preset.settings)
-	local spots = PresetSpots(preset)
-	wipe(UI.db.movers)
-	for key, spot in pairs(spots) do UI:SetMoverPosition(key, spot[1], spot[2], spot[3]) end
-	DB().preset = preset.key
-	UI:PlaceAllMovers()
-	Kit:Play('success')
-	if reload then ReloadToast() end
-	if Refresh then Refresh() end
-end
-
-local function ConfirmPreset(preset)
-	Kit:AlertDialog({title = 'Use the '..preset.title..' layout', confirm = 'Apply',
-		text = 'Every frame moves to the '..preset.title..' arrangement and your current positions are replaced. Save them as a custom layout first if you want to come back to them.',
-		onConfirm = function() ApplyPreset(preset) end})
-end
+local PRESETS, PRESET_BY_KEY = {}, {}
+local ApplyPreset, ConfirmPreset
 
 -- Custom layouts: positions as fractions of the screen, so they carry across resolutions.
 local SNAPSHOT = {'actionbars.layout', 'actionbars.dock', 'actionbars.rows', 'actionbars.side', 'actionbars.keySize',
@@ -314,6 +161,15 @@ local function ApplyResolution(sizeKey, densityKey)
 		['actionbars.spacing'] = density.spacing})
 	Kit:Play('success')
 	Kit:Toast({title = resolution.title..' layout', text = format('UI scale %.3f', scale)})
+	-- The arrangement in use is solved again for the new scale once it has
+	-- settled, and again after the reload that applies the new key sizes.
+	local preset = PRESET_BY_KEY[DB().preset]
+	if preset then
+		if reload then DB().resolvePending = preset.key end
+		C_Timer.After(0.8, function()
+			if not InCombatLockdown() and ApplyPreset then ApplyPreset(preset, {quiet = true, keepSettings = true}) end
+		end)
+	end
 	if reload then ReloadToast() end
 	if Refresh then Refresh() end
 end
@@ -353,6 +209,564 @@ local function FrameRect(frame)
 	local screenWidth, screenHeight = UIParent:GetSize()
 	return (left + width / 2) * ratio - screenWidth / 2, (bottom + height / 2) * ratio - screenHeight / 2, width * ratio, height * ratio
 end
+
+-- Layout solver --------------------------------------------------------------------------
+-- A layout is a list of placement rules run in order on a model of the screen
+-- (bottom-left origin, UIParent units). Each rule asks for a spot against a
+-- screen edge or next to a frame placed before it. A spot that would overlap
+-- a placed frame, a frame Edit Mode owns (chat, minimap, objectives, buffs), a
+-- reserved area or the screen's edge is nudged along the rule's free
+-- directions in grid steps, nearest first; failing that it is tried smaller
+-- (down to 75%), then at the rule's fallback. Sizes are the frames' real sizes
+-- without any layout scale; frames a layout builds after its reload (bars,
+-- a re-sized console) use fair guesses, and the layout is solved again once
+-- they exist. Every remaining frame is fitted from its default spot the same
+-- way, so nothing is left overlapping.
+local STEP, MARGIN, GAP, PAD = 8, 12, 10, 3
+local SHRINK = {1, 0.9, 0.8, 0.75}
+local DIRS = {up = {0, 1}, down = {0, -1}, left = {-1, 0}, right = {1, 0}}
+
+-- Frames that never show at the same time may share a spot.
+local EXCLUSIVE = {['group.small'] = 'group.large', ['group.large'] = 'group.small',
+	['group.boss'] = 'group.arena', ['group.arena'] = 'group.boss', ['dm.dock'] = 'dm.own', ['dm.own'] = 'dm.dock'}
+
+-- Sizes for frames not built yet, by key prefix.
+local GUESS = {{'ab.bar', 480, 50}, {'ab.side', 50, 480}, {'ab.menu', 520, 52}, {'ab.', 160, 44},
+	{'uf.player', 224, 70}, {'uf.target', 224, 70}, {'uf.party', 176, 50}, {'uf.', 136, 36}, {'cb.', 240, 30},
+	{'group.small', 420, 200}, {'group.large', 560, 300}, {'group.', 200, 300}, {'dm.', 270, 180}, {'tl.', 440, 60}}
+
+-- Frames the game's Edit Mode places: never moved from here, but nothing may
+-- cover them. Extra room around chat for its tabs and edit box.
+local OBSTACLES = {{'ChatFrame1', 4, 28, 4, 30}, {'MinimapCluster', 4, 4, 4, 4}, {'ObjectiveTrackerFrame', 4, 4, 4, 4},
+	{'BuffFrame', 4, 4, 4, 4}, {'DebuffFrame', 4, 4, 4, 4}}
+
+-- Docked into the console when the layout docks.
+local DOCKABLE = {['uf.player'] = true, ['uf.target'] = true, ['cb.player'] = true, ['cb.target'] = true}
+
+-- Never placed by a layout: devices the player pops out and places themself.
+local function Unmanaged(key) return key:find('^gadget%.') ~= nil end
+
+local function Solver(preset)
+	local W, H = UIParent:GetSize()
+	local settings = preset.settings or {}
+	local free = settings['actionbars.layout'] == 'free'
+	local docked = not free and settings['actionbars.dock'] ~= false
+	local rows = settings['actionbars.rows'] or 3
+	local s = {W = W, H = H, rects = {}, scale = {}, order = {}, shrunk = false, missed = {}, blocks = {}, sizes = {},
+		docked = docked, free = free}
+
+	function s.size(key)
+		local cached = s.sizes[key]
+		if cached then return cached[1], cached[2] end
+		local width, height
+		if UI:HasMover(key) then
+			width, height = UI:GetMoverSize(key)
+			local multiplier = UI:GetMoverOption(key, 'scale') or 1
+			if width and multiplier > 0 then width, height = width / multiplier, height / multiplier end
+		end
+		if not width or width < 2 or not height or height < 2 then
+			width, height = 120, 40
+			for _, guess in ipairs(GUESS) do
+				if key:sub(1, #guess[1]) == guess[1] then width, height = guess[2], guess[3] break end
+			end
+			if key == 'ab.console' then width, height = docked and 1040 or 620, 40 + rows * 50 end
+		end
+		s.sizes[key] = {width, height}
+		return width, height
+	end
+
+	function s.present(key)
+		if Unmanaged(key) then return false end
+		if docked and DOCKABLE[key] then return false end
+		if key == 'ab.console' then return not free end
+		local bar = key:match('^ab%.bar(%d)$')
+		if bar then return free and tonumber(bar) <= rows end
+		return UI:HasMover(key)
+	end
+
+	-- Areas nothing may cover: Edit Mode frames, and any the layout reserves.
+	for _, spec in ipairs(OBSTACLES) do
+		local cx, cy, width, height = FrameRect(_G[spec[1]])
+		if cx then
+			s.blocks[#s.blocks + 1] = {x = cx + W / 2 - width / 2 - spec[2], y = cy + H / 2 - height / 2 - spec[5],
+				w = width + spec[2] + spec[4], h = height + spec[3] + spec[5], label = spec[1]}
+		end
+	end
+	function s.reserve(x, y, width, height) s.blocks[#s.blocks + 1] = {x = x, y = y, w = width, h = height, reserved = true} end
+
+	local function Overlap(a, x, y, width, height)
+		return x < a.x + a.w + PAD and a.x < x + width + PAD and y < a.y + a.h + PAD and a.y < y + height + PAD
+	end
+
+	local function Free(key, x, y, width, height, edge)
+		local inset = edge and 0 or MARGIN / 2
+		if x < inset or y < 2 or x + width > W - inset or y + height > H - 2 then return false end
+		for other, rect in pairs(s.rects) do
+			if other ~= key and EXCLUSIVE[key] ~= other and Overlap(rect, x, y, width, height) then return false end
+		end
+		for _, rect in ipairs(s.blocks) do
+			if Overlap(rect, x, y, width, height) then return false end
+		end
+		return true
+	end
+
+	-- The nearest free spot from (x, y), stepping along the given directions.
+	local function Nearest(key, x, y, width, height, nudge, edge)
+		if Free(key, x, y, width, height, edge) then return x, y end
+		local steps = math.ceil(max(W, H) / STEP)
+		local alive = {}
+		for index = 1, #nudge do alive[index] = DIRS[nudge[index]] ~= nil end
+		for step = 1, steps do
+			local any = false
+			for index, name in ipairs(nudge) do
+				if alive[index] then
+					local dir = DIRS[name]
+					local tx, ty = x + dir[1] * step * STEP, y + dir[2] * step * STEP
+					if tx < -width or ty < -height or tx > W or ty > H then
+						alive[index] = false
+					else
+						any = true
+						if Free(key, tx, ty, width, height, edge) then return tx, ty end
+					end
+				end
+			end
+			if not any then break end
+		end
+	end
+
+	local function Record(key, x, y, width, height, factor)
+		s.rects[key] = {x = x, y = y, w = width, h = height}
+		s.scale[key] = factor
+		s.order[#s.order + 1] = key
+		if factor < 1 then s.shrunk = true end
+		return s.rects[key]
+	end
+
+	-- Place a frame with its bottom-left at (x, y), or the nearest free spot.
+	-- opts: nudge (directions, nearest first), scale (start smaller), edge
+	-- (may sit flush on the screen's edge), fallback(width, height) -> x, y.
+	function s.put(key, x, y, opts)
+		if s.rects[key] or not s.present(key) then return s.rects[key] end
+		opts = opts or {}
+		local width, height = s.size(key)
+		local nudge = opts.nudge or {'up', 'left', 'right'}
+		for _, factor in ipairs(SHRINK) do
+			if factor <= (opts.scale or 1) then
+				local sw, sh = width * factor, height * factor
+				local bx = x + (width - sw) / 2
+				local fx, fy = Nearest(key, bx, y, sw, sh, nudge, opts.edge)
+				if fx then return Record(key, fx, fy, sw, sh, factor) end
+				if opts.fallback then
+					local ax, ay = opts.fallback(sw, sh)
+					if ax then
+						fx, fy = Nearest(key, ax, ay, sw, sh, nudge, opts.edge)
+						if fx then return Record(key, fx, fy, sw, sh, factor) end
+					end
+				end
+			end
+		end
+		s.missed[#s.missed + 1] = key
+		return Record(key, x, y, width * (opts.scale or 1), height * (opts.scale or 1), opts.scale or 1)
+	end
+
+	-- Helpers for rules.
+	function s.get(key) return s.rects[key] end
+	function s.top(key, fallback) local rect = s.rects[key] return rect and rect.y + rect.h or fallback end
+	function s.right(key, fallback) local rect = s.rects[key] return rect and rect.x + rect.w or fallback end
+	function s.left(key, fallback) local rect = s.rects[key] return rect and rect.x or fallback end
+	function s.bottom(key, fallback) local rect = s.rects[key] return rect and rect.y or fallback end
+	function s.mid(key) local width = s.size(key) return W / 2 - width / 2 end
+	-- The highest top among the given keys (those placed), or a default.
+	function s.highest(keys, default)
+		local best = default
+		for _, key in ipairs(keys) do
+			local top = s.top(key)
+			if top and (not best or top > best) then best = top end
+		end
+		return best
+	end
+	-- Place a frame centred above the highest of the given frames.
+	function s.above(key, keys, gap, opts)
+		local _, height = s.size(key)
+		return s.put(key, s.mid(key), s.highest(keys, MARGIN) + (gap or GAP), opts or {nudge = {'up'}})
+	end
+	return s
+end
+
+-- Shared rules ------------------------------------------------------------------------------
+-- The frames every layout puts on the screen's edges, after its own core.
+-- opts: meters ('corner' | 'middle'), party ('left' | 'right'), edgeScale.
+local CORE_KEYS = {'ab.console', 'ab.bar1', 'ab.bar2', 'ab.bar3', 'uf.player', 'uf.target', 'cb.player', 'cb.target',
+	'group.small', 'tl.player', 'ab.extra'}
+
+local function Edges(s, opts)
+	opts = opts or {}
+	local W, H, edge = s.W, s.H, opts.edgeScale or 1
+	-- Top centre: the HUD, then the combat status and banners under it.
+	local _, hudHeight = s.size('ip.hud')
+	s.put('ip.hud', s.mid('ip.hud'), H - hudHeight - 4, {nudge = {'down'}})
+	local _, statusHeight = s.size('cue.status')
+	s.put('cue.status', s.mid('cue.status'), s.bottom('ip.hud', H) - statusHeight - GAP, {nudge = {'down'}})
+	local _, bannerHeight = s.size('nt.banner')
+	s.put('nt.banner', s.mid('nt.banner'), s.bottom('cue.status', s.bottom('ip.hud', H)) - bannerHeight - GAP, {nudge = {'down'}})
+	-- Right edge: side bars centred, the menu in the corner.
+	local sideWidth, sideHeight = s.size('ab.side')
+	s.put('ab.side', W - sideWidth - 6, H / 2 - sideHeight / 2, {nudge = {'down', 'up', 'left'}})
+	local menuWidth = s.size('ab.menu')
+	s.put('ab.menu', W - menuWidth - MARGIN, MARGIN, {nudge = {'left', 'up'}})
+	-- Meters: over the menu in the corner, or a column at the middle right.
+	local meterWidth, meterHeight = s.size('dm.own')
+	local meterY = opts.meters == 'middle' and H * 0.42 - meterHeight / 2 or s.top('ab.menu', MARGIN) + GAP
+	s.put('dm.own', W - meterWidth - MARGIN - (opts.meters == 'middle' and s.size('ab.side') + 12 or 0), meterY,
+		{nudge = {'up', 'left'}, scale = edge})
+	s.put('dm.dock', s.left('dm.own', W - meterWidth - MARGIN), s.bottom('dm.own', meterY), {nudge = {'up', 'left'}, scale = edge})
+	for index = 2, 3 do
+		local key, previous = 'dm.own'..index, index == 2 and 'dm.own' or 'dm.own2'
+		local width = s.size(key)
+		s.put(key, s.left(previous, W) - width - GAP, s.bottom(previous, meterY), {nudge = {'left', 'up'}, scale = edge})
+	end
+	-- Bags over the meters at the right edge.
+	local bagsWidth = s.size('bags.bags')
+	s.put('bags.bags', W - bagsWidth - MARGIN, s.highest({'dm.own', 'dm.dock', 'ab.menu'}, MARGIN) + GAP,
+		{nudge = {'up', 'left'}, scale = edge})
+	-- Boss and arena: a column left of the side bars, upper half.
+	local bossWidth, bossHeight = s.size('group.boss')
+	local columnRight = s.left('ab.side', W - 6) - 16
+	s.put('group.boss', columnRight - bossWidth, H * 0.66 - bossHeight, {nudge = {'down', 'left', 'up'}, scale = edge})
+	s.put('group.arena', columnRight - s.size('group.arena'), H * 0.66 - select(2, s.size('group.arena')),
+		{nudge = {'down', 'left', 'up'}, scale = edge})
+	-- The drawer's pull tab, flush on the right edge.
+	local tabWidth = s.size('drawer.tab')
+	s.put('drawer.tab', W - tabWidth, H * 0.3, {nudge = {'down', 'up'}, edge = true})
+	-- Party: a column on the chosen side, from the middle down.
+	local partyX
+	for index = 1, 4 do
+		local key = 'uf.party'..index
+		local width, height = s.size(key)
+		partyX = partyX or (opts.party == 'right' and W - width - MARGIN - s.size('ab.side') - 12 or MARGIN)
+		local y = index == 1 and H * 0.62 - height or s.bottom('uf.party'..(index - 1), H * 0.62) - height - 6
+		s.put(key, partyX, y, {nudge = {'down', opts.party == 'right' and 'left' or 'right', 'up'}, scale = edge})
+	end
+	-- Loot and notices around the middle, clear of the play area's centre.
+	local lootWidth = s.size('nt.loot')
+	s.put('nt.loot', W * 0.72 - lootWidth / 2, H * 0.42, {nudge = {'up', 'left', 'down'}})
+	local _, rollsHeight = s.size('nt.rolls')
+	s.put('nt.rolls', s.mid('nt.rolls'), s.highest(CORE_KEYS, H * 0.3) + 24, {nudge = {'up'}})
+	s.put('nt.lootwindow', W * 0.22, H * 0.52, {nudge = {'up', 'right', 'down'}})
+	s.put('bags.bank', MARGIN, H * 0.52, {nudge = {'down', 'up', 'right'}})
+	-- Everything else, from its own default spot.
+	for _, entry in ipairs(UI:GetMovers()) do
+		local key = entry.key
+		if not s.rects[key] and s.present(key) then
+			local anchor, x, y = UI:GetMoverDefault(key)
+			local width, height = s.size(key)
+			if anchor then
+				local left = (anchor:find('LEFT') and 0 or anchor:find('RIGHT') and W - width or W / 2 - width / 2) + x
+				local bottom = (anchor:find('BOTTOM') and 0 or anchor:find('TOP') and H - height or H / 2 - height / 2) + y
+				s.put(key, left, bottom, {nudge = {'up', 'down', 'left', 'right'}})
+			end
+		end
+	end
+	return rollsHeight
+end
+
+-- The small frames that follow the player and target wherever a layout puts them.
+local function Companions(s)
+	-- Cast bars: the target's above its frame, the player's above the console.
+	local _, castHeight = s.size('cb.target')
+	if s.get('uf.target') then
+		s.put('cb.target', s.left('uf.target'), s.top('uf.target') + 6, {nudge = {'up', 'right'}})
+	end
+	-- Target of target beside the target, away from the centre; pet below the player.
+	if s.get('uf.target') then
+		local rect = s.get('uf.target')
+		local towardRight = rect.x + rect.w / 2 >= s.W / 2
+		local width = s.size('uf.targettarget')
+		s.put('uf.targettarget', towardRight and rect.x + rect.w + GAP or rect.x - width - GAP, rect.y,
+			{nudge = {towardRight and 'right' or 'left', 'up', 'down'}})
+	end
+	if s.get('uf.player') then
+		local rect = s.get('uf.player')
+		local _, height = s.size('uf.pet')
+		s.put('uf.pet', rect.x, rect.y - height - 6, {nudge = {'down', 'left', 'up'}})
+		local _, focusHeight = s.size('uf.focus')
+		s.put('uf.focus', rect.x, s.top('cb.player', rect.y + rect.h) + 40, {nudge = {'up', 'left'}})
+	end
+	return castHeight
+end
+
+-- The layouts --------------------------------------------------------------------------------
+-- Each: key, title, model, note (what it is for), settings (reload ones are
+-- marked), and rules(s) placing its core; Edges then fills the screen's edges.
+local function Console(s)
+	local width = s.size('ab.console')
+	s.put('ab.console', s.W / 2 - width / 2, MARGIN, {nudge = {'up'}})
+end
+
+PRESETS = {
+	{key = 'console', title = 'Console', model = 'LY-1',
+		note = 'Everything in one CX-1 console at the bottom centre, player and target docked into it, raid above it.',
+		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true, ['actionbars.rows'] = 3, ['actionbars.side'] = true},
+		rules = function(s)
+			Console(s)
+			s.above('tl.player', {'ab.console'}, 24)
+			s.above('group.small', {'tl.player', 'ab.console'}, 16, {nudge = {'up', 'left', 'right'}})
+			s.put('group.large', s.mid('group.large'), s.bottom('group.small', s.top('ab.console', MARGIN) + 16),
+				{nudge = {'up', 'left', 'right'}})
+			local console = s.get('ab.console')
+			if console then
+				s.put('uf.targettarget', console.x + console.w - s.size('uf.targettarget'), console.y + console.h + 8, {nudge = {'up', 'right'}})
+				s.put('uf.pet', console.x, console.y + console.h + 8, {nudge = {'up', 'left'}})
+				s.put('ab.stance', console.x, s.top('uf.pet', console.y + console.h) + 8, {nudge = {'up', 'left'}})
+				s.put('ab.pet', console.x + console.w - s.size('ab.pet'), s.top('uf.targettarget', console.y + console.h) + 8,
+					{nudge = {'up', 'right'}})
+			end
+			s.put('uf.focus', s.W * 0.28 - s.size('uf.focus') / 2, s.H * 0.5, {nudge = {'up', 'left'}})
+			s.above('ab.extra', {'group.small', 'group.large', 'tl.player'}, 16)
+			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.H * 0.4), {nudge = {'left', 'up'}})
+			Edges(s, {meters = 'corner', party = 'left'})
+		end},
+	{key = 'cockpit', title = 'Cockpit', model = 'LY-2',
+		note = 'Player and target flank the console at the same height; cast bars over it; raid on the left over chat.',
+		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = false, ['actionbars.rows'] = 2, ['actionbars.side'] = true},
+		rules = function(s)
+			Console(s)
+			local console = s.get('ab.console')
+			local cx, cy, cw = console and console.x or s.W / 2, console and console.y or MARGIN, console and console.w or 0
+			s.put('uf.player', cx - s.size('uf.player') - 16, cy, {nudge = {'left', 'up'}})
+			s.put('uf.target', cx + cw + 16, cy, {nudge = {'right', 'up'}})
+			s.above('cb.player', {'ab.console'}, 12)
+			s.above('cb.target', {'cb.player', 'ab.console'}, 6)
+			s.above('tl.player', {'cb.target', 'cb.player', 'ab.console'}, 16)
+			Companions(s)
+			s.put('group.small', MARGIN, MARGIN, {nudge = {'up', 'right'}})
+			s.put('group.large', MARGIN, MARGIN, {nudge = {'up', 'right'}})
+			s.above('ab.extra', {'tl.player'}, 16)
+			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.H * 0.4), {nudge = {'left', 'up'}})
+			Edges(s, {meters = 'corner', party = 'left'})
+		end},
+	{key = 'center', title = 'Center stage', model = 'LY-3',
+		note = 'For tanks and damage: player and target just under your character, the timeline between them, raid compact on the left.',
+		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = false, ['actionbars.rows'] = 3, ['actionbars.side'] = false},
+		rules = function(s)
+			Console(s)
+			local width = s.size('uf.player')
+			local y = max(s.top('ab.console', MARGIN) + 90, s.H * 0.3)
+			s.put('uf.player', s.W / 2 - width - 70, y, {nudge = {'up', 'left'}})
+			s.put('uf.target', s.W / 2 + 70, s.bottom('uf.player', y), {nudge = {'up', 'right'}})
+			s.above('tl.player', {'uf.player', 'uf.target'}, 14)
+			local _, castHeight = s.size('cb.player')
+			s.put('cb.player', s.mid('cb.player'), s.bottom('uf.player', y) - castHeight - 10, {nudge = {'down', 'up'}})
+			Companions(s)
+			s.put('uf.focus', s.left('uf.player', s.W / 2) - s.size('uf.focus') - GAP, s.bottom('uf.player', y),
+				{nudge = {'left', 'up'}})
+			s.put('group.small', MARGIN, s.H * 0.45, {nudge = {'up', 'down', 'right'}, scale = 0.9})
+			s.put('group.large', MARGIN, s.H * 0.45, {nudge = {'up', 'down', 'right'}, scale = 0.9})
+			s.above('ab.extra', {'ab.console'}, 16)
+			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.H * 0.2), {nudge = {'left', 'up'}})
+			Edges(s, {meters = 'corner', party = 'left'})
+		end},
+	{key = 'healer', title = 'Healer grid', model = 'LY-4',
+		note = 'The raid grid is the focus, centred over the console, with the player left of it and the target right of it.',
+		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = false, ['actionbars.rows'] = 2, ['actionbars.side'] = true,
+			['group.partyAsRaid'] = true},
+		rules = function(s)
+			Console(s)
+			s.above('cb.player', {'ab.console'}, 8)
+			s.above('group.small', {'cb.player', 'ab.console'}, 14, {nudge = {'up'}})
+			s.put('group.large', s.mid('group.large'), s.bottom('group.small', s.top('cb.player', MARGIN) + 14), {nudge = {'up'}})
+			local raid = s.get('group.small') or s.get('group.large')
+			local rx, ry, rw, rh = raid and raid.x or s.W / 2, raid and raid.y or s.H * 0.3, raid and raid.w or 0, raid and raid.h or 0
+			local _, height = s.size('uf.player')
+			local y = ry + rh / 2 - height / 2
+			s.put('uf.player', rx - s.size('uf.player') - 28, y, {nudge = {'left', 'up', 'down'}})
+			s.put('uf.target', rx + rw + 28, y, {nudge = {'right', 'up', 'down'}})
+			Companions(s)
+			s.above('tl.player', {'group.small', 'group.large', 'cb.player'}, 14)
+			s.above('ab.extra', {'tl.player'}, 12)
+			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.H * 0.5), {nudge = {'left', 'up'}})
+			Edges(s, {meters = 'corner', party = 'left'})
+		end},
+	{key = 'classic', title = 'Classic', model = 'LY-5',
+		note = 'Like the game\'s own: player and target at the top left, three bars stacked at the bottom, raid on the left.',
+		settings = {['actionbars.layout'] = 'free', ['actionbars.dock'] = false, ['actionbars.rows'] = 3, ['actionbars.side'] = true},
+		rules = function(s)
+			for index = 1, 3 do
+				local key = 'ab.bar'..index
+				s.put(key, s.mid(key), index == 1 and MARGIN or s.top('ab.bar'..(index - 1), MARGIN) + 6, {nudge = {'up'}})
+			end
+			local _, height = s.size('uf.player')
+			s.put('uf.player', MARGIN + 8, s.H - height - 24, {nudge = {'right', 'down'}})
+			s.put('uf.target', s.right('uf.player', MARGIN) + 24, s.bottom('uf.player', s.H - height - 24), {nudge = {'right', 'down'}})
+			s.above('cb.player', {'ab.bar1', 'ab.bar2', 'ab.bar3'}, 40)
+			s.above('tl.player', {'cb.player'}, 14)
+			local _, castHeight = s.size('cb.target')
+			s.put('cb.target', s.left('uf.target', s.W / 2), s.bottom('uf.target', s.H) - castHeight - 6, {nudge = {'down', 'right'}})
+			Companions(s)
+			s.put('uf.focus', MARGIN + 8, s.H * 0.6, {nudge = {'down', 'right'}})
+			s.put('group.small', MARGIN, MARGIN, {nudge = {'up', 'right'}})
+			s.put('group.large', MARGIN, MARGIN, {nudge = {'up', 'right'}})
+			local bars = s.get('ab.bar3') or s.get('ab.bar2') or s.get('ab.bar1')
+			if bars then
+				s.put('ab.stance', bars.x, bars.y + bars.h + 6, {nudge = {'up', 'left'}})
+				s.put('ab.pet', bars.x + bars.w - s.size('ab.pet'), bars.y + bars.h + 6, {nudge = {'up', 'right'}})
+			end
+			s.above('ab.extra', {'tl.player'}, 16)
+			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.H * 0.4), {nudge = {'left', 'up'}})
+			Edges(s, {meters = 'corner', party = 'left'})
+		end},
+	{key = 'zen', title = 'Zen', model = 'LY-6',
+		note = 'A compact one-row console with small player and target over it; everything else small on the edges.',
+		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = false, ['actionbars.rows'] = 1, ['actionbars.side'] = false,
+			['unitframes.scale'] = 0.9, ['appearance.fade.enable'] = true},
+		rules = function(s)
+			Console(s)
+			local y = s.top('ab.console', MARGIN) + 20
+			s.put('uf.player', s.W / 2 - s.size('uf.player') * 0.85 - 10, y, {nudge = {'up', 'left'}, scale = 0.9})
+			s.put('uf.target', s.W / 2 + 10, s.bottom('uf.player', y), {nudge = {'up', 'right'}, scale = 0.9})
+			s.above('cb.player', {'uf.player', 'uf.target'}, 8, {nudge = {'up'}, scale = 0.9})
+			s.above('tl.player', {'cb.player', 'uf.player'}, 12, {nudge = {'up'}, scale = 0.9})
+			local width = s.size('uf.targettarget')
+			s.put('uf.targettarget', s.right('uf.target', s.W / 2) + GAP, s.bottom('uf.target', y), {nudge = {'right', 'up'}, scale = 0.8})
+			s.put('uf.pet', s.left('uf.player', s.W / 2) - width - GAP, s.bottom('uf.player', y), {nudge = {'left', 'up'}, scale = 0.8})
+			s.put('cb.target', s.left('uf.target', s.W / 2), s.top('uf.target', y) + 6, {nudge = {'up', 'right'}, scale = 0.9})
+			s.put('uf.focus', MARGIN, s.H * 0.66, {nudge = {'down', 'right'}, scale = 0.8})
+			s.put('group.small', MARGIN, s.H * 0.4, {nudge = {'up', 'down', 'right'}, scale = 0.8})
+			s.put('group.large', MARGIN, s.H * 0.4, {nudge = {'up', 'down', 'right'}, scale = 0.8})
+			s.above('ab.extra', {'tl.player'}, 12, {nudge = {'up'}, scale = 0.9})
+			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.H * 0.4),
+				{nudge = {'left', 'up'}, scale = 0.9})
+			Edges(s, {meters = 'corner', party = 'left', edgeScale = 0.8})
+		end},
+	{key = 'wide', title = 'Ultrawide', model = 'LY-7',
+		note = 'For 21:9 and wider: the console and frames in the centre 16:9, raid and party in a left column, meters in a right one.',
+		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true, ['actionbars.rows'] = 3, ['actionbars.side'] = true},
+		rules = function(s)
+			local band = min(s.W, s.H * 16 / 9)
+			local bandLeft = (s.W - band) / 2
+			Console(s)
+			s.above('tl.player', {'ab.console'}, 24)
+			local console = s.get('ab.console')
+			if console then
+				s.put('uf.targettarget', console.x + console.w - s.size('uf.targettarget'), console.y + console.h + 8, {nudge = {'up', 'right'}})
+				s.put('uf.pet', console.x, console.y + console.h + 8, {nudge = {'up', 'left'}})
+				s.put('ab.stance', console.x, s.top('uf.pet', console.y + console.h) + 8, {nudge = {'up', 'left'}})
+				s.put('ab.pet', console.x + console.w - s.size('ab.pet'), s.top('uf.targettarget', console.y + console.h) + 8,
+					{nudge = {'up', 'right'}})
+			end
+			local raidWidth, raidHeight = s.size('group.small')
+			local columnX = max(MARGIN, bandLeft - raidWidth - 24)
+			s.put('group.small', columnX, s.H * 0.55 - raidHeight / 2, {nudge = {'up', 'down', 'right'}})
+			s.put('group.large', columnX, s.H * 0.55 - raidHeight / 2, {nudge = {'up', 'down', 'right'}})
+			s.put('uf.focus', bandLeft + band * 0.2, s.H * 0.5, {nudge = {'up', 'right'}})
+			s.above('ab.extra', {'tl.player'}, 16)
+			s.put('ab.zone', s.left('ab.extra', s.W / 2) - s.size('ab.zone') - GAP, s.bottom('ab.extra', s.H * 0.4), {nudge = {'left', 'up'}})
+			Edges(s, {meters = 'middle', party = 'left'})
+		end},
+	{key = 'streamer', title = 'Streamer', model = 'LY-8',
+		note = 'Keeps the bottom left and top right clear for a camera and overlays; everything packed bottom centre and right.',
+		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true, ['actionbars.rows'] = 2, ['actionbars.side'] = false},
+		rules = function(s)
+			s.reserve(0, 0, s.W * 0.24, s.H * 0.34)
+			s.reserve(s.W * 0.74, s.H * 0.68, s.W * 0.26, s.H * 0.32)
+			local width = s.size('ab.console')
+			s.put('ab.console', s.W * 0.56 - width / 2, MARGIN, {nudge = {'right', 'up'}})
+			s.above('tl.player', {'ab.console'}, 20)
+			local console = s.get('ab.console')
+			local cx, cy, cw, ch = console and console.x or s.W / 2, console and console.y or MARGIN, console and console.w or 0, console and console.h or 0
+			s.put('group.small', cx + cw + 16, cy, {nudge = {'up', 'right'}})
+			s.put('group.large', cx + cw + 16, cy, {nudge = {'up', 'right'}})
+			s.put('uf.targettarget', cx + cw - s.size('uf.targettarget'), cy + ch + 8, {nudge = {'up', 'right'}})
+			s.put('uf.pet', cx, cy + ch + 8, {nudge = {'up', 'right'}})
+			s.put('uf.focus', s.W * 0.62, s.H * 0.5, {nudge = {'up', 'right'}})
+			s.above('ab.extra', {'tl.player'}, 16)
+			s.put('ab.zone', s.right('ab.extra', s.W / 2) + GAP, s.bottom('ab.extra', s.H * 0.4), {nudge = {'right', 'up'}})
+			Edges(s, {meters = 'corner', party = 'right'})
+		end},
+}
+for _, preset in ipairs(PRESETS) do PRESET_BY_KEY[preset.key] = preset end
+-- Older layout keys and the new layout closest to each.
+local RENAMED = {centre = 'center', minimal = 'zen'}
+
+-- Solve a layout for the screen as it is now.
+local function Solve(preset)
+	local s = Solver(preset)
+	local ok, problem = pcall(preset.rules, s)
+	if not ok then geterrorhandler()(problem) end
+	return s
+end
+
+-- A solved frame's spot, measured from the screen point nearest it, so it
+-- stays on that edge when the resolution changes: anchor, x, y.
+local function SpotOf(rect, W, H)
+	local cx, cy = rect.x + rect.w / 2, rect.y + rect.h / 2
+	local horizontal = cx < W / 3 and 'LEFT' or cx > W * 2 / 3 and 'RIGHT' or ''
+	local vertical = cy < H / 3 and 'BOTTOM' or cy > H * 2 / 3 and 'TOP' or ''
+	local point = vertical..horizontal
+	if point == '' then point = 'CENTER' end
+	local x = horizontal == 'LEFT' and rect.x or horizontal == 'RIGHT' and rect.x + rect.w - W or cx - W / 2
+	local y = vertical == 'BOTTOM' and rect.y or vertical == 'TOP' and rect.y + rect.h - H or cy - H / 2
+	return point, floor(x * 100 + 0.5) / 100, floor(y * 100 + 0.5) / 100
+end
+
+-- opts: quiet (no sound or toast), keepSettings (positions only, e.g. after
+-- the reload a layout asked for, or a new screen scale).
+function ApplyPreset(preset, opts)
+	opts = opts or {}
+	if InCombatLockdown() then return UI:Print('Layouts can be applied once you leave combat.') end
+	local reload = not opts.keepSettings and ApplySettings(preset.settings)
+	local s = Solve(preset)
+	if not opts.quiet and UI.SnapshotMovers then UI:SnapshotMovers() end
+	-- One write of every spot, then one placement pass: no frame flickers
+	-- through intermediate spots. A frame's opacity and Hide choices stay.
+	local movers = UI.db.movers
+	local kept = {}
+	for key, saved in pairs(movers) do
+		if Unmanaged(key) then kept[key] = saved
+		elseif type(saved) == 'table' and (saved.alpha or saved.hidden) then kept[key] = {alpha = saved.alpha, hidden = saved.hidden} end
+	end
+	wipe(movers)
+	for key, saved in pairs(kept) do if Unmanaged(key) then movers[key] = saved end end
+	for key, rect in pairs(s.rects) do
+		local point, x, y = SpotOf(rect, s.W, s.H)
+		local look = kept[key] or {}
+		movers[key] = {x, y, anchor = point, scale = s.scale[key] < 1 and s.scale[key] or nil, alpha = look.alpha, hidden = look.hidden}
+	end
+	DB().preset = preset.key
+	DB().resolvePending = reload and preset.key or nil
+	UI:PlaceAllMovers()
+	if #s.missed > 0 then
+		UI:Print(format('%d frame%s could not fit in the %s layout: %s.', #s.missed, #s.missed == 1 and '' or 's', preset.title,
+			table.concat(s.missed, ', ')))
+	end
+	if not opts.quiet then
+		Kit:Play('latch-down')
+		if reload then ReloadToast() end
+	end
+	if Refresh then Refresh() end
+end
+
+function ConfirmPreset(preset)
+	Kit:AlertDialog({title = 'Use the '..preset.title..' layout', confirm = 'Apply',
+		text = 'Every frame moves to the '..preset.title..' arrangement. Undo (Ctrl+Z in Unlock mode) brings back your current positions.',
+		onConfirm = function() ApplyPreset(preset) end})
+end
+
+-- After the reload a layout asked for, its frames exist at their new sizes:
+-- solve it again with the real sizes. Old layout keys move to the new set once.
+local resolver = CreateFrame('Frame')
+resolver:RegisterEvent('PLAYER_ENTERING_WORLD')
+resolver:SetScript('OnEvent', function(self)
+	self:UnregisterAllEvents()
+	local db = DB()
+	if RENAMED[db.preset] then db.preset = RENAMED[db.preset] end
+	local key = db.resolvePending
+	local preset = key and PRESET_BY_KEY[key]
+	if not preset then db.resolvePending = nil return end
+	C_Timer.After(3, function()
+		UI:AfterCombat(function() ApplyPreset(preset, {quiet = true, keepSettings = true}) end, 'layout.resolve')
+	end)
+end)
 
 -- Maps ---------------------------------------------------------------------------------------
 -- A map is a black display; draw(entries) lays one glass block per entry:
@@ -472,53 +886,26 @@ local function LiveEntries()
 	return entries
 end
 
--- Sizes for frames a preset places that aren't built yet (the free layout's bars
--- while the console is in use), by key prefix.
-local GUESS = {{'ab.bar', 480, 50}, {'ab.', 200, 40}, {'uf.', 176, 44}, {'cb.', 240, 20}}
-local function Guess(key)
-	for _, guess in ipairs(GUESS) do
-		if key:sub(1, #guess[1]) == guess[1] then return guess[2], guess[3] end
-	end
-	return 120, 40
-end
-
-local DOCKED = {['uf.player'] = true, ['uf.target'] = true, ['cb.player'] = true, ['cb.target'] = true}
-
-local function Entry(key, label, anchor, x, y, width, height)
-	local screenWidth, screenHeight = UIParent:GetSize()
-	local ax = anchor:find('LEFT') and -screenWidth / 2 or anchor:find('RIGHT') and screenWidth / 2 or 0
-	local ay = anchor:find('TOP') and screenHeight / 2 or anchor:find('BOTTOM') and -screenHeight / 2 or 0
-	local px = anchor:find('LEFT') and -width / 2 or anchor:find('RIGHT') and width / 2 or 0
-	local py = anchor:find('TOP') and height / 2 or anchor:find('BOTTOM') and -height / 2 or 0
-	return {key = key, label = label, short = ShortLabel(label), cx = ax + x - px, cy = ay + y - py, w = width, h = height, kind = 'mover'}
-end
-
--- A preset's entries: its spots, every other frame at its default.
+-- A layout's entries for its card: the solver's spots for the screen as it is
+-- now, and the Edit Mode frames it worked around. Also whether anything had to
+-- be made smaller or didn't fit.
 local function PresetEntries(preset)
-	local spots = PresetSpots(preset)
-	local entries, seen = {}, {}
-	local settings = preset.settings or {}
-	local docked = settings['actionbars.dock'] ~= false and settings['actionbars.layout'] ~= 'free'
-	local free = settings['actionbars.layout'] == 'free'
-	for _, entry in ipairs(UI:GetMovers()) do
-		seen[entry.key] = true
-		local spot = spots[entry.key]
-		local hide = (DOCKED[entry.key] and docked and not spot) or (free and entry.key == 'ab.console')
-			or (not free and entry.key:find('^ab%.bar'))
-		local anchor, x, y
-		if spot then anchor, x, y = spot[1], spot[2], spot[3] else anchor, x, y = UI:GetMoverDefault(entry.key) end
-		local width, height = UI:GetMoverSize(entry.key)
-		if not hide and anchor and width and width > 0 then
-			entries[#entries + 1] = Entry(entry.key, entry.label, anchor, x, y, width, height)
-		end
+	local s = Solve(preset)
+	local labels = {}
+	for _, entry in ipairs(UI:GetMovers()) do labels[entry.key] = entry.label end
+	local entries = {}
+	for _, key in ipairs(s.order) do
+		local rect = s.rects[key]
+		local label = labels[key] or key:gsub('^%a+%.', ''):gsub('^%l', strupper)
+		entries[#entries + 1] = {key = key, label = label, short = ShortLabel(label), cx = rect.x + rect.w / 2 - s.W / 2,
+			cy = rect.y + rect.h / 2 - s.H / 2, w = rect.w, h = rect.h, kind = 'mover'}
 	end
-	for key, spot in pairs(spots) do
-		if not seen[key] then
-			local width, height = Guess(key)
-			entries[#entries + 1] = Entry(key, key:gsub('^%a+%.', ''):gsub('^%l', strupper), spot[1], spot[2], spot[3], width, height)
-		end
+	for _, block in ipairs(s.blocks) do
+		entries[#entries + 1] = {key = 'block:'..(block.label or #entries), label = block.reserved and 'Clear' or block.label,
+			short = block.reserved and 'Clear' or '', cx = block.x + block.w / 2 - s.W / 2, cy = block.y + block.h / 2 - s.H / 2,
+			w = block.w, h = block.h, kind = 'editmode'}
 	end
-	return entries
+	return entries, s.shrunk or #s.missed > 0
 end
 
 -- The page -------------------------------------------------------------------------------------
@@ -739,6 +1126,11 @@ local function BuildPresetsCard(content, page)
 		tile.model:SetPoint('LEFT', tile.lamp, 'RIGHT', 5, 0)
 		tile.title = Kit:Label(tile, preset.title, 'dim', 8)
 		tile.title:SetPoint('LEFT', tile.model, 'RIGHT', 5, 0)
+		-- Amber when the solver had to make something smaller to fit this screen.
+		tile.warn = Kit:Led(tile, 5, false)
+		tile.warn:SetPoint('TOPRIGHT', 0, -4)
+		tile.warnText = Kit:Label(tile, 'Tight fit', 'dim', 7)
+		tile.warnText:SetPoint('RIGHT', tile.warn, 'LEFT', -4, 0)
 		tile.map = Map(tile, tileWidth, mapHeight, false)
 		tile.map:SetPoint('TOPLEFT', 0, -18)
 		tile.note = Kit:Text(tile, preset.note, 8, 'dim')
@@ -753,8 +1145,12 @@ local function BuildPresetsCard(content, page)
 	end
 	function page.drawPresets()
 		for _, tile in ipairs(page.presetTiles) do
-			tile.map:Draw(PresetEntries(tile.preset))
+			local entries, tight = PresetEntries(tile.preset)
+			tile.map:Draw(entries)
 			Kit:SetLed(tile.lamp, DB().preset == tile.preset.key)
+			Kit:SetLed(tile.warn, tight, 'amber')
+			Kit:ShowLed(tile.warn, tight)
+			tile.warnText:SetShown(tight)
 		end
 	end
 	return card
@@ -952,10 +1348,24 @@ end
 
 -- Apply a preset by key, as its card on the Layout page does (no confirmation).
 function UI:ApplyLayoutPreset(key)
-	local preset = PRESET_BY_KEY[key]
+	local preset = PRESET_BY_KEY[RENAMED[key] or key]
 	if not preset then return false end
 	ApplyPreset(preset)
 	return true
+end
+
+-- A layout as the solver places it on this screen, for small previews:
+-- a list of {key, x, y, w, h} as fractions of the screen from the bottom left.
+function UI:LayoutPresetMap(key)
+	local preset = PRESET_BY_KEY[RENAMED[key] or key]
+	if not preset then return nil end
+	local s = Solve(preset)
+	local list = {}
+	for _, frameKey in ipairs(s.order) do
+		local rect = s.rects[frameKey]
+		list[#list + 1] = {key = frameKey, x = rect.x / s.W, y = rect.y / s.H, w = rect.w / s.W, h = rect.h / s.H}
+	end
+	return list
 end
 
 -- Apply a screen layout: size 'auto' | '1080' | '1440' | '2160', density 'compact' | 'comfortable'.

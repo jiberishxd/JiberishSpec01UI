@@ -444,14 +444,21 @@ local PRESET_BLOCKS = {
 local function PresetMock(stage, key)
 	local screen = M.Box(stage, 150, 60, 'screen', 3)
 	local blocks = {}
-	if key == 'wide' then
+	if key == 'wide' or key == 'ultrawide' then
 		for _, x in ipairs({0.11, 0.89}) do
 			local band = Kit:Solid(screen, 'darkDim', 'ARTWORK', 0, 0.5)
 			band:SetSize(1, 56)
 			band:SetPoint('BOTTOMLEFT', floor(150 * x), 2)
 		end
 	end
-	for index, spec in ipairs(PRESET_BLOCKS[key] or {}) do
+	-- The layout solver's own map, so the card shows what applying will do.
+	local specs = PRESET_BLOCKS[key] or {}
+	local solved = UI.LayoutPresetMap and UI:LayoutPresetMap(key)
+	if type(solved) == 'table' and #solved > 0 then
+		specs = {}
+		for _, rect in ipairs(solved) do specs[#specs + 1] = {rect.x, rect.y, rect.w, rect.h} end
+	end
+	for index, spec in ipairs(specs) do
 		local block = Kit:Solid(screen, 'panel', 'ARTWORK', 1, 0.85)
 		block:SetSize(max(2, floor(150 * spec[3])), max(2, floor(60 * spec[4])))
 		block:SetPoint('BOTTOMLEFT', floor(150 * spec[1]), floor(60 * spec[2]))

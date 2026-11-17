@@ -286,6 +286,9 @@ local function RememberAll()
 	Changed('__undo')
 end
 
+-- One undo step covering every saved spot (a layout applied in one go).
+function UI:SnapshotMovers() RememberAll() end
+
 function UI:CanUndoMover() return #undo > 0 end
 
 function UI:UndoMover()
