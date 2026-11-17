@@ -76,10 +76,19 @@ local function SpellRange(spell)
 	return high > 0 and high or 5 -- melee
 end
 
+-- Auto Attack reaches exactly melee distance for every class, and is asked
+-- like any other spell, in combat too.
+local AUTO_ATTACK = 6603
+local MELEE = 5
+
 local function BuildCheckers()
 	wipe(checkers)
 	local _, class = UnitClass('player')
 	local byRange = {}
+	if Known(AUTO_ATTACK) or IsSpellInRange then
+		byRange[MELEE] = true
+		checkers[#checkers + 1] = {spell = AUTO_ATTACK, range = MELEE}
+	end
 	for _, spell in ipairs(not IsSecret(class) and CLASS_SPELLS[class] or {}) do
 		local range = Known(spell) and SpellRange(spell)
 		if range and not byRange[range] then
@@ -131,10 +140,14 @@ local function Bracket(answers)
 	return low, high
 end
 
+-- The nearest range the unit is within reads as that range ("20 YD"); in melee
+-- reach it reads MELEE; beyond every check, "40+ YD".
+local function RangeText(range) return range <= MELEE and 'MELEE' or format('%d YD', range) end
+
 local function BracketText(low, high)
-	if high then return low and format('%d-%d YD', low, high) or format('< %d YD', high) end
-	if low then return format('> %d YD', low) end
-	return '-- YD'
+	if high then return RangeText(high), high <= MELEE end
+	if low then return format('%d+ YD', low), false end
+	return '-- YD', false
 end
 
 -- The tape ---------------------------------------------------------------------------
@@ -182,6 +195,14 @@ local function Build()
 	-- The distance, centred over the tape. Plain answers write one string; secret
 	-- answers light one of a stack of bracket labels (see SetLayers).
 	bar.yards = Kit:Text(bar, '', 8, 'darkInk', true, true)
+	-- In melee reach: a red lamp beside MELEE.
+	bar.meleeHolder = CreateFrame('Frame', nil, bar)
+	bar.meleeHolder:SetSize(9, 9)
+	bar.meleeHolder:SetPoint('RIGHT', bar.yards, 'LEFT', -2, 0)
+	bar.melee = Kit:Led(bar.meleeHolder, 5, true)
+	Kit:SetLed(bar.melee, true, 'red')
+	bar.melee:SetPoint('CENTER')
+	Kit:ShowLed(bar.melee, false)
 	bar.yards:SetJustifyH('CENTER')
 	bar.layerHolder = CreateFrame('Frame', nil, bar)
 	bar.layers = {}
@@ -371,10 +392,13 @@ local function ShowPlain(bar, low, high)
 		for _, layer in ipairs(bar.layers) do layer.gate:Hide() end
 		bar.yards:Show()
 	end
-	local text = BracketText(low, high)
+	local text, melee = BracketText(low, high)
 	if text ~= bar.text then
 		bar.text = text
 		bar.yards:SetText(text)
+		Kit:Tint(bar.yards, melee and 'red' or 'darkInk')
+		Kit:ShowLed(bar.melee, melee and true or false)
+		if melee and not Reduced() then Kit:Flash(bar.meleeHolder, {token = 'red', alpha = 0.6, duration = 0.3}) end
 	end
 end
 
@@ -389,7 +413,11 @@ local function Layer(bar, index)
 	gate:SetAllPoints()
 	local label = Kit:Text(gate, '', 8, 'darkInk', true, true)
 	label:SetPoint('CENTER')
-	layer = {gate = gate, label = label}
+	local led = Kit:Led(gate, 5, true)
+	Kit:SetLed(led, true, 'red')
+	led:SetPoint('RIGHT', label, 'LEFT', -3, 0)
+	Kit:ShowLed(led, false)
+	layer = {gate = gate, label = label, led = led}
 	bar.layers[index] = layer
 	return layer
 end
@@ -425,9 +453,11 @@ local function ShowSecret(bar, answers)
 			local layer = Layer(bar, k)
 			local range = checkers[usable[k]] and checkers[usable[k]].range
 			local below = checkers[usable[k - 1]] and checkers[usable[k - 1]].range
-			if k > count then layer.label:SetText(format('> %d YD', below or 0))
-			elseif below then layer.label:SetText(format('%d-%d YD', below, range))
-			else layer.label:SetText(format('< %d YD', range)) end
+			local melee = k <= count and range and range <= MELEE
+			if k > count then layer.label:SetText(format('%d+ YD', below or 0))
+			else layer.label:SetText(RangeText(range)) end
+			Kit:Tint(layer.label, melee and 'red' or 'darkInk')
+			Kit:ShowLed(layer.led, melee and true or false)
 		end
 	end
 	for k = 1, #bar.layers do
@@ -733,7 +763,7 @@ UI:RegisterPage('navbar', {title = 'Nameplate nav', order = 15.5,
 		{'slider', 'Ticks', 'navbar.ticks', 12, 40, 1, 'How many ticks across the plate.', format = Int},
 	}},
 	{title = 'Readouts', rows = {
-		{'switch', 'Yards', 'navbar.yards', 'The distance bracket, centred above the ticks, e.g. 20-25 YD.'},
+		{'switch', 'Yards', 'navbar.yards', 'The nearest range the unit is within, centred above the ticks (e.g. 20 YD), or MELEE in melee reach.'},
 		{'switch', 'Marker', 'navbar.bearing', 'A caret on the tape at where the unit is across your view.', since = '0.5.1'},
 		{'switch', 'Lens', 'navbar.lens', 'Ticks near the marker lift and light, like the ticks under SPEC-01\'s slider.', since = '0.5.1'},
 		{'switch', 'Targeting you', 'navbar.facing', 'The marker turns red while the unit is targeting you.'},
