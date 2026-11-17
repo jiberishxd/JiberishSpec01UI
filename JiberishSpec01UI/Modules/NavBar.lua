@@ -30,7 +30,17 @@ module.always = true
 
 -- defaults:begin
 UI:RegisterDefaults('navbar', {enable = true, show = 'target', yards = true, bearing = true, facing = true, tape = true,
-	lens = true, position = 'above', ticks = 24})
+	lens = true, position = 'above', ticks = 24, preset = 'spec01',
+	-- The distance readout.
+	yardsStyle = 'bracket', yardsPosition = 'above', yardsSize = 8, yardsSuffix = true, yardsOutline = false,
+	-- Ticks, marker and tape (sizes in physical pixels).
+	tickStyle = 'lines', tickMinor = 3, tickMajor = 5, tickWeight = 1, majorEvery = 5, lensLift = 4, edgeFade = true,
+	tapeWidth = 100, background = 'none', markerStyle = 'caret', markerSize = 3,
+	-- Colors: 'theme' follows the finish; 'custom' uses the colors below.
+	colors = 'theme', tickColor = {r = 0.604, g = 0.604, b = 0.580}, majorColor = {r = 0.957, g = 0.957, b = 0.945},
+	lensColor = {r = 1, g = 0.231, b = 0.188}, markerColor = {r = 0.957, g = 0.957, b = 0.945},
+	alertColor = {r = 1, g = 0.231, b = 0.188}, yardsColor = {r = 0.957, g = 0.957, b = 0.945},
+	baseColor = {r = 0.604, g = 0.604, b = 0.580}})
 -- defaults:end
 
 local function DB() return UI.db.navbar end
@@ -196,14 +206,28 @@ local function Bracket(answers)
 	return low, high
 end
 
--- The nearest range the unit is within reads as that range ("20 YD"); in melee
--- reach it reads MELEE; beyond every check, "40+ YD".
-local function RangeText(range) return range <= MELEE and 'MELEE' or format('%d YD', range) end
-
-local function BracketText(low, high)
-	if high then return RangeText(high), high <= MELEE end
-	if low then return format('%d+ YD', low), false end
-	return '-- YD', false
+-- The readout for a bracket: within melee reach it reads MELEE; otherwise, by
+-- the Yards style, the bracket ("10-28 YD", "< 10 YD", "> 28 YD"), the nearest
+-- range only ("28 YD", "40+ YD"), or the farthest known ("> 10 YD").
+local function YardsText(low, high)
+	if high and high <= MELEE then return 'MELEE', true end
+	local db = DB()
+	local yd = db.yardsSuffix == false and '' or ' YD'
+	local style = db.yardsStyle or 'bracket'
+	if style == 'single' then
+		if high then return format('%d%s', high, yd), false end
+		if low then return format('%d+%s', low, yd), false end
+	elseif style == 'far' then
+		if low then return format('> %d%s', low, yd), false end
+		if high then return format('< %d%s', high, yd), false end
+	else
+		-- Out of melee reach is no lower bound worth printing: "< 10", not "5-10".
+		if low and low <= MELEE then low = nil end
+		if low and high then return format('%d-%d%s', low, high, yd), false end
+		if high then return format('< %d%s', high, yd), false end
+		if low then return format('> %d%s', low, yd), false end
+	end
+	return '--'..yd, false
 end
 
 -- The tape ---------------------------------------------------------------------------
@@ -214,42 +238,95 @@ local preview
 local function Px(frame, n) return UI.Pixel and UI.Pixel.Px(frame, n) or n end
 local function Snap(value, px) return floor(value / px + 0.5) * px end
 
--- Physical-pixel sizes of the parts.
-local TICK_MINOR, TICK_MAJOR, LENS_LIFT, RIPPLE = 3, 5, 4, 2
-local CARET_ROWS = 3
+-- Fixed parts of the motion; the sizes the player can set come from the settings.
+local RIPPLE = 2
 local EDGE_FADE = 0.2 -- of the width, where ticks fade out at each end
 local LENS_SPAN = 4.5 -- in tick spacings, how far the lift reaches either side of the marker
 local PARALLAX = 1.6 -- how much faster than the plate the ticks run past
+local MAX_ROWS = 6
 
--- A caret pointing down, drawn as rows of solid pixels so it stays crisp.
-local function Caret(parent, token)
-	local caret = CreateFrame('Frame', nil, parent)
-	caret.rows = {}
-	for row = 1, CARET_ROWS do caret.rows[row] = Kit:Solid(caret, token, 'OVERLAY', 3) end
-	caret.line = Kit:Solid(caret, token, 'OVERLAY', 2)
-	return caret
+local function Num(value, fallback, low, high)
+	value = type(value) == 'number' and value or fallback
+	return max(low, min(high, floor(value + 0.5)))
 end
 
-local function LayoutCaret(caret, px, tapeHeight)
-	for row = 1, CARET_ROWS do
-		local piece = caret.rows[row]
-		local width = (2 * (CARET_ROWS - row) + 1) * px
-		piece:ClearAllPoints()
-		piece:SetSize(width, px)
-		piece:SetPoint('TOP', caret, 'TOP', 0, -(row - 1) * px)
+-- The marker: a caret, a hairline, a dot or a diamond over a hairline that runs
+-- down through the tape. Plain textures colored by the layout, so a custom
+-- color is never overwritten by a theme repaint.
+local function Marker(parent)
+	local m = CreateFrame('Frame', nil, parent)
+	m.rows = {}
+	for row = 1, MAX_ROWS do
+		local piece = m:CreateTexture(nil, 'OVERLAY', nil, 3)
+		piece:SetColorTexture(1, 1, 1, 1)
+		m.rows[row] = piece
 	end
-	caret.line:ClearAllPoints()
-	caret.line:SetSize(px, tapeHeight)
-	caret.line:SetPoint('TOP', caret, 'TOP', 0, -CARET_ROWS * px)
-	caret:SetSize((2 * CARET_ROWS - 1) * px, CARET_ROWS * px + tapeHeight)
+	m.line = m:CreateTexture(nil, 'OVERLAY', nil, 2)
+	m.line:SetColorTexture(1, 1, 1, 1)
+	m.dot = m:CreateTexture(nil, 'OVERLAY', nil, 3)
+	m.dot:SetTexture(Kit.media..'circle.tga')
+	m.diamond = m:CreateTexture(nil, 'OVERLAY', nil, 3)
+	m.diamond:SetColorTexture(1, 1, 1, 1)
+	return m
+end
+
+-- Lays a marker out; returns the height of its head above the tape.
+local function LayoutMarker(m, style, size, px, tapeHeight, color)
+	for _, piece in ipairs(m.rows) do piece:Hide() end
+	m.dot:Hide()
+	m.diamond:Hide()
+	local head, wide = 0, px
+	if style == 'caret' then
+		for row = 1, size do
+			local piece = m.rows[row]
+			piece:ClearAllPoints()
+			piece:SetSize((2 * (size - row) + 1) * px, px)
+			piece:SetPoint('TOP', m, 'TOP', 0, -(row - 1) * px)
+			piece:Show()
+		end
+		head, wide = size * px, (2 * size - 1) * px
+	elseif style == 'dot' then
+		local d = (2 * size - 1) * px
+		m.dot:ClearAllPoints()
+		m.dot:SetSize(d, d)
+		m.dot:SetPoint('TOP', m, 'TOP', 0, 0)
+		m.dot:Show()
+		head, wide = d + px, d
+	elseif style == 'diamond' then
+		local d = (2 * size - 1) * px
+		local side = max(px, floor(d / 1.414 / px + 0.5) * px)
+		m.diamond:ClearAllPoints()
+		m.diamond:SetSize(side, side)
+		m.diamond:SetRotation(pi / 4)
+		m.diamond:SetPoint('CENTER', m, 'TOP', 0, -d / 2)
+		m.diamond:Show()
+		head, wide = d + px, d
+	end
+	local lineWidth = style == 'line' and max(1, floor(size / 2)) * px or px
+	m.line:ClearAllPoints()
+	m.line:SetSize(lineWidth, tapeHeight)
+	m.line:SetPoint('TOP', m, 'TOP', 0, -head)
+	local r, g, b = color[1], color[2], color[3]
+	for _, piece in ipairs(m.rows) do piece:SetVertexColor(r, g, b) end
+	m.line:SetVertexColor(r, g, b)
+	m.dot:SetVertexColor(r, g, b)
+	m.diamond:SetVertexColor(r, g, b)
+	m:SetSize(max(wide, lineWidth), head + tapeHeight)
+	return head
 end
 
 local function Build()
 	local bar = CreateFrame('Frame', nil, UIParent)
 	bar:EnableMouse(false)
 	bar:Hide()
-	-- The distance, centred over the tape. Plain answers write one string; secret
-	-- answers light one of a stack of bracket labels (see SetLayers).
+	-- Behind the tape: an optional strip of glass, or a hairline baseline.
+	bar.glass = CreateFrame('Frame', nil, bar)
+	bar.glass:Hide()
+	bar.base = bar:CreateTexture(nil, 'ARTWORK')
+	bar.base:SetColorTexture(1, 1, 1, 1)
+	bar.base:Hide()
+	-- The distance. Plain answers write one string; secret answers light one of
+	-- a stack of bracket labels (see ShowSecret).
 	bar.yards = Kit:Text(bar, '', 8, 'darkInk', true, true)
 	-- In melee reach: a red lamp beside MELEE.
 	bar.meleeHolder = CreateFrame('Frame', nil, bar)
@@ -259,22 +336,23 @@ local function Build()
 	Kit:SetLed(bar.melee, true, 'red')
 	bar.melee:SetPoint('CENTER')
 	Kit:ShowLed(bar.melee, false)
-	bar.yards:SetJustifyH('CENTER')
 	bar.layerHolder = CreateFrame('Frame', nil, bar)
 	bar.layers = {}
-	-- The tape: clipped, so ticks scroll in and out under the fade.
+	-- The tape: clipped, so ticks scroll in and out under the fade (and the
+	-- lower half of a notch's rotated square is cut, leaving a triangle).
 	bar.tape = CreateFrame('Frame', nil, bar)
+	bar.tape:SetFrameLevel(bar.glass:GetFrameLevel() + 2)
 	bar.tape:SetClipsChildren(true)
 	bar.strip = CreateFrame('Frame', nil, bar.tape)
 	bar.strip:SetSize(1, 1)
 	bar.ticks = {}
-	-- The marker: a key-colored caret and hairline, and a red one shown instead
-	-- while the unit is targeting you. Each sits on its own frame so the
-	-- targeting answer can switch them without being read.
+	-- The marker, and a second one shown instead while the unit is targeting
+	-- you. Each sits on its own frame so the targeting answer can switch them
+	-- without being read.
 	bar.marker = CreateFrame('Frame', nil, bar)
 	bar.marker:SetFrameLevel(bar.tape:GetFrameLevel() + 3)
-	bar.calm = Caret(bar.marker, 'lamp')
-	bar.alert = Caret(bar.marker, 'red')
+	bar.calm = Marker(bar.marker)
+	bar.alert = Marker(bar.marker)
 	bar.alert:SetAlpha(0)
 	-- Animated state.
 	bar.at, bar.goal = 0, 0 -- marker position, -1..1 of the half width
@@ -283,36 +361,90 @@ local function Build()
 	return bar
 end
 
--- Colors used every frame, read once per layout (and again on a theme change).
-local inkR, inkG, inkB, dimR, dimG, dimB, keyR, keyG, keyB = 1, 1, 1, 0.6, 0.6, 0.6, 1, 1, 1
+-- Colors, read once per layout (and again on a theme change): the finish's
+-- tokens, or the player's own.
+local COLOR_TOKENS = {tickColor = 'darkDim', majorColor = 'darkInk', lensColor = 'lamp', markerColor = 'lamp',
+	alertColor = 'red', yardsColor = 'darkInk', baseColor = 'darkDim'}
+local colors = {}
 local function ReadColors()
-	inkR, inkG, inkB = Kit:RGB('darkInk')
-	dimR, dimG, dimB = Kit:RGB('darkDim')
-	keyR, keyG, keyB = Kit:RGB('lamp')
+	local db = DB()
+	local custom = db.colors == 'custom'
+	for key, token in pairs(COLOR_TOKENS) do
+		local c = colors[key] or {}
+		if custom and type(db[key]) == 'table' then c[1], c[2], c[3] = Kit.ColorParts(db[key])
+		else c[1], c[2], c[3] = Kit:RGB(token) end
+		colors[key] = c
+	end
+end
+
+-- A distance string in the player's color (or red, with the lamp, in melee reach).
+local function PaintText(fontString, melee)
+	if melee then Kit:Tint(fontString, 'red') return end
+	Kit:Tint(fontString, 'darkInk')
+	if DB().colors == 'custom' then
+		local c = colors.yardsColor
+		fontString:SetTextColor(c[1], c[2], c[3])
+	end
+end
+
+local function TickTexture(tick, style)
+	if style == 'dots' then
+		tick:SetTexture(Kit.media..'circle.tga')
+		tick:SetTexCoord(0, 1, 0, 1)
+	else
+		tick:SetColorTexture(1, 1, 1, 1)
+		tick:SetTexCoord(0, 1, 0, 1)
+	end
+	tick:SetRotation(style == 'notches' and pi / 4 or 0)
 end
 
 local function LayoutTicks(bar)
-	local px = bar.px
-	local width = bar.width
-	local wanted = max(8, floor(DB().ticks or 24))
+	local db, px, width = DB(), bar.px, bar.tapeW
+	local wanted = max(8, floor(db.ticks or 24))
 	-- Whole physical pixels between ticks, so every tick lands on the grid.
 	local spacing = max(3 * px, Snap(width / wanted, px))
 	local total = floor(width / spacing) + 3
+	local style = bar.tickStyle
+	local weight = bar.tickWeight * px
+	if style == 'bars' then weight = max(2 * px, Snap(spacing * 0.45, px)) end
 	bar.spacing, bar.tickCount = spacing, total
 	for index = 1, total do
 		local tick = bar.ticks[index]
 		if not tick then
 			tick = bar.strip:CreateTexture(nil, 'ARTWORK')
-			tick:SetColorTexture(1, 1, 1, 1)
 			bar.ticks[index] = tick
 		end
+		if tick.style ~= style then tick.style = style; TickTexture(tick, style) end
 		tick:ClearAllPoints()
-		tick:SetPoint('BOTTOMLEFT', bar.strip, 'BOTTOMLEFT', (index - 1) * spacing, 0)
-		tick:SetSize(px, TICK_MINOR * px)
-		tick.height = nil
+		local x = (index - 1) * spacing
+		if style == 'notches' then
+			tick:SetPoint('CENTER', bar.strip, 'BOTTOMLEFT', x, 0)
+		elseif style == 'dots' then
+			tick:SetPoint('BOTTOM', bar.strip, 'BOTTOMLEFT', x, 0)
+		else
+			tick:SetPoint('BOTTOMLEFT', bar.strip, 'BOTTOMLEFT', x, 0)
+			tick:SetWidth(weight)
+		end
+		tick:SetHeight(bar.minorH * px)
+		if style == 'dots' or style == 'notches' then tick:SetWidth(bar.minorH * px) end
+		tick.height, tick.y = nil, nil
 		tick:Show()
 	end
 	for index = total + 1, #bar.ticks do bar.ticks[index]:Hide() end
+end
+
+-- Where the distance sits: above or below the tape, or beside it.
+local function AnchorText(region, pos, tape, head, px)
+	region:ClearAllPoints()
+	if pos == 'below' then region:SetPoint('TOP', tape, 'BOTTOM', 0, -2 * px)
+	elseif pos == 'left' then region:SetPoint('RIGHT', tape, 'LEFT', -4 * px, 0)
+	elseif pos == 'right' then region:SetPoint('LEFT', tape, 'RIGHT', 4 * px, 0)
+	else region:SetPoint('BOTTOM', tape, 'TOP', 0, head + 2 * px) end
+end
+
+local function FontText(fontString, db, pos)
+	Kit:Font(fontString, Num(db.yardsSize, 8, 6, 16), db.yardsOutline and 'OUTLINE' or '', true, 'numbers')
+	fontString:SetJustifyH(pos == 'left' and 'RIGHT' or pos == 'right' and 'LEFT' or 'CENTER')
 end
 
 local function Layout(bar)
@@ -324,25 +456,85 @@ local function Layout(bar)
 	bar.px, bar.scale = px, scale
 	local width = Snap(max(type(rawWidth) == 'number' and rawWidth or 0, 40), px)
 	bar.width = width
-	local tapeHeight = (TICK_MAJOR + LENS_LIFT + RIPPLE) * px
-	local caretHeight = CARET_ROWS * px
-	local textHeight = db.yards and 10 or 0
-	bar:SetHeight(textHeight + caretHeight + tapeHeight + 2 * px)
+	-- The settings, in physical pixels.
+	bar.tickStyle = db.tickStyle or 'lines'
+	bar.tickWeight = Num(db.tickWeight, 1, 1, 3)
+	bar.minorH = Num(db.tickMinor, 3, 1, 12)
+	bar.majorH = max(bar.minorH, Num(db.tickMajor, 5, 1, 16))
+	bar.majorEvery = Num(db.majorEvery, 5, 2, 12)
+	bar.lift = (db.lens and db.bearing) and Num(db.lensLift, 4, 0, 10) or 0
+	if bar.tickStyle == 'dots' then
+		bar.dotMinor = (bar.tickWeight + 1) * px
+		bar.dotMajor = (bar.tickWeight + 2) * px
+	end
+	local ripple = bar.lift > 0 and RIPPLE or 0
+	local tallest = bar.tickStyle == 'dots' and bar.tickWeight + 2 or bar.majorH
+	local tapeHeight = (tallest + bar.lift + ripple) * px
+	-- The text: above, below, or beside the tape.
+	local pos = db.yardsPosition or 'above'
+	local size = Num(db.yardsSize, 8, 6, 16)
+	local textH = db.yards and size + 3 or 0
+	local side = db.yards and (pos == 'left' or pos == 'right')
+	local textW = side and Snap(size * 6.2, px) or 0
+	local avail = width - (side and textW + 4 * px or 0)
+	local tapeW = Snap(avail * min(100, max(40, db.tapeWidth or 100)) / 100, px)
+	bar.tapeW = tapeW
+	-- The marker heads.
+	local markerStyle, markerSize = db.markerStyle or 'caret', Num(db.markerSize, 3, 2, MAX_ROWS)
+	local head = LayoutMarker(bar.calm, markerStyle, markerSize, px, tapeHeight, colors.markerColor)
+	LayoutMarker(bar.alert, markerStyle, markerSize, px, tapeHeight, colors.alertColor)
+	if not db.bearing then head = 0 end
+	local x = Snap((avail - tapeW) / 2, px) + (pos == 'left' and side and textW + 4 * px or 0)
 	bar.tape:ClearAllPoints()
-	bar.tape:SetPoint('BOTTOMLEFT', bar, 'BOTTOMLEFT', 0, 0)
-	bar.tape:SetSize(width, tapeHeight)
-	bar.yards:ClearAllPoints()
-	bar.yards:SetPoint('BOTTOM', bar.tape, 'TOP', 0, caretHeight + 2 * px)
+	if side then
+		bar:SetHeight(max(textH, head + tapeHeight))
+		bar.tape:SetPoint('BOTTOMLEFT', bar, 'BOTTOMLEFT', x, 0)
+	elseif pos == 'below' then
+		bar:SetHeight(head + tapeHeight + 2 * px + textH)
+		bar.tape:SetPoint('TOPLEFT', bar, 'TOPLEFT', x, -head)
+	else
+		bar:SetHeight(textH + head + tapeHeight + 2 * px)
+		bar.tape:SetPoint('BOTTOMLEFT', bar, 'BOTTOMLEFT', x, 0)
+	end
+	bar.tape:SetSize(tapeW, tapeHeight)
+	-- Distance strings.
+	FontText(bar.yards, db, pos)
+	AnchorText(bar.yards, pos, bar.tape, head, px)
 	bar.yards:SetShown(db.yards and not bar.secret and true or false)
-	bar.layerHolder:ClearAllPoints()
-	bar.layerHolder:SetAllPoints(bar.yards)
+	PaintText(bar.yards, bar.isMelee)
+	bar.layerHolder:SetSize(side and textW or tapeW, max(textH, 1))
+	AnchorText(bar.layerHolder, pos, bar.tape, head, px)
 	bar.layerHolder:SetShown(db.yards and true or false)
+	for _, layer in ipairs(bar.layers) do
+		FontText(layer.label, db, pos)
+		layer.label:ClearAllPoints()
+		layer.label:SetPoint(pos == 'left' and 'RIGHT' or pos == 'right' and 'LEFT' or 'CENTER')
+		PaintText(layer.label, layer.melee)
+	end
+	-- Readouts are rebuilt on the next sense, in case their style changed.
+	bar.text, bar.signature = nil, nil
+	-- Behind the tape.
+	local background = db.background or 'none'
+	bar.base:ClearAllPoints()
+	bar.base:SetPoint('BOTTOMLEFT', bar.tape, 'BOTTOMLEFT', 0, 0)
+	bar.base:SetSize(tapeW, px)
+	bar.base:SetVertexColor(colors.baseColor[1], colors.baseColor[2], colors.baseColor[3], 0.8)
+	bar.base:SetShown(background == 'baseline')
+	if background == 'glass' then
+		if not bar.glass.shell then
+			bar.glass.shell = Kit:Shell(bar.glass, {surface = 'glass', radius = 3, shadow = false, alpha = 0.75})
+		end
+		bar.glass:ClearAllPoints()
+		bar.glass:SetPoint('TOPLEFT', bar.tape, 'TOPLEFT', -4 * px, 2 * px)
+		bar.glass:SetPoint('BOTTOMRIGHT', bar.tape, 'BOTTOMRIGHT', 4 * px, -2 * px)
+		bar.glass:Show()
+	else
+		bar.glass:Hide()
+	end
 	bar.marker:SetSize(1, 1)
-	LayoutCaret(bar.calm, px, tapeHeight)
-	LayoutCaret(bar.alert, px, tapeHeight)
-	for _, caret in ipairs({bar.calm, bar.alert}) do
-		caret:ClearAllPoints()
-		caret:SetPoint('BOTTOM', bar.marker, 'CENTER', 0, 0)
+	for _, marker in ipairs({bar.calm, bar.alert}) do
+		marker:ClearAllPoints()
+		marker:SetPoint('BOTTOM', bar.marker, 'CENTER', 0, 0)
 	end
 	bar.marker:SetShown(db.bearing and true or false)
 	LayoutTicks(bar)
@@ -385,15 +577,15 @@ end
 local function ScrollOf(bar)
 	if not DB().tape or Reduced() then return 0 end
 	local scroll = bar.screenX and bar.screenX * PARALLAX or 0
-	if bar.heading then scroll = scroll + bar.heading * bar.width / (pi / 2) end
+	if bar.heading then scroll = scroll + bar.heading * (bar.tapeW or bar.width) / (pi / 2) end
 	return scroll
 end
 
--- Ticks: placed by the strip (one anchor per frame), then each one's height,
+-- Ticks: placed by the strip (one anchor per frame), then each one's size,
 -- alpha and color from its distance to the marker and to the ends.
 local function Draw(bar)
-	local px, width, spacing = bar.px, bar.width, bar.spacing
-	if not (px and spacing) then return end
+	local px, width, spacing = bar.px, bar.tapeW, bar.spacing
+	if not (px and width and spacing) then return end
 	local stripX = Snap(-(ScrollOf(bar) % spacing), px)
 	if stripX ~= bar.stripX then
 		bar.stripX = stripX
@@ -406,7 +598,7 @@ local function Draw(bar)
 	if markerX ~= bar.markerX then
 		bar.markerX = markerX
 		bar.marker:ClearAllPoints()
-		-- Half a pixel right, so the odd-width caret and its hairline fill whole pixels.
+		-- Half a pixel right, so odd-width markers and their hairline fill whole pixels.
 		bar.marker:SetPoint('CENTER', bar.tape, 'BOTTOMLEFT', markerX + px / 2, 0)
 		bar.dirty = true
 	end
@@ -415,13 +607,17 @@ local function Draw(bar)
 	bar.dirty, bar.rippling = nil, moving or nil
 	-- Which tick is "major" follows the scroll, so the long ticks run past too.
 	local first = floor(ScrollOf(bar) / spacing)
-	local lens, fade = db.lens and db.bearing, EDGE_FADE * width
+	local liftMax = bar.lift or 0
+	local lens = liftMax > 0 or (db.lens and db.bearing)
+	local fade = db.edgeFade ~= false and EDGE_FADE * width or nil
 	local reach = LENS_SPAN * spacing
+	local style, every = bar.tickStyle, bar.majorEvery
+	local minorC, majorC, lensC = colors.tickColor, colors.majorColor, colors.lensColor
 	for index = 1, bar.tickCount do
 		local tick = bar.ticks[index]
 		local x = stripX + (index - 1) * spacing
-		local major = (first + index - 1) % 5 == 0
-		local edge = min(1, max(0, x / fade), max(0, (width - x) / fade))
+		local major = (first + index - 1) % every == 0
+		local edge = fade and min(1, max(0, x / fade), max(0, (width - x) / fade)) or 1
 		local near = 0
 		if lens then
 			local distance = abs(x - markerX)
@@ -430,14 +626,31 @@ local function Draw(bar)
 				near = near * near * (3 - 2 * near) -- smoothstep
 			end
 		end
-		local lift = near * LENS_LIFT
-		if moving then lift = lift + near * RIPPLE * (0.5 + 0.5 * sin(bar.wave - (index + first) * 0.9)) end
-		local height = floor((major and TICK_MAJOR or TICK_MINOR) + lift + 0.5) * px
-		if tick.height ~= height then tick.height = height; tick:SetHeight(height) end
+		local lift = near * liftMax
+		if moving and liftMax > 0 then lift = lift + near * RIPPLE * (0.5 + 0.5 * sin(bar.wave - (index + first) * 0.9)) end
+		if style == 'dots' then
+			local d = major and bar.dotMajor or bar.dotMinor
+			if tick.height ~= d then tick.height = d; tick:SetSize(d, d) end
+			local y = floor(lift + 0.5) * px
+			if tick.y ~= y then
+				tick.y = y
+				tick:ClearAllPoints()
+				tick:SetPoint('BOTTOM', bar.strip, 'BOTTOMLEFT', (index - 1) * spacing, y)
+			end
+		elseif style == 'notches' then
+			-- A square turned 45 degrees, centred on the tape's bottom edge: the clip
+			-- leaves its upper half, a triangle as tall as the tick.
+			local side = floor(((major and bar.majorH or bar.minorH) + lift) * 1.414 + 0.5) * px
+			if tick.height ~= side then tick.height = side; tick:SetSize(side, side) end
+		else
+			local height = floor((major and bar.majorH or bar.minorH) + lift + 0.5) * px
+			if tick.height ~= height then tick.height = height; tick:SetHeight(height) end
+		end
 		local base = major and 0.85 or 0.45
 		tick:SetAlpha(edge * (base + (1 - base) * near))
-		local r, g, b = major and inkR or dimR, major and inkG or dimG, major and inkB or dimB
-		tick:SetVertexColor(r + (keyR - r) * near, g + (keyG - g) * near, b + (keyB - b) * near)
+		local c = major and majorC or minorC
+		local r, g, b = c[1], c[2], c[3]
+		tick:SetVertexColor(r + (lensC[1] - r) * near, g + (lensC[2] - g) * near, b + (lensC[3] - b) * near)
 	end
 end
 
@@ -448,12 +661,15 @@ local function ShowPlain(bar, low, high)
 		for _, layer in ipairs(bar.layers) do layer.gate:Hide() end
 		bar.yards:Show()
 	end
-	local text, melee = BracketText(low, high)
+	local text, melee = YardsText(low, high)
 	if text ~= bar.text then
 		bar.text = text
 		bar.yards:SetText(text)
-		Kit:Tint(bar.yards, melee and 'red' or 'darkInk')
+		local was = bar.isMelee
+		bar.isMelee = melee
+		PaintText(bar.yards, melee)
 		Kit:ShowLed(bar.melee, melee and true or false)
+		if was then melee = false end
 		if melee and not Reduced() then Kit:Flash(bar.meleeHolder, {token = 'red', alpha = 0.6, duration = 0.3}) end
 	end
 end
@@ -468,7 +684,9 @@ local function Layer(bar, index)
 	local gate = CreateFrame('Frame', nil, bar.layerHolder)
 	gate:SetAllPoints()
 	local label = Kit:Text(gate, '', 8, 'darkInk', true, true)
-	label:SetPoint('CENTER')
+	local pos = DB().yardsPosition or 'above'
+	FontText(label, DB(), pos)
+	label:SetPoint(pos == 'left' and 'RIGHT' or pos == 'right' and 'LEFT' or 'CENTER')
 	local led = Kit:Led(gate, 5, true)
 	Kit:SetLed(led, true, 'red')
 	led:SetPoint('RIGHT', label, 'LEFT', -3, 0)
@@ -509,10 +727,10 @@ local function ShowSecret(bar, answers)
 			local layer = Layer(bar, k)
 			local range = checkers[usable[k]] and checkers[usable[k]].range
 			local below = checkers[usable[k - 1]] and checkers[usable[k - 1]].range
-			local melee = k <= count and range and range <= MELEE
-			if k > count then layer.label:SetText(format('%d+ YD', below or 0))
-			else layer.label:SetText(RangeText(range)) end
-			Kit:Tint(layer.label, melee and 'red' or 'darkInk')
+			local text, melee = YardsText(below, k <= count and range or nil)
+			layer.label:SetText(text)
+			layer.melee = melee
+			PaintText(layer.label, melee)
 			Kit:ShowLed(layer.led, melee and true or false)
 		end
 	end
@@ -806,6 +1024,34 @@ local function HidePreview()
 end
 
 local function Int(value) return format('%d', value + 0.5) end
+local function Pct(value) return format('%d%%', value + 0.5) end
+local function Pixels(value) return format('%d px', value + 0.5) end
+
+-- Presets set the look in one go; every setting can still be changed after.
+local PRESETS = {
+	spec01 = {ticks = 24, tickStyle = 'lines', tickMinor = 3, tickMajor = 5, tickWeight = 1, majorEvery = 5, lens = true,
+		lensLift = 4, edgeFade = true, tapeWidth = 100, markerStyle = 'caret', markerSize = 3, background = 'none',
+		yardsSize = 8, yardsOutline = false},
+	minimal = {ticks = 14, tickStyle = 'lines', tickMinor = 2, tickMajor = 4, tickWeight = 1, majorEvery = 7, lens = false,
+		edgeFade = true, tapeWidth = 80, markerStyle = 'line', markerSize = 2, background = 'none', yardsSize = 7,
+		yardsOutline = false},
+	instrument = {ticks = 40, tickStyle = 'notches', tickMinor = 2, tickMajor = 5, tickWeight = 1, majorEvery = 5, lens = true,
+		lensLift = 3, edgeFade = false, tapeWidth = 100, markerStyle = 'caret', markerSize = 3, background = 'baseline',
+		yardsSize = 8, yardsOutline = false},
+	bold = {ticks = 16, tickStyle = 'bars', tickMinor = 4, tickMajor = 7, tickWeight = 3, majorEvery = 4, lens = true,
+		lensLift = 5, edgeFade = true, tapeWidth = 100, markerStyle = 'diamond', markerSize = 4, background = 'glass',
+		yardsSize = 11, yardsOutline = true},
+}
+local function ApplyPreset(key)
+	local db = DB()
+	db.preset = key
+	for field, value in pairs(PRESETS[key] or {}) do db[field] = value end
+end
+
+local function Custom() return DB().colors ~= 'custom' end
+local function NoLens() return not (DB().lens and DB().bearing) end
+local function NoYards() return not DB().yards end
+local function NoMarker() return not DB().bearing end
 
 UI:RegisterPage('navbar', {title = 'Nameplate nav', order = 15.5,
 	onShow = function(area) ShowPreview(area) end,
@@ -819,16 +1065,57 @@ UI:RegisterPage('navbar', {title = 'Nameplate nav', order = 15.5,
 		{'dropdown', 'Show on', 'navbar.show', items = {{'target', 'Target'}, {'focus', 'Target and focus'},
 			{'enemies', 'Every enemy'}}},
 		{'segmented', 'Position', 'navbar.position', items = {{'above', 'On top'}, {'below', 'Below'}}},
-		{'slider', 'Ticks', 'navbar.ticks', 12, 40, 1, 'How many ticks across the plate.', format = Int},
+		{'segmented', 'Preset', 'navbar.preset', items = {{'spec01', 'SPEC-01'}, {'minimal', 'Minimal'},
+			{'instrument', 'Instrument'}, {'bold', 'Bold'}}, set = ApplyPreset, since = '0.5.2',
+			note = 'Sets ticks, marker, lens, background and text at once; change any of them after.'},
 	}},
-	{title = 'Readouts', rows = {
-		{'switch', 'Yards', 'navbar.yards', 'The nearest range the unit is within, centred above the ticks (e.g. 20 YD), or MELEE in melee reach.'},
-		{'switch', 'Marker', 'navbar.bearing', 'A caret on the tape at where the unit is across your view.', since = '0.5.1'},
-		{'switch', 'Lens', 'navbar.lens', 'Ticks near the marker lift and light, like the ticks under SPEC-01\'s slider.', since = '0.5.1'},
-		{'switch', 'Targeting you', 'navbar.facing', 'The marker turns red while the unit is targeting you.'},
+	{title = 'Distance', rows = {
+		{'switch', 'Yards', 'navbar.yards', 'The distance next to the ticks, or MELEE (red, with a lamp) in melee reach.'},
+		{'segmented', 'Shows', 'navbar.yardsStyle', items = {{'bracket', '10-28'}, {'single', 'Nearest'}, {'far', 'Farthest'}},
+			disabled = NoYards, since = '0.5.2',
+			note = 'Bracket: "< 10 YD", "10-28 YD", "> 28 YD". Nearest: the nearest range it is within. Farthest: the farthest it is beyond.'},
+		{'segmented', 'Place', 'navbar.yardsPosition', items = {{'above', 'Above'}, {'below', 'Below'}, {'left', 'Left'},
+			{'right', 'Right'}}, disabled = NoYards, since = '0.5.2'},
+		{'slider', 'Text size', 'navbar.yardsSize', 6, 16, 1, nil, format = Int, disabled = NoYards, since = '0.5.2'},
+		{'switch', 'YD suffix', 'navbar.yardsSuffix', 'Print "YD" after the number.', disabled = NoYards, since = '0.5.2'},
+		{'switch', 'Outline', 'navbar.yardsOutline', 'An outline around the digits, for bright ground.', disabled = NoYards, since = '0.5.2'},
+	}},
+	{title = 'Ticks', rows = {
+		{'segmented', 'Style', 'navbar.tickStyle', items = {{'lines', 'Lines'}, {'dots', 'Dots'}, {'notches', 'Notches'},
+			{'bars', 'Bars'}}, since = '0.5.2'},
+		{'slider', 'Ticks', 'navbar.ticks', 8, 48, 1, 'How many ticks across the tape.', format = Int},
+		{'slider', 'Minor height', 'navbar.tickMinor', 1, 12, 1, nil, format = Pixels, since = '0.5.2'},
+		{'slider', 'Major height', 'navbar.tickMajor', 1, 16, 1, nil, format = Pixels, since = '0.5.2'},
+		{'slider', 'Weight', 'navbar.tickWeight', 1, 3, 1, 'Line width, or dot size.', format = Pixels, since = '0.5.2'},
+		{'slider', 'Major every', 'navbar.majorEvery', 2, 12, 1, 'Every so many ticks is a major one.', format = Int, since = '0.5.2'},
+		{'slider', 'Tape width', 'navbar.tapeWidth', 40, 100, 5, 'Of the plate.', format = Pct, since = '0.5.2'},
+		{'switch', 'Fade the ends', 'navbar.edgeFade', 'Ticks fade out toward both ends of the tape.', since = '0.5.2'},
+		{'segmented', 'Behind', 'navbar.background', items = {{'none', 'Nothing'}, {'baseline', 'Baseline'}, {'glass', 'Glass'}},
+			since = '0.5.2'},
 		{'switch', 'Tape motion', 'navbar.tape', 'The ticks run past as the unit or your view moves, and ripple with the unit\'s speed.'},
 	}},
+	{title = 'Marker', rows = {
+		{'switch', 'Marker', 'navbar.bearing', 'A marker on the tape at where the unit is across your view.', since = '0.5.1'},
+		{'segmented', 'Style', 'navbar.markerStyle', items = {{'caret', 'Caret'}, {'line', 'Line'}, {'dot', 'Dot'},
+			{'diamond', 'Diamond'}}, disabled = NoMarker, since = '0.5.2'},
+		{'slider', 'Size', 'navbar.markerSize', 2, 6, 1, nil, format = Int, disabled = NoMarker, since = '0.5.2'},
+		{'switch', 'Targeting you', 'navbar.facing', 'The marker changes color while the unit is targeting you.'},
+		{'switch', 'Lens', 'navbar.lens', 'Ticks near the marker lift and light, like the ticks under SPEC-01\'s slider.', since = '0.5.1'},
+		{'slider', 'Lens lift', 'navbar.lensLift', 0, 10, 1, '0 lights the ticks without lifting them.', format = Pixels,
+			hidden = NoLens, since = '0.5.2'},
+	}},
+	{title = 'Colors', rows = {
+		{'segmented', 'Colors', 'navbar.colors', items = {{'theme', 'Theme'}, {'custom', 'Custom'}}, since = '0.5.2',
+			note = 'Theme follows the finish and key color; Custom uses the colors below.'},
+		{'color', 'Ticks', 'navbar.tickColor', hidden = Custom, since = '0.5.2'},
+		{'color', 'Major ticks', 'navbar.majorColor', hidden = Custom, since = '0.5.2'},
+		{'color', 'Lens', 'navbar.lensColor', hidden = Custom, since = '0.5.2'},
+		{'color', 'Marker', 'navbar.markerColor', hidden = Custom, since = '0.5.2'},
+		{'color', 'Targeting you', 'navbar.alertColor', hidden = Custom, since = '0.5.2'},
+		{'color', 'Distance', 'navbar.yardsColor', hidden = Custom, since = '0.5.2'},
+		{'color', 'Baseline', 'navbar.baseColor', hidden = Custom, since = '0.5.2'},
+	}},
 	{title = 'What the game allows', rows = {
-		{'note', 'Distance comes in steps, from whether your own spells reach the unit (and, out of combat, the duel and follow distances), so the tape shows a bracket such as 20-25 YD, not exact yards. When the game keeps those answers secret, the right bracket is still shown, straight from the answers.\n\nAn enemy\'s facing and position can\'t be read by any addon. The marker shows where the plate is across your screen, and the ticks move with it.'},
+		{'note', 'Distance comes in steps, from whether your own spells reach the unit (and, out of combat, the duel and follow distances), so the tape shows a bracket such as 10-28 YD, not exact yards. When the game keeps those answers secret, the right bracket is still shown, straight from the answers.\n\nAn enemy\'s facing and position can\'t be read by any addon. The marker shows where the plate is across your screen, and the ticks move with it.'},
 	}},
 }})
