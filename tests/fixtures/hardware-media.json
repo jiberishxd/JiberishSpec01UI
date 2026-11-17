@@ -285,8 +285,8 @@
         512,
         256
       ],
-      "sha256": "db785edb7efc71b4a375bf57130e77190c5cf2685441199405e56886b8b12047",
-      "bgraSha256": "4d3dd8f70ceea7ae0fa4a971d307c0c4e01a0aab2e5c132f072f291e97198f38"
+      "sha256": "32afff7dd7a8bc5eb5b25adbec12168d2b1a307d151be99f8fb74ef37430dc0f",
+      "bgraSha256": "d96290d0f698eec4adba3c32dbef719f1c6cf1c305e42510c18c42aa16a5a42a"
     }
   ],
   "icons": [
@@ -2281,6 +2281,15 @@
     "backpack",
     "bag",
     "reagent",
-    "key"
+    "key",
+    "mount",
+    "hearth",
+    "drawer",
+    "move",
+    "calendar",
+    "meter",
+    "lock",
+    "reload",
+    "macro"
   ]
 }

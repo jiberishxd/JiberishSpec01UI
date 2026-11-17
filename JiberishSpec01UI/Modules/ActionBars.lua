@@ -101,6 +101,17 @@ UI:RegisterDefaults('actionbars', {
 	-- The console's look: SPEC-01 hardware (keys in slots, printed banks, screws,
 	-- page LCD) or the earlier classic look.
 	look = 'hardware',
+	-- The deck along the console's base: the meters' sources and style, the
+	-- stats strip (six chosen readouts), the function keys (slots 1-4 left,
+	-- 5-8 right) and the header panels.
+	barSource = 'auto', barSecond = 'none', barStyle = 'dots', restedOverlay = true, questPreview = false,
+	meterColors = 'theme', xpColor = {0.94, 0.25, 0.2}, restedColor = {0.3, 0.55, 1}, repColor = {0.2, 0.75, 0.35},
+	honorColor = {0.95, 0.6, 0.15}, previewColor = {1, 0.8, 0.2},
+	stats = true, statsSize = 'compact', stat1 = 'xph', stat2 = 'ttl', stat3 = 'levelTime', stat4 = 'session',
+	stat5 = 'rested', stat6 = 'kills',
+	fnKeys = true, fnSize = 22, fn1 = 'mount', fn2 = 'hearth', fn3 = 'map', fn4 = 'bags', fn5 = 'drawer', fn6 = 'move',
+	fn7 = 'calendar', fn8 = 'menu', fnMacro = '',
+	panelZone = true, panelGold = true, panelDurability = true, panelLatency = true,
 	bar1 = BarDefaults(5), bar2 = BarDefaults(5), bar3 = BarDefaults(5), bar4 = BarDefaults(5), bar5 = BarDefaults(5),
 	barPet = BarDefaults(4), barStance = BarDefaults(4),
 })
@@ -158,6 +169,9 @@ end
 -- file's main chunk stays well under Lua's limit of 200 locals.
 local HW = {}
 function HW.On() return DB().look ~= 'classic' end
+-- The console's deck (stats strip, meters, function keys, header panels): one
+-- table, filled in near the end of the file.
+local Deck = {}
 
 -- The slot color (--slot in the reference) and the lit line under it.
 HW.SLOT = {0.149, 0.149, 0.141}
@@ -1458,55 +1472,8 @@ local function Readout(text)
 	return text
 end
 
-local function UpdateXP()
-	if not xp then return end
-	if not DB().xpbar then xp:Hide() return end
-	local readout = console and console.readout
-	local ok = pcall(function()
-		local level = UnitLevel('player')
-		local cap = (GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion()) or MAX_PLAYER_LEVEL or level
-		local current, total = UnitXP('player'), UnitXPMax('player')
-		local plain = not (IsSecret(level) or IsSecret(cap) or IsSecret(current) or IsSecret(total))
-		if plain and level < cap and total and total > 0 and not (IsXPUserDisabled and IsXPUserDisabled()) then
-			xp.bar:SetMinMaxValues(0, total)
-			xp.bar:SetValue(current, Smooth())
-			Kit:Tint(xp.bar, 'lamp')
-			local rested = GetXPExhaustion and GetXPExhaustion()
-			xp.tip = {format('Level %d  %d / %d (%.1f%%)', level, current, total, current / total * 100)}
-			if not IsSecret(rested) and rested and rested > 0 then xp.tip[2] = format('Rested %d', rested) end
-			if readout then readout:SetText(Readout(format('LV %d  %4.1f%%', level, current / total * 100))) end
-			HW.MeterText(xp, 'XP', format('%4.1f%%', current / total * 100))
-			xp:SetShown(DB().xpbar)
-			return
-		end
-		local data = C_Reputation and C_Reputation.GetWatchedFactionData and C_Reputation.GetWatchedFactionData()
-		local name, low, high, value
-		if type(data) == 'table' then
-			name, low, high, value = data.name, data.currentReactionThreshold, data.nextReactionThreshold, data.currentStanding
-		elseif GetWatchedFactionInfo then
-			local standing
-			name, standing, low, high, value = GetWatchedFactionInfo()
-		end
-		if not IsSecret(name) and not IsSecret(low) and not IsSecret(high) and not IsSecret(value) and name and low and high and value then
-			local span = max(high - low, 1)
-			xp.bar:SetMinMaxValues(0, span)
-			xp.bar:SetValue(min(max(value - low, 0), span), Smooth())
-			Kit:Tint(xp.bar, 'green')
-			xp.tip = {format('%s  %d / %d', name, value - low, span)}
-			if readout then readout:SetText(Readout(format('LV %s  REP', plain and level or '??'))) end
-			HW.MeterText(xp, 'Rep', format('%4.1f%%', min(max(value - low, 0), span) / span * 100))
-			xp:SetShown(DB().xpbar)
-			return
-		end
-		xp.tip = nil
-		if readout then readout:SetText(Readout(plain and format('LV %d  MAX', level) or 'LV ??')) end
-		HW.MeterText(xp, 'XP', 'MAX')
-		xp.bar:SetMinMaxValues(0, 1)
-		xp.bar:SetValue(1)
-		Kit:Tint(xp.bar, 'dim')
-	end)
-	if not ok and readout then readout:SetText('') end
-end
+-- Experience, reputation or honor along the base, and the console's LCD: the deck does it.
+local function UpdateXP() Deck.UpdateMeters() end
 
 -- The leave key: vehicles and flight paths.
 local function UpdateLeave()
@@ -1583,12 +1550,17 @@ local function LayoutConsole()
 	local pw, ph = Measure(parts.player)
 	local tw, th = Measure(parts.target)
 	local column = max(pw, tw)
+	-- Function keys sit at the top of the side columns; with no docked frames
+	-- they make narrow columns of their own beside the banks.
+	local fnW, fnH, fnColumns = Deck.FnBlock(column > 0 and column or nil)
+	if column == 0 and fnW > 0 then column = fnW end
+	local fnBand = fnH > 0 and fnH + 8 or 0
 	local sideWidth = column > 0 and column + COL_GAP or 0
-	local body = max(height, max(ph, th) > 0 and max(ph, th) + AUX or 0)
+	local body = max(height, max(ph, th) > 0 and fnBand + max(ph, th) + AUX or fnBand)
 	local _, playerCastHeight = Measure(parts.playerCast)
 	local _, targetCastHeight = Measure(parts.targetCast)
 	local castHeight = max(playerCastHeight, targetCastHeight)
-	local xpHeight = DB().xpbar and XPHeight() + ROW_GAP or 0
+	local xpHeight = Deck.BottomHeight()
 	console:SetSize(PAD * 2 + width + sideWidth * 2, HEAD + body + (castHeight > 0 and castHeight + ROW_GAP or 0) + xpHeight + PAD)
 	local left = PAD + sideWidth
 
@@ -1618,9 +1590,10 @@ local function LayoutConsole()
 	end
 	-- Each frame is centred on the keyboard's height when it is shorter (a bar or
 	-- square shape), never so low that its class lamps or auras leave the body.
+	-- Below the function keys, when there are any.
 	local function Drop(frameHeight)
-		if frameHeight <= 0 then return 0 end
-		return max(0, min((height - frameHeight) / 2, body - frameHeight - AUX))
+		if frameHeight <= 0 then return fnBand end
+		return fnBand + max(0, min((height - fnBand - frameHeight) / 2, body - fnBand - frameHeight - AUX))
 	end
 	Dock(parts.player, 'uf.player', 'TOPLEFT', PAD + (column - pw) / 2, -HEAD - Drop(ph))
 	Dock(parts.target, 'uf.target', 'TOPRIGHT', -PAD - (column - tw) / 2, -HEAD - Drop(th))
@@ -1629,6 +1602,8 @@ local function LayoutConsole()
 		console.targetSlot:ClearAllPoints()
 		console.targetSlot:SetPoint('TOPRIGHT', console, 'TOPRIGHT', -PAD - (column - tw) / 2, -HEAD - Drop(th))
 	end
+	if fnW > 0 then Deck.PlaceFn(console, PAD + (column - fnW) / 2, PAD + (column - fnW) / 2, -HEAD, fnColumns)
+	else Deck.PlaceFn(console, PAD, PAD, -HEAD, 1) end
 	local castWidth = (width - 8) / 2
 	local castY = -HEAD - body - ROW_GAP
 	for index, cast in ipairs({parts.playerCast or false, parts.targetCast or false}) do
@@ -1643,11 +1618,19 @@ local function LayoutConsole()
 			slot:SetPoint('TOPLEFT', console, 'TOPLEFT', x, castY)
 		end
 	end
-	if xp then
-		xp:SetShown(DB().xpbar and true or false)
-		HW.PlaceMeter(xp, console, PAD, PAD, PAD, XPHeight())
-	end
+	Deck.PlaceBottom(console, PAD)
 	if console.lcd then console.lcd:SetShown(DB().readout ~= 'off') end
+	-- Header panels, leftward from the page lamps (or the LCD) while they fit.
+	if console.panels then
+		local anchor = console.pager or console.lcd
+		local used = PAD + (console.lcd:IsShown() and console.lcd:GetWidth() or 0) + (console.pager and console.pager:GetWidth() + 10 or 0) + 8
+		local last = Deck.PlacePanels(console, anchor, used)
+		console.title:SetPoint('RIGHT', last, 'LEFT', -8, 0)
+		if leave then
+			leave:ClearAllPoints()
+			leave:SetPoint('RIGHT', last, 'LEFT', -8, 0)
+		end
+	end
 	-- Pet and stance modules sit on the console's top edge, tucked under it.
 	if stanceModule then
 		stanceModule:ClearAllPoints()
@@ -1699,6 +1682,9 @@ local function BuildConsole()
 	console.castSlots = {Slot(console, ''), Slot(console, '')}
 	for _, slot in ipairs(console.castSlots) do slot:Hide() end
 	xp = BuildXP(console)
+	Deck.BuildBottom(console)
+	Deck.BuildFn(console)
+	Deck.BuildPanels(console)
 	if console.pager and BARS[1].header then HW.ShowPage(console.pager, BARS[1].header:GetAttribute('actionpage') or 1) end
 	UI:RegisterMover(console, 'ab.console', 'Console', {'BOTTOM', 0, 12})
 end
@@ -1711,12 +1697,9 @@ local function LayoutFree()
 		local bar, device = BARS[row], BARS[row].device
 		if device then
 			local width, height = LayoutBar(bar, BarSize(row, KeySize()), Spacing(row), Shown(row), PerRow(row), false)
-			local extra = (row == 1 and xp and DB().xpbar) and XPHeight() + ROW_GAP or 0
+			local extra = (row == 1 and xp) and Deck.BottomHeight() or 0
 			device:SetSize(width + PAD * 2, height + PAD * 2 + extra)
-			if row == 1 and xp then
-				xp:SetShown(DB().xpbar and true or false)
-				HW.PlaceMeter(xp, device, PAD, PAD, PAD, XPHeight())
-			end
+			if row == 1 and xp then Deck.PlaceBottom(device, PAD) end
 		end
 	end
 end
@@ -1734,7 +1717,8 @@ local function BuildFree()
 			HW.Decorate(device, 10)
 			if row == 1 then
 				xp = BuildXP(device)
-				HW.PlaceMeter(xp, device, PAD, PAD, PAD, XPHeight())
+				Deck.BuildBottom(device)
+				Deck.PlaceBottom(device, PAD)
 				BuildLeave(device)
 				leave:SetPoint('BOTTOMRIGHT', device, 'TOPRIGHT', -PAD, 4)
 			end
@@ -1880,9 +1864,11 @@ local RepaintMenu, LayoutMenu, BuildMenu
 do
 local MENU_ICONS = {'character', 'spellbook', 'talents', 'professions', 'achievements', 'legacy', 'quest', 'guild',
 	'social', 'finder', 'journal', 'collections', 'menu', 'help', 'store', 'house',
-	'map', 'pvp', 'backpack', 'bag', 'reagent', 'key'}
+	'map', 'pvp', 'backpack', 'bag', 'reagent', 'key', 'mount', 'hearth',
+	'drawer', 'move', 'calendar', 'meter', 'lock', 'reload', 'macro'}
 local MENU_INDEX = {}
 for index, name in ipairs(MENU_ICONS) do MENU_INDEX[name] = index - 1 end
+Deck.MENU_INDEX = MENU_INDEX -- the console's function keys use the same glyphs
 local GLYPH_OF = {
 	CharacterMicroButton = 'character', SpellbookMicroButton = 'spellbook', PlayerSpellsMicroButton = 'talents',
 	ProfessionMicroButton = 'professions', TalentMicroButton = 'talents', AchievementMicroButton = 'achievements',
@@ -2388,6 +2374,1065 @@ local function OnEvent(_, event, ...)
 	end
 end
 
+-- The console's deck --------------------------------------------------------------------
+-- Everything around the keys that is read rather than pressed, and the keys
+-- that open things:
+--   * Meters along the base: experience, reputation or honor (or Auto: XP
+--     while levelling, reputation at the cap), one or two stacked, as LED
+--     dots, a flat bar with a lit edge, segments or a slim hairline, with
+--     rested XP (and optionally the XP of quests ready to hand in) as lighter
+--     overlays. Click to cycle the source, right-click for reputations.
+--   * A stats strip above them: up to six small LCD readouts the player picks
+--     (XP per hour, time to level, time played, session, rested, kills to
+--     level, gold per hour, reputation, honor, ...).
+--   * Function keys at the top of the side columns: mount, hearthstone, map,
+--     spellbook, bags, drawer, move UI, calendar, ..., or a macro by name.
+--     They are our own secure buttons, set up out of combat only.
+--   * Small LCD panels in the header: zone and coordinates, gold, durability
+--     and latency.
+-- All values read here are plain or skipped: nothing secret is compared.
+-- The deck runs inside a function of its own: its locals count against that
+-- function's limit, not the main chunk's.
+;(function()
+local GetMoney, GetXPExhaustion, UnitXP, UnitXPMax, UnitLevel = GetMoney, GetXPExhaustion, UnitXP, UnitXPMax, UnitLevel
+local ceil = math.ceil
+
+local function Plain(value) if IsSecret(value) then return nil end return value end
+local function Call(func, ...)
+	if type(func) ~= 'function' then return nil end
+	local ok, a, b, c, d, e = pcall(func, ...)
+	if not ok then return nil end
+	return Plain(a), Plain(b), Plain(c), Plain(d), Plain(e)
+end
+
+-- Formatting ------------------------------------------------------------------------------
+local function Short(value)
+	if not value then return '--' end
+	if value >= 1e6 then return format('%.1fM', value / 1e6) end
+	if value >= 1e4 then return format('%.0fK', value / 1e3) end
+	if value >= 1e3 then return format('%.1fK', value / 1e3) end
+	return format('%d', value)
+end
+
+local function Duration(seconds)
+	if not seconds or seconds ~= seconds or seconds == math.huge or seconds < 0 then return '--' end
+	seconds = floor(seconds)
+	if seconds >= 86400 then return format('%dD %02dH', floor(seconds / 86400), floor(seconds % 86400 / 3600)) end
+	if seconds >= 3600 then return format('%dH %02dM', floor(seconds / 3600), floor(seconds % 3600 / 60)) end
+	if seconds >= 60 then return format('%dM %02dS', floor(seconds / 60), seconds % 60) end
+	return format('%dS', seconds)
+end
+
+local function Gold(copper)
+	if not copper then return '--' end
+	local sign = copper < 0 and '-' or ''
+	copper = math.abs(copper)
+	local gold = floor(copper / 10000)
+	if gold >= 1e6 then return format('%s%.1fMG', sign, gold / 1e6) end
+	if gold >= 1e4 then return format('%s%.0fKG', sign, gold / 1e3) end
+	if gold > 0 then return format('%s%dG', sign, gold) end
+	return format('%s%dS', sign, floor(copper / 100))
+end
+
+-- Session numbers ---------------------------------------------------------------------------
+local session = {start = GetTime(), xp = 0, questXP = 0, kills = 0}
+local last = {}
+local played = {}
+local questUntil = 0
+
+local function Level()
+	local level = Plain(UnitLevel('player'))
+	local cap = Call(GetMaxLevelForPlayerExpansion) or Plain(MAX_PLAYER_LEVEL) or level
+	return level, cap
+end
+
+local function XP()
+	local current, total = Plain(UnitXP('player')), Plain(UnitXPMax('player'))
+	local disabled = Call(IsXPUserDisabled)
+	local level, cap = Level()
+	if not (current and total and level and cap) or total <= 0 then return nil end
+	if level >= cap or disabled then return nil end
+	return current, total, level
+end
+
+local function TrackXP()
+	local current, total = Plain(UnitXP('player')), Plain(UnitXPMax('player'))
+	local level = Plain(UnitLevel('player'))
+	if not (current and total and level) then return end
+	if last.xp and last.level then
+		local gained
+		if level == last.level then gained = current - last.xp
+		elseif level > last.level then
+			gained = (last.max - last.xp) + current
+			-- A new level: its played time starts now.
+			played.level, played.at = 0, GetTime()
+		end
+		if gained and gained > 0 then session.xp = session.xp + gained end
+	end
+	last.xp, last.max, last.level = current, total, level
+end
+
+local function Hours() return max((GetTime() - session.start) / 3600, 1 / 3600) end
+local function Rate() return session.xp > 0 and session.xp / Hours() or nil end
+local function Remaining()
+	local current, total = XP()
+	return current and (total - current) or nil
+end
+local function KillXP()
+	local other = session.xp - session.questXP
+	if session.kills <= 0 or other <= 0 then return nil end
+	return other / session.kills
+end
+
+-- Time played: asked once, quietly. The chat frames are taken off the answer
+-- while our request is out, so it prints nowhere; they get it back right after.
+local quieted = {}
+local function Quiet(on)
+	if on then
+		for index = 1, (NUM_CHAT_WINDOWS or 10) do
+			local frame = _G['ChatFrame'..index]
+			if frame and frame.IsEventRegistered and frame:IsEventRegistered('TIME_PLAYED_MSG') then
+				frame:UnregisterEvent('TIME_PLAYED_MSG')
+				quieted[#quieted + 1] = frame
+			end
+		end
+	else
+		for index, frame in ipairs(quieted) do
+			frame:RegisterEvent('TIME_PLAYED_MSG')
+			quieted[index] = nil
+		end
+	end
+end
+
+local function AskPlayed()
+	if played.asked or not RequestTimePlayed then return end
+	played.asked = true
+	Quiet(true)
+	pcall(RequestTimePlayed)
+	-- Never hold the chat frames for long, answered or not.
+	C_Timer.After(5, function() Quiet(false) end)
+end
+
+local function Played()
+	if not played.total then return nil, nil end
+	local since = GetTime() - played.at
+	return played.total + since, played.level + since
+end
+
+-- Reputation and honor ------------------------------------------------------------------------
+local function Reputation()
+	local name, low, high, value, reaction, factionID
+	local data = C_Reputation and C_Reputation.GetWatchedFactionData and Call(C_Reputation.GetWatchedFactionData)
+	if type(data) == 'table' then
+		name, reaction, factionID = Plain(data.name), Plain(data.reaction), Plain(data.factionID)
+		low, high, value = Plain(data.currentReactionThreshold), Plain(data.nextReactionThreshold), Plain(data.currentStanding)
+	elseif GetWatchedFactionInfo then
+		name, reaction, low, high, value = Call(GetWatchedFactionInfo)
+	end
+	if not (name and low and high and value) then return nil end
+	local standing = reaction and _G['FACTION_STANDING_LABEL'..reaction]
+	-- Renown factions read their renown level and progress to the next one.
+	if factionID and C_Reputation.IsMajorFaction and Call(C_Reputation.IsMajorFaction, factionID) and C_MajorFactions then
+		local major = Call(C_MajorFactions.GetMajorFactionData, factionID)
+		if type(major) == 'table' and Plain(major.renownLevelThreshold) and Plain(major.renownReputationEarned) then
+			return {name = name, value = major.renownReputationEarned, max = max(major.renownLevelThreshold, 1),
+				standing = format('Renown %d', Plain(major.renownLevel) or 0)}
+		end
+	end
+	return {name = name, value = min(max(value - low, 0), max(high - low, 1)), max = max(high - low, 1),
+		standing = type(standing) == 'string' and standing or ''}
+end
+
+local function Honor()
+	if not (UnitHonor and UnitHonorMax) then return nil end
+	local value, total, level = Call(UnitHonor, 'player'), Call(UnitHonorMax, 'player'), Call(UnitHonorLevel, 'player')
+	if not (value and total) or total <= 0 then return nil end
+	return {value = value, max = total, level = level}
+end
+
+-- The XP of quests in the log that are ready to hand in.
+local function QuestPreview()
+	if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries and GetQuestLogRewardXP) then return 0 end
+	local total = 0
+	local count = Call(C_QuestLog.GetNumQuestLogEntries) or 0
+	for index = 1, count do
+		local info = Call(C_QuestLog.GetInfo, index)
+		local id = type(info) == 'table' and not info.isHeader and Plain(info.questID)
+		if id and Call(C_QuestLog.ReadyForTurnIn, id) then total = total + (Call(GetQuestLogRewardXP, id) or 0) end
+	end
+	return total
+end
+
+-- Stats readouts ------------------------------------------------------------------------------
+-- Each: a printed label and a reader returning the LCD text and, when it has
+-- something to say, the lamp's color.
+local STATS = {
+	level = {'Level', function()
+		local current, total, level = XP()
+		if current then return format('%d  %.1f%%', level, current / total * 100), 'lamp' end
+		local plain = Level()
+		return plain and format('%d  MAX', plain) or '--'
+	end},
+	xph = {'XP/hr', function()
+		if not XP() then return 'MAX' end
+		local rate = Rate()
+		return rate and Short(rate) or '--', rate and 'green' or nil
+	end},
+	ttl = {'To level', function()
+		local left, rate = Remaining(), Rate()
+		if not left then return 'MAX' end
+		return rate and Duration(left / rate * 3600) or '--', rate and 'lamp' or nil
+	end},
+	left = {'XP left', function()
+		local left = Remaining()
+		return left and Short(left) or 'MAX'
+	end},
+	kills = {'Kills to lv', function()
+		local left, each = Remaining(), KillXP()
+		if not left then return 'MAX' end
+		return each and format('%d', ceil(left / each)) or '--', each and 'amber' or nil
+	end},
+	rested = {'Rested', function()
+		local current, total = XP()
+		local rested = Plain(Call(GetXPExhaustion))
+		if not (current and rested) or rested <= 0 then return '0%' end
+		return format('%d%%', floor(rested / total * 100 + 0.5)), 'blue'
+	end},
+	quests = {'Quest XP', function()
+		if session.xp <= 0 then return '--' end
+		return format('%d%%', floor(session.questXP / session.xp * 100 + 0.5)), 'green'
+	end},
+	played = {'Played', function()
+		local total = Played()
+		return Duration(total)
+	end},
+	levelTime = {'This level', function()
+		local _, level = Played()
+		return Duration(level)
+	end},
+	session = {'Session', function() return Duration(GetTime() - session.start), 'green' end},
+	goldph = {'Gold/hr', function()
+		local now = Plain(GetMoney())
+		if not (now and session.money) then return '--' end
+		local gained = now - session.money
+		return Gold(gained / Hours()), gained > 0 and 'amber' or nil
+	end},
+	gold = {'Gold', function() return Gold(Plain(GetMoney())) end},
+	rep = {'Rep', function()
+		local rep = Reputation()
+		if not rep then return '--' end
+		return format('%s %d%%', strupper(strsub(rep.standing, 1, 8)), floor(rep.value / rep.max * 100)), 'green'
+	end},
+	honor = {'Honor', function()
+		local honor = Honor()
+		if not honor then return '--' end
+		return format('%s %d%%', honor.level and tostring(honor.level) or '', floor(honor.value / honor.max * 100)), 'red'
+	end},
+	fps = {'FPS', function() return format('%d', floor((Call(GetFramerate) or 0) + 0.5)) end},
+	clock = {'Clock', function() return date('%H:%M') end},
+}
+Deck.STAT_ITEMS = {{'none', 'None'}, {'xph', 'XP per hour'}, {'ttl', 'Time to level'}, {'left', 'XP left'},
+	{'kills', 'Kills to level'}, {'rested', 'Rested XP'}, {'level', 'Level and %'}, {'quests', 'Quest share of XP'},
+	{'levelTime', 'Played this level'}, {'played', 'Played in total'}, {'session', 'Session time'},
+	{'goldph', 'Gold per hour'}, {'gold', 'Gold'}, {'rep', 'Reputation'}, {'honor', 'Honor'}, {'fps', 'Frame rate'},
+	{'clock', 'Clock'}}
+local STAT_SLOTS = 6
+
+local function StatsWanted()
+	local db = DB()
+	if db.stats == false then return false end
+	for index = 1, STAT_SLOTS do
+		local id = db['stat'..index]
+		if id and STATS[id] then return true end
+	end
+	return false
+end
+
+-- Meters ------------------------------------------------------------------------------------
+local SOURCES = {'auto', 'xp', 'rep', 'honor'}
+Deck.SOURCE_ITEMS = {{'auto', 'Auto'}, {'xp', 'Experience'}, {'rep', 'Reputation'}, {'honor', 'Honor'}}
+local DEFAULT_COLOR = {xp = 'lamp', rested = 'blue', rep = 'green', honor = 'red', preview = 'amber'}
+
+local function MeterRGB(kind)
+	local db = DB()
+	if db.meterColors == 'custom' then
+		local value = db[kind..'Color']
+		if type(value) == 'table' then return ColorOf(value, 1, 1, 1) end
+	end
+	return Kit:RGB(DEFAULT_COLOR[kind] or 'lamp')
+end
+
+-- What a meter shows: the source asked for, resolved.
+local function Resolve(source)
+	if source == 'auto' or not source then
+		if XP() then return 'xp' end
+		if Reputation() then return 'rep' end
+		if Honor() then return 'honor' end
+		return 'xp'
+	end
+	return source
+end
+
+-- A meter's reading: value, max, legend, LCD text, color kind, tooltip lines,
+-- rested and preview amounts (XP only).
+local function Read(source)
+	source = Resolve(source)
+	if source == 'xp' then
+		local current, total, level = XP()
+		if not current then
+			local plain = Level()
+			return {value = 1, max = 1, legend = 'XP', text = 'MAX', kind = 'xp', dim = true,
+				tip = {plain and format('Level %d (max)', plain) or 'Level max'}}
+		end
+		local rested = Plain(Call(GetXPExhaustion)) or 0
+		local reading = {value = current, max = total, legend = 'XP', text = format('%4.1f%%', current / total * 100),
+			kind = 'xp', rested = rested, level = level}
+		reading.tip = {format('Level %d  %s / %s  (%.1f%%)', level, Short(current), Short(total), current / total * 100),
+			format('%s to level', Short(total - current))}
+		if rested > 0 then reading.tip[#reading.tip + 1] = format('Rested %s (%d%% of the level)', Short(rested), floor(rested / total * 100)) end
+		local rate = Rate()
+		if rate then reading.tip[#reading.tip + 1] = format('%s XP per hour, level in %s', Short(rate), Duration((total - current) / rate * 3600)) end
+		if DB().questPreview then
+			reading.preview = QuestPreview()
+			if reading.preview > 0 then reading.tip[#reading.tip + 1] = format('Quests ready to hand in: %s XP', Short(reading.preview)) end
+		end
+		return reading
+	elseif source == 'rep' then
+		local rep = Reputation()
+		if not rep then return {value = 0, max = 1, legend = 'Rep', text = '--', kind = 'rep', dim = true, tip = {'No reputation watched'}} end
+		return {value = rep.value, max = rep.max, legend = 'Rep', text = format('%4.1f%%', rep.value / rep.max * 100), kind = 'rep',
+			tip = {rep.name, format('%s  %s / %s', rep.standing, Short(rep.value), Short(rep.max))}}
+	else
+		local honor = Honor()
+		if not honor then return {value = 0, max = 1, legend = 'Hon', text = '--', kind = 'honor', dim = true, tip = {'No honor'}} end
+		return {value = honor.value, max = honor.max, legend = 'Hon', text = format('%4.1f%%', honor.value / honor.max * 100),
+			kind = 'honor', tip = {format('Honor level %s', honor.level or '?'), format('%s / %s', Short(honor.value), Short(honor.max))}}
+	end
+end
+Deck.Read = Read
+
+local function MeterHeight()
+	return DB().barStyle == 'slim' and 3 or XPHeight()
+end
+
+-- A style on a meter's bar: dots (perforated), flat with a lit edge,
+-- segments, or a slim hairline.
+local function Style(meter)
+	local style = DB().barStyle or 'dots'
+	local bar = meter.bar
+	local onDark = Surface() == 'dark'
+	if style == 'dots' then
+		Kit:Perforate(bar, onDark and 'glass' or 'track', onDark and 'darkEdge' or nil)
+		bar:SetStatusBarTexture([[Interface\Buttons\WHITE8X8]])
+	else
+		if bar.kitCover then bar.kitPerforated = false; bar.kitCover:Hide(); bar.kitUnder:Hide() end
+		bar:SetStatusBarTexture(Kit.media..'bar-flat.tga')
+	end
+	local fill = bar:GetStatusBarTexture()
+	if not meter.edge then
+		meter.edge = bar:CreateTexture(nil, 'OVERLAY', nil, 2)
+		meter.edge:SetColorTexture(1, 1, 1, 0.9)
+		meter.edge:SetBlendMode('ADD')
+		meter.seams = {}
+	end
+	meter.edge:ClearAllPoints()
+	meter.edge:SetWidth(UI.Pixel and UI.Pixel.Px(bar, 1) or 1)
+	meter.edge:SetPoint('TOP', fill, 'TOPRIGHT', 0, 0)
+	meter.edge:SetPoint('BOTTOM', fill, 'BOTTOMRIGHT', 0, 0)
+	meter.edge:SetShown(style == 'flat' or style == 'slim')
+	-- Segments: hairline seams in the track's color across the fill.
+	local width = bar:GetWidth()
+	local count = (style == 'segments' and not IsSecret(width) and width and width > 0) and floor(width / 7) or 0
+	local tr, tg, tb = Kit:RGB(onDark and 'glass' or 'track')
+	for index = 1, max(count, #meter.seams) do
+		local seam = meter.seams[index]
+		if index <= count then
+			if not seam then
+				seam = bar:CreateTexture(nil, 'OVERLAY', nil, 1)
+				meter.seams[index] = seam
+			end
+			seam:SetColorTexture(tr, tg, tb, 1)
+			seam:ClearAllPoints()
+			seam:SetSize(1, 1)
+			seam:SetPoint('TOP', bar, 'TOPLEFT', index * width / (count + 1), 0)
+			seam:SetPoint('BOTTOM', bar, 'BOTTOMLEFT', index * width / (count + 1), 0)
+			seam:Show()
+		elseif seam then
+			seam:Hide()
+		end
+	end
+	meter.shell:SetAlpha(style == 'slim' and 0.6 or 1)
+end
+
+-- Overlays from the fill's end: rested XP, quests ready.
+local function Overlay(meter, key, from, amount, kind, alpha)
+	local texture = meter[key]
+	if not texture then
+		texture = meter.bar:CreateTexture(nil, 'BACKGROUND', nil, key == 'restedFill' and 3 or 4)
+		texture:SetColorTexture(1, 1, 1, 1)
+		meter[key] = texture
+	end
+	local width = meter.bar:GetWidth()
+	if not amount or amount <= 0 or IsSecret(width) or not width or width <= 0 then texture:Hide() return from end
+	local to = min(from + amount, 1)
+	if to <= from then texture:Hide() return from end
+	local r, g, b = MeterRGB(kind)
+	texture:SetVertexColor(r, g, b, alpha)
+	texture:ClearAllPoints()
+	texture:SetPoint('TOPLEFT', meter.bar, 'TOPLEFT', width * from, 0)
+	texture:SetPoint('BOTTOMLEFT', meter.bar, 'BOTTOMLEFT', width * from, 0)
+	texture:SetWidth(max(width * (to - from), 1))
+	texture:Show()
+	return to
+end
+
+-- Paint one meter from its source.
+local function Paint(meter, source)
+	local reading = Read(source)
+	meter.reading = reading
+	local bar = meter.bar
+	bar:SetMinMaxValues(0, reading.max)
+	bar:SetValue(reading.value, Smooth())
+	local r, g, b = MeterRGB(reading.kind)
+	if reading.dim then r, g, b = Kit:RGB('dim') end
+	bar:SetStatusBarColor(r, g, b, 1)
+	if meter.edge then meter.edge:SetVertexColor(min(r + 0.4, 1), min(g + 0.4, 1), min(b + 0.4, 1), 1) end
+	local at = reading.max > 0 and reading.value / reading.max or 0
+	local db = DB()
+	at = Overlay(meter, 'restedFill', at, db.restedOverlay ~= false and reading.rested and reading.rested / reading.max, 'rested', 0.45)
+	Overlay(meter, 'previewFill', at, reading.preview and reading.preview / reading.max, 'preview', 0.55)
+	meter.tip = reading.tip
+	HW.MeterText(meter, reading.legend, reading.text)
+	return reading
+end
+
+-- Clicks: left cycles the source, right opens reputations.
+local function Clicked(meter, button)
+	if button == 'RightButton' then
+		if ToggleCharacter then pcall(ToggleCharacter, 'ReputationFrame') end
+		return
+	end
+	local field = meter.second and 'barSecond' or 'barSource'
+	local current = DB()[field] or 'auto'
+	local nextSource = SOURCES[1]
+	for index, id in ipairs(SOURCES) do
+		if id == current then nextSource = SOURCES[index % #SOURCES + 1] break end
+	end
+	DB()[field] = nextSource
+	Kit:Play('tick', true)
+	Deck.UpdateMeters()
+	if GameTooltip:IsOwned(meter) and meter:GetScript('OnEnter') then meter:GetScript('OnEnter')(meter) end
+end
+
+-- Dress a meter track (BuildXP's) with clicks, the tooltip and its style.
+function Deck.DressMeter(meter, second)
+	meter.second = second
+	meter:SetScript('OnEnter', function(self)
+		GameTooltip:SetOwner(self, 'ANCHOR_TOP')
+		local reading = self.reading
+		GameTooltip:AddLine(reading and (reading.kind == 'xp' and 'Experience' or reading.kind == 'rep' and 'Reputation' or 'Honor') or 'Meter', 1, 1, 1)
+		if self.tip then for _, line in ipairs(self.tip) do GameTooltip:AddLine(line, 0.85, 0.85, 0.82) end end
+		GameTooltip:AddLine('Click: next source   Right-click: reputations', 0.55, 0.55, 0.52)
+		GameTooltip:Show()
+	end)
+	meter:SetScript('OnMouseUp', function(self, button) UI:Safe(Clicked, self, button) end)
+	meter.bar:HookScript('OnSizeChanged', function() UI:Safe(Style, meter) end)
+	Style(meter)
+end
+
+-- Readout, meters and strip -----------------------------------------------------------------
+local strips = {}
+
+function Deck.UpdateMeters()
+	if not xp then return end
+	local db = DB()
+	local readout = console and console.readout
+	local reading
+	if db.xpbar then
+		reading = Paint(xp, db.barSource)
+		xp:SetShown(true)
+		if xp.secondMeter then
+			local wanted = db.barSecond and db.barSecond ~= 'none'
+			xp.secondMeter:SetShown(wanted and true or false)
+			if wanted then Paint(xp.secondMeter, db.barSecond) end
+		end
+	else
+		xp:Hide()
+		if xp.secondMeter then xp.secondMeter:Hide() end
+		reading = Read('xp')
+	end
+	if readout then
+		local level = Level()
+		local text
+		if reading.kind == 'xp' and reading.level then text = format('LV %d  %4.1f%%', reading.level, reading.value / reading.max * 100)
+		elseif reading.kind == 'rep' then text = format('LV %s  REP', level or '??')
+		elseif reading.kind == 'honor' then text = format('LV %s  HON', level or '??')
+		else text = level and format('LV %d  MAX', level) or 'LV ??' end
+		readout:SetText(Readout(text))
+	end
+end
+
+local function BuildStrip(parent)
+	local strip = CreateFrame('Frame', nil, parent)
+	strip.cells = {}
+	local dark = Surface() == 'dark'
+	for index = 1, STAT_SLOTS do
+		local cell = CreateFrame('Frame', nil, strip)
+		cell.led = Kit:Led(cell, 4, false)
+		cell.legend = Kit:Label(cell, '', dark and 'darkDim' or 'dim', 7, true)
+		cell.legend:SetWordWrap(false)
+		cell.lcd = Kit:LCDPanel(cell, {radius = 3})
+		cell.value = Kit:Text(cell.lcd, '', 'tiny', 'lcdInk', true)
+		cell.value:SetPoint('RIGHT', -4, 0)
+		cell.value:SetJustifyH('RIGHT')
+		cell.value:SetWordWrap(false)
+		strip.cells[index] = cell
+	end
+	strips[#strips + 1] = strip
+	return strip
+end
+
+function Deck.StripHeight()
+	if not StatsWanted() then return 0 end
+	return DB().statsSize == 'comfortable' and 25 or 14
+end
+
+local function LayoutStrip(strip, width)
+	local db = DB()
+	local ids = {}
+	for index = 1, STAT_SLOTS do
+		local id = db['stat'..index]
+		if id and STATS[id] then ids[#ids + 1] = id end
+	end
+	strip.ids = ids
+	local count = #ids
+	local comfortable = db.statsSize == 'comfortable'
+	local height = comfortable and 25 or 14
+	strip:SetHeight(height)
+	local gap = 8
+	local cellWidth = count > 0 and (width - gap * (count - 1)) / count or 0
+	for index, cell in ipairs(strip.cells) do
+		local id = ids[index]
+		cell:SetShown(id ~= nil)
+		if id then
+			cell:ClearAllPoints()
+			cell:SetPoint('TOPLEFT', strip, 'TOPLEFT', (index - 1) * (cellWidth + gap), 0)
+			cell:SetSize(cellWidth, height)
+			cell.legend:SetText(strupper(STATS[id][1]))
+			cell.led:ClearAllPoints()
+			cell.legend:ClearAllPoints()
+			cell.lcd:ClearAllPoints()
+			if comfortable then
+				-- Lamp and legend on a printed line, the LCD under them.
+				cell.led:SetPoint('TOPLEFT', 1, -2)
+				cell.legend:SetPoint('LEFT', cell.led, 'RIGHT', 4, 0)
+				cell.legend:SetPoint('RIGHT', cell, 'RIGHT', 0, 0)
+				cell.legend:SetJustifyH('LEFT')
+				cell.lcd:SetPoint('BOTTOMLEFT')
+				cell.lcd:SetPoint('BOTTOMRIGHT')
+				cell.lcd:SetHeight(14)
+			else
+				-- One line: lamp, legend, LCD.
+				cell.led:SetPoint('LEFT', 1, 0)
+				cell.legend:SetPoint('LEFT', cell.led, 'RIGHT', 4, 0)
+				local legendWidth = min(56, cellWidth * 0.45)
+				cell.legend:SetWidth(legendWidth)
+				cell.legend:SetJustifyH('LEFT')
+				cell.lcd:SetPoint('TOPRIGHT')
+				cell.lcd:SetPoint('BOTTOMRIGHT')
+				cell.lcd:SetWidth(max(cellWidth - legendWidth - 13, 10))
+			end
+		end
+	end
+end
+
+local function UpdateStrip(strip)
+	if not (strip:IsVisible() and strip.ids) then return end
+	for index, id in ipairs(strip.ids) do
+		local cell = strip.cells[index]
+		local ok, text, lamp = pcall(STATS[id][2])
+		if not ok then text, lamp = '--', nil end
+		if cell.text ~= text then cell.text = text; cell.value:SetText(text or '') end
+		if cell.lamp ~= lamp then
+			cell.lamp = lamp
+			Kit:SetLed(cell.led, lamp ~= nil, lamp)
+		end
+	end
+end
+
+-- The bottom of a device: the second meter, and the strip above the meters.
+function Deck.BuildBottom(parent)
+	if not xp then return end
+	-- A second meter above the first, built like it.
+	local second = BuildXP(parent)
+	second.second = true
+	xp.secondMeter = second
+	Deck.DressMeter(xp, false)
+	Deck.DressMeter(second, true)
+	xp.strip = BuildStrip(parent)
+end
+
+local function SecondShown()
+	local db = DB()
+	return db.xpbar and db.barSecond and db.barSecond ~= 'none'
+end
+
+-- Height of everything along the base, with the gap above it.
+function Deck.BottomHeight()
+	local db = DB()
+	local height = 0
+	if db.xpbar then height = height + MeterHeight() + ROW_GAP end
+	if SecondShown() then height = height + MeterHeight() + 4 end
+	local strip = Deck.StripHeight()
+	if strip > 0 then height = height + strip + ROW_GAP end
+	return height
+end
+
+-- Place the meters and the strip along `parent`'s base, `inset` in from its edges.
+function Deck.PlaceBottom(parent, inset)
+	if not xp then return end
+	local db = DB()
+	local y = inset
+	xp:SetShown(db.xpbar and true or false)
+	HW.PlaceMeter(xp, parent, inset, inset, y, MeterHeight())
+	if db.xpbar then y = y + MeterHeight() end
+	local second = xp.secondMeter
+	if second then
+		second:SetShown(SecondShown() and true or false)
+		if second:IsShown() then
+			y = y + 4
+			HW.PlaceMeter(second, parent, inset, inset, y, MeterHeight())
+			y = y + MeterHeight()
+		else
+			HW.PlaceMeter(second, parent, inset, inset, y, MeterHeight())
+		end
+	end
+	local strip = xp.strip
+	if strip then
+		local height = Deck.StripHeight()
+		strip:SetShown(height > 0)
+		if height > 0 then
+			if db.xpbar or SecondShown() then y = y + ROW_GAP end
+			strip:ClearAllPoints()
+			strip:SetPoint('BOTTOMLEFT', parent, 'BOTTOMLEFT', inset, y)
+			strip:SetPoint('BOTTOMRIGHT', parent, 'BOTTOMRIGHT', -inset, y)
+			LayoutStrip(strip, parent:GetWidth() - inset * 2)
+			UpdateStrip(strip)
+		end
+	end
+	Deck.UpdateMeters()
+end
+
+-- Function keys -------------------------------------------------------------------------------
+-- secure: attributes for our secure button; click: Blizzard buttons the key
+-- clicks (the first that exists), securely; func: plain Lua run on click.
+-- names: Blizzard button names separated by spaces; the first that exists.
+local function FirstButton(names)
+	for name in names:gmatch('%S+') do
+		local button = _G[name]
+		if button and not Forbidden(button) then return button end
+	end
+end
+
+local function ShownFrame(...)
+	for index = 1, select('#', ...) do
+		local frame = _G[select(index, ...)]
+		if type(frame) == 'table' and frame.IsShown and frame:IsShown() then return true end
+	end
+	return false
+end
+
+local function BarsLocked()
+	local get = (C_CVar and C_CVar.GetCVarBool) or GetCVarBool
+	return get and get('lockActionBars') and true or false
+end
+
+local HEARTH = 6948
+local function HearthCooldown()
+	local get = (C_Container and C_Container.GetItemCooldown) or _G.GetItemCooldown
+	local start, duration = Call(get, HEARTH)
+	if start and duration and start > 0 and duration > 1.5 then return start, duration end
+end
+
+local FN = {
+	mount = {glyph = 'mount', legend = 'Mount', tip = 'Summon a random favorite mount.',
+		secure = {type = 'macro', macrotext = '/run if C_MountJournal then C_MountJournal.SummonByID(0) end'},
+		lamp = function() return Call(IsMounted) and 'green' or nil end},
+	hearth = {glyph = 'hearth', legend = 'Hearth', tip = 'Use your hearthstone.', secure = {type = 'item', item = 'item:'..HEARTH},
+		cooldown = HearthCooldown, lamp = function() return HearthCooldown() and 'amber' or nil end},
+	map = {glyph = 'map', legend = 'Map', tip = 'Open the world map.', func = function() if ToggleWorldMap then ToggleWorldMap() end end,
+		lamp = function() return ShownFrame('WorldMapFrame') and 'lamp' or nil end},
+	spellbook = {glyph = 'spellbook', legend = 'Spells', tip = 'Open your spellbook.',
+		click = 'SpellbookMicroButton', func = function()
+			if PlayerSpellsUtil and PlayerSpellsUtil.ToggleSpellBookFrame then PlayerSpellsUtil.ToggleSpellBookFrame() end
+		end, lamp = function() return ShownFrame('PlayerSpellsFrame', 'SpellBookFrame') and 'lamp' or nil end},
+	talents = {glyph = 'talents', legend = 'Talent', tip = 'Open your talents.', click = 'PlayerSpellsMicroButton TalentMicroButton',
+		lamp = function() return ShownFrame('PlayerSpellsFrame', 'PlayerTalentFrame', 'TalentFrame') and 'lamp' or nil end},
+	character = {glyph = 'character', legend = 'Char', tip = 'Open your character.', click = 'CharacterMicroButton',
+		lamp = function() return ShownFrame('CharacterFrame') and 'lamp' or nil end},
+	collections = {glyph = 'collections', legend = 'Coll', tip = 'Open your collections.', click = 'CollectionsMicroButton',
+		lamp = function() return ShownFrame('CollectionsJournal') and 'lamp' or nil end},
+	journal = {glyph = 'journal', legend = 'Guide', tip = 'Open the adventure guide.', click = 'EJMicroButton',
+		lamp = function() return ShownFrame('EncounterJournal') and 'lamp' or nil end},
+	finder = {glyph = 'finder', legend = 'Group', tip = 'Open the group finder.', click = 'LFDMicroButton LFGMicroButton',
+		lamp = function() return ShownFrame('PVEFrame', 'LFGParentFrame') and 'lamp' or nil end},
+	quests = {glyph = 'quest', legend = 'Quest', tip = 'Open your quest log.', click = 'QuestLogMicroButton',
+		lamp = function() return ShownFrame('QuestLogFrame') and 'lamp' or nil end},
+	bags = {glyph = 'backpack', legend = 'Bags', tip = 'Open your bags.', func = function() if ToggleAllBags then ToggleAllBags() end end,
+		lamp = function() return ShownFrame('ContainerFrameCombinedBags', 'ContainerFrame1') and 'lamp' or nil end},
+	drawer = {glyph = 'drawer', legend = 'Drawer', tip = 'Open the gadget drawer.', func = function() if UI.ToggleDrawer then UI:ToggleDrawer() end end,
+		lamp = function() return UI.DrawerOpen and UI:DrawerOpen() and 'lamp' or nil end},
+	move = {glyph = 'move', legend = 'Move', tip = 'Move and size the interface.', func = function() if UI.ToggleMovers then UI:ToggleMovers() end end,
+		lamp = function() return UI.MoversUnlocked and UI:MoversUnlocked() and 'amber' or nil end},
+	calendar = {glyph = 'calendar', legend = 'Cal', tip = 'Open the calendar.', func = function()
+			if UI.OpenCalendar then UI:OpenCalendar() elseif ToggleCalendar then ToggleCalendar() end
+		end},
+	meter = {glyph = 'meter', legend = 'Meter', tip = 'Show or hide the damage meters.', func = function()
+			local shown
+			for _, entry in ipairs(UI.GetMovers and UI:GetMovers() or {}) do
+				if entry.key:find('^dm%.') and entry.frame and not entry.frame:IsProtected() then
+					if shown == nil then shown = not entry.frame:IsShown() end
+					entry.frame:SetShown(shown)
+				end
+			end
+			local details = _G.Details
+			if type(details) == 'table' and type(details.ToggleWindows) == 'function' then pcall(details.ToggleWindows, details) end
+		end},
+	lock = {glyph = 'lock', legend = 'Lock', tip = 'Lock or unlock the action bars.', func = function()
+			if InCombatLockdown() then return end
+			DB().lock = BarsLocked() and 'off' or 'on'
+			ApplyLock()
+		end, lamp = function() return not BarsLocked() and 'amber' or nil end},
+	reload = {glyph = 'reload', legend = 'Reload', tip = 'Reload the interface.', func = function()
+			Kit:AlertDialog({title = 'Reload UI', text = 'Reload the interface now?', confirm = 'Reload', onConfirm = ReloadUI})
+		end},
+	menu = {glyph = 'menu', legend = 'Menu', tip = 'Open the game menu.', click = 'MainMenuMicroButton',
+		lamp = function() return ShownFrame('GameMenuFrame') and 'lamp' or nil end},
+	macro = {glyph = 'macro', legend = 'Macro', tip = 'Run your chosen macro.', macro = true},
+}
+Deck.FN_ITEMS = {{'none', 'None'}, {'mount', 'Mount'}, {'hearth', 'Hearthstone'}, {'map', 'Map'}, {'spellbook', 'Spellbook'},
+	{'talents', 'Talents'}, {'character', 'Character'}, {'bags', 'Bags'}, {'collections', 'Collections'},
+	{'journal', 'Adventure guide'}, {'finder', 'Group finder'}, {'quests', 'Quest log'}, {'drawer', 'Drawer'},
+	{'move', 'Move UI'}, {'calendar', 'Calendar'}, {'meter', 'Damage meters'}, {'lock', 'Lock bars'},
+	{'reload', 'Reload UI'}, {'menu', 'Game menu'}, {'macro', 'Custom macro'}}
+local FN_SLOTS = 8
+local fnKeys = {}
+
+local function FnSize() return Kit:Clamp(floor(tonumber(DB().fnSize) or 22), 18, 32) end
+
+-- How many keys each side carries (slots 1-4 left, 5-8 right).
+local function FnCounts()
+	local db = DB()
+	if db.fnKeys == false then return 0, 0 end
+	local left, right = 0, 0
+	for index = 1, FN_SLOTS do
+		local id = db['fn'..index]
+		if id and FN[id] then
+			if index <= FN_SLOTS / 2 then left = left + 1 else right = right + 1 end
+		end
+	end
+	return left, right
+end
+
+local function FnPress(key, down)
+	if key.down == down then return end
+	key.down = down
+	Kit:SetSprite(key.skin, Sprites()[down and 2 or 1])
+	key.face:ClearAllPoints()
+	key.face:SetPoint('TOPLEFT', 0, down and -1 or 0)
+	key.face:SetPoint('BOTTOMRIGHT', 0, down and -1 or 0)
+	Sound(down)
+end
+
+local function FnKey(parent, index)
+	local button = CreateFrame('Button', 'JiberishSpec01FnKey'..index, parent, 'SecureActionButtonTemplate')
+	button:RegisterForClicks('AnyUp')
+	local key = {button = button, index = index}
+	local back = CreateFrame('Frame', nil, button)
+	back:SetAllPoints()
+	back:EnableMouse(false)
+	back:SetFrameLevel(max(button:GetFrameLevel() - 1, 0))
+	key.back = back
+	key.skin = Kit:Skin(back, Sprites()[1], 'BACKGROUND', 0)
+	key.skin.kitMaxCorner = 6
+	if HW.On() then key.slotRing = HW.Slot(back, back); HW.ShowSlot(key.slotRing, true) end
+	key.face = CreateFrame('Frame', nil, button)
+	key.face:SetAllPoints()
+	key.face:EnableMouse(false)
+	key.glyph = key.face:CreateTexture(nil, 'ARTWORK')
+	key.glyph:SetTexture(Kit.media..'icons-menu.tga')
+	key.glyph:SetPoint('CENTER')
+	key.cooldown = CreateFrame('Cooldown', nil, key.face, 'CooldownFrameTemplate')
+	key.cooldown:SetAllPoints()
+	key.cooldown:SetDrawEdge(false)
+	key.cooldown:SetHideCountdownNumbers(true)
+	if key.cooldown.SetSwipeTexture then key.cooldown:SetSwipeTexture(Kit.media..'mask-icon.tga', 0, 0, 0, 0.45) end
+	key.lamp = Kit:Led(key.face, 4, false)
+	key.lamp:SetPoint('TOPRIGHT', -3, -3)
+	key.legend = Kit:Label(parent, '', Surface() == 'dark' and 'darkDim' or 'dim', 6, true)
+	key.legend:SetPoint('TOP', button, 'BOTTOM', 0, -3)
+	button:HookScript('OnMouseDown', function() FnPress(key, true) end)
+	button:HookScript('OnMouseUp', function() FnPress(key, false) end)
+	button:HookScript('OnHide', function() FnPress(key, false) end)
+	button:HookScript('OnClick', function()
+		local def = key.def
+		-- Plain functions run here; secure actions were done by the button itself.
+		if def and def.func and not key.secure then UI:Safe(def.func) end
+		C_Timer.After(0.1, function() UI:Safe(Deck.FnLamps) end)
+	end)
+	button:SetScript('OnEnter', function(self)
+		local def = key.def
+		if not def then return end
+		GameTooltip:SetOwner(self, 'ANCHOR_TOP')
+		GameTooltip:AddLine(def.name or def.legend, 1, 1, 1)
+		GameTooltip:AddLine(def.tip, 0.85, 0.85, 0.82, true)
+		GameTooltip:Show()
+	end)
+	button:SetScript('OnLeave', function() GameTooltip:Hide() end)
+	fnKeys[index] = key
+	return key
+end
+
+-- Set up each key for its slot. Out of combat only (secure attributes).
+function Deck.ConfigureFn()
+	if #fnKeys == 0 then return end
+	if InCombatLockdown() then return UI:AfterCombat(Deck.ConfigureFn, 'ab.fnkeys') end
+	local db = DB()
+	local size = FnSize()
+	for index, key in ipairs(fnKeys) do
+		local id = db.fnKeys ~= false and db['fn'..index]
+		local def = id and FN[id]
+		local button = key.button
+		for _, attribute in ipairs({'type', 'macrotext', 'item', 'clickbutton', 'macro'}) do button:SetAttribute(attribute, nil) end
+		key.def, key.secure = def, nil
+		if def then
+			if def.secure then
+				for attribute, value in pairs(def.secure) do button:SetAttribute(attribute, value) end
+				key.secure = true
+			elseif def.macro then
+				local name = strtrim(db.fnMacro or '')
+				if name ~= '' then button:SetAttribute('type', 'macro'); button:SetAttribute('macro', name); key.secure = true end
+			elseif def.click then
+				local target = FirstButton(def.click)
+				if target then button:SetAttribute('type', 'click'); button:SetAttribute('clickbutton', target); key.secure = true end
+			end
+			local index0 = Deck.MENU_INDEX and Deck.MENU_INDEX[def.glyph] or 0
+			local column, row = index0 % 8, floor(index0 / 8)
+			key.glyph:SetTexCoord(column / 8, (column + 1) / 8, row / 4, (row + 1) / 4)
+			key.glyph:SetSize(floor(size * 0.62 + 0.5), floor(size * 0.62 + 0.5))
+			Kit:Tint(key.glyph, LightCap() and 'ink' or 'darkInk', 0.85)
+			local legend = def.legend
+			if def.macro and strtrim(db.fnMacro or '') ~= '' then legend = strsub(strtrim(db.fnMacro), 1, 6) end
+			key.legend:SetText(strupper(legend))
+			button:SetSize(size, size)
+			Kit:FitSprite(key.skin, size, size)
+			button:Show()
+		else
+			button:Hide()
+		end
+		key.legend:SetShown(def ~= nil)
+	end
+	Deck.FnLamps()
+end
+
+function Deck.FnLamps()
+	for _, key in ipairs(fnKeys) do
+		local def = key.def
+		if def and key.button:IsVisible() then
+			local ok, lamp = pcall(def.lamp or function() end)
+			lamp = ok and lamp or nil
+			if key.lit ~= lamp then
+				key.lit = lamp
+				Kit:SetLed(key.lamp, lamp ~= nil, lamp)
+			end
+			if def.cooldown then
+				local start, duration = def.cooldown()
+				if start then key.cooldown:SetCooldown(start, duration) else key.cooldown:Clear() end
+			end
+		end
+	end
+end
+
+function Deck.BuildFn(parent)
+	if #fnKeys > 0 then return end
+	parent.fnLeft = CreateFrame('Frame', nil, parent)
+	parent.fnRight = CreateFrame('Frame', nil, parent)
+	for index = 1, FN_SLOTS do FnKey(index <= FN_SLOTS / 2 and parent.fnLeft or parent.fnRight, index) end
+	Deck.ConfigureFn()
+end
+
+-- Room the function keys need within `width` (nil: two across, a narrow
+-- column beside the banks): cluster width, height and keys across.
+function Deck.FnBlock(width)
+	local left, right = FnCounts()
+	local count = max(left, right)
+	if count == 0 or #fnKeys == 0 then return 0, 0, 1 end
+	local size, gap = FnSize(), 6
+	local fit = width and max(1, floor((width + gap) / (size + gap))) or 2
+	local across = min(count, fit)
+	local lines = ceil(count / across)
+	return across * size + (across - 1) * gap, lines * (size + 12) - 4, across
+end
+
+-- Place the two clusters: `x` from each side, `y` from the top, `columns` across.
+function Deck.PlaceFn(parent, leftX, rightX, y, columns)
+	if #fnKeys == 0 or not parent.fnLeft then return end
+	if InCombatLockdown() then return UI:AfterCombat(function() Deck.PlaceFn(parent, leftX, rightX, y, columns) end, 'ab.fnplace') end
+	local size, gap = FnSize(), 6
+	for side, cluster in ipairs({parent.fnLeft, parent.fnRight}) do
+		local placed = 0
+		local first = side == 1 and 1 or FN_SLOTS / 2 + 1
+		for index = first, first + FN_SLOTS / 2 - 1 do
+			local key = fnKeys[index]
+			if key.def then
+				local line, place = floor(placed / columns), placed % columns
+				key.button:ClearAllPoints()
+				key.button:SetPoint('TOPLEFT', cluster, 'TOPLEFT', place * (size + gap), -line * (size + 12))
+				placed = placed + 1
+			end
+		end
+		local across = min(placed, columns)
+		local lines = ceil(placed / columns)
+		cluster:SetSize(max(across * size + (across - 1) * gap, 1), max(lines * (size + 12) - 4, 1))
+		cluster:ClearAllPoints()
+		if side == 1 then cluster:SetPoint('TOPLEFT', parent, 'TOPLEFT', leftX, y)
+		else cluster:SetPoint('TOPRIGHT', parent, 'TOPRIGHT', -rightX, y) end
+		cluster:SetShown(placed > 0)
+	end
+end
+
+-- Header panels -------------------------------------------------------------------------------
+local PANELS = {
+	{id = 'zone', field = 'panelZone', width = 128, read = function()
+		local zone = Call(GetMinimapZoneText) or Call(GetZoneText) or ''
+		local map = C_Map and Call(C_Map.GetBestMapForUnit, 'player')
+		local position = map and C_Map.GetPlayerMapPosition and Call(C_Map.GetPlayerMapPosition, map, 'player')
+		local x, y
+		if position and position.GetXY then x, y = Call(position.GetXY, position) end
+		zone = strupper(strsub(zone, 1, 12))
+		if x and y then return format('%s %.1f %.1f', zone, x * 100, y * 100) end
+		return zone
+	end},
+	{id = 'gold', field = 'panelGold', width = 64, read = function() return Gold(Plain(GetMoney())) end},
+	{id = 'durability', field = 'panelDurability', width = 58, led = true, read = function()
+		local lowest
+		for slot = 1, 19 do
+			local current, maximum = Call(GetInventoryItemDurability, slot)
+			if current and maximum and maximum > 0 then lowest = min(lowest or 1, current / maximum) end
+		end
+		if not lowest then return 'DUR --' end
+		return format('DUR %d%%', floor(lowest * 100 + 0.5)), lowest < 0.2 and 'red' or lowest < 0.5 and 'amber' or 'green'
+	end},
+	{id = 'latency', field = 'panelLatency', width = 58, led = true, read = function()
+		local _, _, home, world = Call(GetNetStats)
+		local ms = max(home or 0, world or 0)
+		return format('%dMS', ms), ms > 300 and 'red' or ms > 150 and 'amber' or 'green'
+	end},
+}
+
+function Deck.BuildPanels(device)
+	device.panels = {}
+	for _, def in ipairs(PANELS) do
+		local panel = Kit:LCDPanel(device, {radius = 3})
+		panel:SetSize(def.width, 14)
+		panel.def = def
+		panel.text = Kit:Text(panel, '', 'tiny', 'lcdInk', true)
+		panel.text:SetPoint('RIGHT', -5, 0)
+		panel.text:SetWordWrap(false)
+		if def.led then
+			panel.led = Kit:Led(panel, 4, false)
+			panel.led:SetPoint('LEFT', 5, 0)
+		end
+		panel:Hide()
+		device.panels[#device.panels + 1] = panel
+	end
+end
+
+-- Lay the panels out leftward from `anchor` while they fit beside the title,
+-- and return the frame the title should end at.
+function Deck.PlacePanels(device, anchor, used)
+	if not device.panels then return anchor end
+	local db = DB()
+	local room = device:GetWidth() - used - 170 -- the model plate and title keep their room
+	local at = anchor
+	for _, panel in ipairs(device.panels) do
+		local wanted = db[panel.def.field] ~= false
+		if wanted and room >= panel:GetWidth() + 6 then
+			room = room - panel:GetWidth() - 6
+			panel:ClearAllPoints()
+			panel:SetPoint('RIGHT', at, 'LEFT', -6, 0)
+			panel:Show()
+			at = panel
+		else
+			panel:Hide()
+		end
+	end
+	Deck.UpdatePanels(device)
+	return at
+end
+
+function Deck.UpdatePanels(device)
+	for _, panel in ipairs(device and device.panels or {}) do
+		if panel:IsShown() then
+			local ok, text, lamp = pcall(panel.def.read)
+			if ok then
+				panel.text:SetText(text or '')
+				if panel.led then Kit:SetLed(panel.led, lamp ~= nil, lamp) end
+			end
+		end
+	end
+end
+
+-- Events and the ticker ------------------------------------------------------------------------
+local events = CreateFrame('Frame')
+for _, event in ipairs({'PLAYER_ENTERING_WORLD', 'PLAYER_XP_UPDATE', 'PLAYER_LEVEL_UP', 'QUEST_TURNED_IN',
+	'CHAT_MSG_COMBAT_XP_GAIN', 'TIME_PLAYED_MSG', 'PLAYER_MONEY', 'UPDATE_INVENTORY_DURABILITY', 'BAG_UPDATE_COOLDOWN',
+	'PLAYER_MOUNT_DISPLAY_CHANGED', 'CVAR_UPDATE', 'HONOR_XP_UPDATE', 'HONOR_LEVEL_UPDATE', 'QUEST_LOG_UPDATE'}) do
+	pcall(events.RegisterEvent, events, event)
+end
+events:SetScript('OnEvent', function(_, event, ...)
+	if event == 'PLAYER_ENTERING_WORLD' then
+		if not session.money then session.money = Plain(GetMoney()) end
+		TrackXP()
+		local db = DB()
+		local wantsPlayed = false
+		for index = 1, STAT_SLOTS do
+			local id = db['stat'..index]
+			if id == 'played' or id == 'levelTime' then wantsPlayed = true end
+		end
+		if wantsPlayed and StatsWanted() and xp then C_Timer.After(2, AskPlayed) end
+	elseif event == 'PLAYER_XP_UPDATE' or event == 'PLAYER_LEVEL_UP' then
+		TrackXP()
+	elseif event == 'QUEST_TURNED_IN' then
+		local _, xpReward = ...
+		xpReward = Plain(xpReward)
+		if type(xpReward) == 'number' and xpReward > 0 then session.questXP = session.questXP + xpReward end
+		questUntil = GetTime() + 1
+	elseif event == 'CHAT_MSG_COMBAT_XP_GAIN' then
+		-- Only counted, never read: a kill's XP message (quest XP arrives with a turn-in).
+		if GetTime() > questUntil then session.kills = session.kills + 1 end
+	elseif event == 'TIME_PLAYED_MSG' then
+		local total, level = ...
+		total, level = Plain(total), Plain(level)
+		if type(total) == 'number' then played.total, played.level, played.at = total, level or 0, GetTime() end
+		C_Timer.After(0, function() Quiet(false) end)
+	elseif event == 'QUEST_LOG_UPDATE' then
+		if DB().questPreview then UI:Safe(Deck.UpdateMeters) end
+		return
+	end
+	if event == 'HONOR_XP_UPDATE' or event == 'HONOR_LEVEL_UPDATE' then UI:Safe(Deck.UpdateMeters) end
+	UI:Safe(Deck.FnLamps)
+end)
+
+-- Once a second, while a console is shown: the strip, the panels and the key lamps.
+C_Timer.NewTicker(1, function()
+	if not (xp and xp:GetParent() and xp:GetParent():IsVisible()) then return end
+	for _, strip in ipairs(strips) do UI:Safe(UpdateStrip, strip) end
+	if console then UI:Safe(Deck.UpdatePanels, console) end
+	UI:Safe(Deck.FnLamps)
+end)
+end)()
+
 function module:Enable()
 	if InCombatLockdown() then
 		UI:AfterCombat(function() self.enabled = UI:Safe(self.Enable, self) end, 'actionbars')
@@ -2455,6 +3500,7 @@ function module:Refresh()
 		HW.ShowDecor(menu, DB().housing ~= false)
 		RepaintMenu()
 	end
+	Deck.ConfigureFn()
 	LayoutConsole()
 	LayoutFree()
 	LayoutSide()
@@ -2517,10 +3563,57 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 		{'button', 'Placement', 'Move bars', function() UI:ToggleHub(nil, false); UI:ToggleMovers() end, 'Snaps to a grid and to other frames.'},
 	}},
 	{title = 'Meter and readout', rows = {
-		{'switch', 'Experience meter', 'actionbars.xpbar', 'Experience, or the watched reputation, as lit dots along the base.', reload = true},
+		{'switch', 'Meter', 'actionbars.xpbar', 'Experience, reputation or honor along the console\'s base. Click it for the next source; right-click for reputations.', reload = true},
+		{'dropdown', 'Shows', 'actionbars.barSource', items = Deck.SOURCE_ITEMS, since = '0.5.1',
+			note = 'Auto: experience while levelling, the watched reputation at the level cap (honor if there is none).'},
+		{'dropdown', 'Second meter', 'actionbars.barSecond', items = {{'none', 'None'}, {'auto', 'Auto'}, {'xp', 'Experience'},
+			{'rep', 'Reputation'}, {'honor', 'Honor'}}, since = '0.5.1', note = 'A second meter stacked above the first, e.g. reputation while levelling.'},
+		{'segmented', 'Style', 'actionbars.barStyle', items = {{'dots', 'LED dots'}, {'flat', 'Flat'}, {'segments', 'Segments'}, {'slim', 'Slim'}},
+			since = '0.5.1', note = 'LED dots, a flat bar with a lit edge, segments, or a slim hairline meter.'},
 		{'slider', 'Meter height', 'actionbars.xpHeight', 4, 16, 1},
+		{'switch', 'Rested XP', 'actionbars.restedOverlay', 'Rested experience as a lighter stretch past the fill.', since = '0.5.1'},
+		{'switch', 'Quests ready', 'actionbars.questPreview', 'The XP of quests ready to hand in, as a second stretch.', since = '0.5.1'},
+		{'segmented', 'Colors', 'actionbars.meterColors', items = {{'theme', 'Theme'}, {'custom', 'Custom'}}, since = '0.5.1'},
+		{'color', 'Experience', 'actionbars.xpColor', hidden = function() return DB().meterColors ~= 'custom' end},
+		{'color', 'Rested', 'actionbars.restedColor', hidden = function() return DB().meterColors ~= 'custom' end},
+		{'color', 'Reputation', 'actionbars.repColor', hidden = function() return DB().meterColors ~= 'custom' end},
+		{'color', 'Honor', 'actionbars.honorColor', hidden = function() return DB().meterColors ~= 'custom' end},
+		{'color', 'Quests ready', 'actionbars.previewColor', hidden = function() return DB().meterColors ~= 'custom' end},
 		{'segmented', 'Console LCD', 'actionbars.readout', items = {{'level', 'Level'}, {'clock', 'Clock'}, {'off', 'Off'}},
 			note = 'Level and progress, the time, or no LCD.'},
+	}},
+	{title = 'Stats strip', rows = {
+		{'switch', 'Stats strip', 'actionbars.stats', 'A row of small LCD readouts above the meter.', since = '0.5.1'},
+		{'segmented', 'Size', 'actionbars.statsSize', items = {{'compact', 'Compact'}, {'comfortable', 'Comfortable'}}, since = '0.5.1',
+			note = 'Compact: legend and LCD on one line. Comfortable: the legend printed over the LCD.'},
+		{'dropdown', 'Slot 1', 'actionbars.stat1', items = Deck.STAT_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Slot 2', 'actionbars.stat2', items = Deck.STAT_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Slot 3', 'actionbars.stat3', items = Deck.STAT_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Slot 4', 'actionbars.stat4', items = Deck.STAT_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Slot 5', 'actionbars.stat5', items = Deck.STAT_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Slot 6', 'actionbars.stat6', items = Deck.STAT_ITEMS, since = '0.5.1'},
+		{'note', 'Rates count from when you logged in. Time played is asked of the game once, quietly. Kills are counted from the XP messages, not read.'},
+	}},
+	{title = 'Function keys', rows = {
+		{'switch', 'Function keys', 'actionbars.fnKeys', 'Small keys at the top of the console\'s side columns: mount, hearthstone, map and more.', since = '0.5.1'},
+		{'slider', 'Key size', 'actionbars.fnSize', 18, 32, 1, nil, since = '0.5.1'},
+		{'dropdown', 'Left 1', 'actionbars.fn1', items = Deck.FN_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Left 2', 'actionbars.fn2', items = Deck.FN_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Left 3', 'actionbars.fn3', items = Deck.FN_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Left 4', 'actionbars.fn4', items = Deck.FN_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Right 1', 'actionbars.fn5', items = Deck.FN_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Right 2', 'actionbars.fn6', items = Deck.FN_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Right 3', 'actionbars.fn7', items = Deck.FN_ITEMS, since = '0.5.1'},
+		{'dropdown', 'Right 4', 'actionbars.fn8', items = Deck.FN_ITEMS, since = '0.5.1'},
+		{'input', 'Custom macro', 'actionbars.fnMacro', 'The name of a macro for the Custom macro key.', since = '0.5.1'},
+		{'note', 'Keys are set up out of combat; a change made in a fight applies when it ends.'},
+	}},
+	{title = 'Header panels', rows = {
+		{'switch', 'Zone and coordinates', 'actionbars.panelZone', since = '0.5.1'},
+		{'switch', 'Gold', 'actionbars.panelGold', since = '0.5.1'},
+		{'switch', 'Durability', 'actionbars.panelDurability', 'Your most worn item, with a lamp: green, amber, red.', since = '0.5.1'},
+		{'switch', 'Latency', 'actionbars.panelLatency', since = '0.5.1'},
+		{'note', 'Panels sit in the console\'s header while they fit beside its name.'},
 	}},
 	{title = 'Legends', rows = {
 		{'switch', 'Keybinds', 'actionbars.hotkeys', 'The bound key printed on each key.'},

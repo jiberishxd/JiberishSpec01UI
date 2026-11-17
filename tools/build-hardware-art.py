@@ -267,6 +267,7 @@ def menu_icon_shapes(name):
             return lambda x, y: rrect(x, y, x0, y0, x1, y1, radius)
         return lambda x, y: abs(rrect(x, y, x0, y0, x1, y1, radius)) - width / 2
 
+    RELOAD = [(11.214, 4.17), (12.33, 5.5), (12.924, 7.132), (12.924, 8.868), (12.33, 10.5), (11.214, 11.83), (9.71, 12.698), (8.0, 13.0), (6.29, 12.698), (4.786, 11.83), (3.67, 10.5), (3.076, 8.868), (3.076, 7.132), (3.67, 5.5), (4.786, 4.17)]
     table = {
         'character': [dot(8, 5, 2.7), lines((2.8, 14), (3.4, 11.4), (5.6, 9.8), (10.4, 9.8), (12.6, 11.4), (13.2, 14))],
         'spellbook': [box(3, 2.5, 13, 13.5, 1.2, W), lines((5.6, 2.5), (5.6, 13.5)),
@@ -313,6 +314,21 @@ def menu_icon_shapes(name):
                     lines((5.4, 2.6), (10.6, 2.6)),
                     fill((4.7, 11), (11.3, 11), (12.2, 12.6), (11.6, 13.3), (4.4, 13.3), (3.8, 12.6))],
         'key': [circle(4.6, 8, 2.6), lines((7.2, 8), (14, 8)), lines((12, 8), (12, 10.6)), lines((9.8, 8), (9.8, 10))],
+        # The console's function keys.
+        'mount': [lines((4.2, 2.8), (3.2, 7), (4, 10.6), (5.8, 12.9), (8, 13.6), (10.2, 12.9), (12, 10.6), (12.8, 7), (11.8, 2.8)),
+                  dot(5.4, 5.6, 0.75), dot(10.6, 5.6, 0.75), dot(5.2, 9.2, 0.75), dot(10.8, 9.2, 0.75)],
+        'hearth': [box(3, 2.6, 13, 13.6, 4, W), circle(8, 8.1, 2.3), dot(8, 8.1, 0.9)],
+        'drawer': [box(2.5, 3, 13.5, 13, 1.2, W), lines((2.5, 8), (13.5, 8)), lines((6.4, 5.5), (9.6, 5.5)),
+                   lines((6.4, 10.5), (9.6, 10.5))],
+        'move': [lines((8, 2.2), (8, 13.8)), lines((2.2, 8), (13.8, 8)), lines((6, 4.2), (8, 2.2), (10, 4.2)),
+                 lines((6, 11.8), (8, 13.8), (10, 11.8)), lines((4.2, 6), (2.2, 8), (4.2, 10)), lines((11.8, 6), (13.8, 8), (11.8, 10))],
+        'calendar': [box(2.5, 3.5, 13.5, 13.5, 1.5, W), lines((2.5, 6.8), (13.5, 6.8)), lines((5.5, 2), (5.5, 4.5)),
+                     lines((10.5, 2), (10.5, 4.5)), dot(10, 10.4, 1.3)],
+        'meter': [box(2.6, 9, 5.4, 13.6, 0.5), box(6.6, 5.4, 9.4, 13.6, 0.5), box(10.6, 2.4, 13.4, 13.6, 0.5)],
+        'lock': [box(3.5, 7.4, 12.5, 14, 1.2, W), lines((5.6, 7.4), (5.6, 5), (6.4, 3.1), (8, 2.4), (9.6, 3.1), (10.4, 5), (10.4, 7.4)),
+                 dot(8, 10.7, 1.1)],
+        'reload': [lines(*RELOAD), fill((10.6, 1.6), (14.4, 3.2), (11.2, 5.8))],
+        'macro': [lines((3, 4.6), (7, 8), (3, 11.4)), lines((8.6, 12), (13, 12))],
     }
     return table[name]
 
@@ -320,7 +336,8 @@ def menu_icon_shapes(name):
 # Micro menu and bag bar glyphs in atlas order. ActionBars.lua lists the same names.
 MENU_ICONS = ('character', 'spellbook', 'talents', 'professions', 'achievements', 'legacy', 'quest', 'guild',
               'social', 'finder', 'journal', 'collections', 'menu', 'help', 'store', 'house',
-              'map', 'pvp', 'backpack', 'bag', 'reagent', 'key')
+              'map', 'pvp', 'backpack', 'bag', 'reagent', 'key', 'mount', 'hearth',
+              'drawer', 'move', 'calendar', 'meter', 'lock', 'reload', 'macro')
 
 
 def menu_icons(cell=64, columns=8, rows=4):
