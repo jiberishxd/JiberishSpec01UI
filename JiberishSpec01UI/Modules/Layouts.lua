@@ -940,6 +940,33 @@ local function BuildEditCard(content, page)
 	return card
 end
 
+-- For the installer and other modules ------------------------------------------------------
+-- The presets as {key, title, note, model}, in order.
+function UI:LayoutPresets()
+	local list = {}
+	for _, preset in ipairs(PRESETS) do
+		list[#list + 1] = {key = preset.key, title = preset.title, note = preset.note, model = preset.model}
+	end
+	return list
+end
+
+-- Apply a preset by key, as its card on the Layout page does (no confirmation).
+function UI:ApplyLayoutPreset(key)
+	local preset = PRESET_BY_KEY[key]
+	if not preset then return false end
+	ApplyPreset(preset)
+	return true
+end
+
+-- Apply a screen layout: size 'auto' | '1080' | '1440' | '2160', density 'compact' | 'comfortable'.
+function UI:ApplyScreenLayout(sizeKey, densityKey) ApplyResolution(sizeKey, densityKey) end
+
+-- The size class this screen is detected as, its title and the UI scale a layout would give.
+function UI:ScreenLayoutPlan(sizeKey, densityKey)
+	local resolution, _, scale, height = Plan(sizeKey, densityKey)
+	return resolution.key, resolution.title, scale, height
+end
+
 UI:RegisterPage('layout', {title = 'Layout', order = 3, span = 4,
 	build = function(content, page)
 		page.controls = {}
