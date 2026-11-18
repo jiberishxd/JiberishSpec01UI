@@ -287,7 +287,6 @@ function Kit:Knob(parent, opts)
 	end, function() Kit:Play('up') end)
 	knob:EnableMouseWheel(true)
 	knob:SetScript('OnMouseWheel', function(_, delta) Nudge(delta * step * (IsShiftKeyDown() and 1 or (opts.wheelStep or 1))) end)
-	knob:SetScript('OnDoubleClick', nil)
 	local lastClick = 0
 	knob:HookScript('OnMouseDown', function()
 		local now = GetTime()
