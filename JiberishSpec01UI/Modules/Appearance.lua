@@ -641,7 +641,12 @@ end
 
 local function Hovered(frames)
 	for _, frame in ipairs(frames) do
-		if frame:IsVisible() and MouseIsOver(frame) then return true end
+		-- The cursor against the frame's rectangle; works for frames that
+		-- take no mouse and for ones faded to nothing.
+		if frame:IsVisible() and frame.IsMouseOver then
+			local ok, over = pcall(frame.IsMouseOver, frame)
+			if ok and not IsSecret(over) and over then return true end
+		end
 	end
 	return false
 end
