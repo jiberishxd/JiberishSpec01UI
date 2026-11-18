@@ -126,6 +126,9 @@ UI:RegisterDefaults('actionbars', {
 	-- to take it out), empty for the automatic arrangement; the editor's grid in
 	-- screen pixels.
 	consoleLayout = {}, consoleGrid = 2,
+	-- Docked frames: 'embedded' in bays cut into the housing (Hardware look),
+	-- or 'float' on the console at their own size, as before.
+	dockLook = 'embedded',
 	-- The menu (micro buttons) and bags: two small devices of their own.
 	-- Layout: 'line', 'column', 'grid' (Columns across, a short last line
 	-- centred), 'balanced' (the most even grid for the keys shown) or 'console'
@@ -1531,6 +1534,147 @@ local function UnitParts()
 		pet = db.dockPet and frames.pet or nil}
 end
 
+-- Bays: where an embedded docked frame sits, cut into the console's housing.
+-- A recess like the key slots' (the slot color, a lit line under it on a light
+-- housing, a shade under its top edge); a legend printed over it in the banks'
+-- style, with a lamp lit while its unit is there, the unit's name and level;
+-- and a screen that shows, unlit, while there is no unit.
+Deck.BAY_TITLES = {['uf.player'] = 'Unit A', ['uf.target'] = 'Unit B', ['uf.focus'] = 'Focus', ['uf.targettarget'] = 'ToT',
+	['uf.pet'] = 'Pet', ['cb.player'] = 'Cast A', ['cb.target'] = 'Cast B'}
+Deck.BAY_EMPTY = {['uf.target'] = 'No target', ['uf.focus'] = 'No focus', ['uf.targettarget'] = 'No target of target', ['uf.pet'] = 'No pet'}
+
+function Deck.Bay(parent, key)
+	parent.bays = parent.bays or {}
+	local bay = parent.bays[key]
+	if bay then return bay end
+	local dark = Surface() == 'dark'
+	bay = CreateFrame('Frame', nil, parent)
+	bay:SetFrameLevel(parent:GetFrameLevel() + 1)
+	bay:EnableMouse(false)
+	bay.key = key
+	bay.well = Kit:Texture(bay, 'round-6', 'BACKGROUND', 1)
+	bay.well:SetVertexColor(HW.SLOT[1], HW.SLOT[2], HW.SLOT[3], 1)
+	bay.well:SetAllPoints()
+	bay.shine = Kit:Texture(bay, 'round-6', 'BACKGROUND', 0)
+	bay.shine:SetVertexColor(1, 1, 1, dark and 0 or 0.7)
+	bay.shine:SetPoint('TOPLEFT', 0, 0)
+	bay.shine:SetPoint('BOTTOMRIGHT', 0, -UI.Pixel.Px(parent, 1))
+	bay.shade = bay:CreateTexture(nil, 'BORDER')
+	bay.shade:SetColorTexture(1, 1, 1, 1)
+	bay.shade:SetGradient('VERTICAL', CreateColor(0, 0, 0, 0), CreateColor(0, 0, 0, 0.35))
+	bay.shade:SetPoint('TOPLEFT', 2, -1)
+	bay.shade:SetPoint('TOPRIGHT', -2, -1)
+	bay.shade:SetHeight(4)
+	-- The unlit screen of an empty bay.
+	bay.screen = Kit:LCDPanel(bay, {radius = 4})
+	bay.screen:SetFrameLevel(bay:GetFrameLevel() + 1)
+	bay.ghost = Kit:Text(bay.screen, strupper(Deck.BAY_EMPTY[key] or ''), 8, 'lcdDim', true)
+	bay.ghost:SetPoint('CENTER')
+	-- The legend over it.
+	bay.legend = CreateFrame('Frame', nil, parent)
+	bay.legend:SetFrameLevel(parent:GetFrameLevel() + 2)
+	bay.lamp = Kit:Led(bay.legend, 4, false)
+	bay.label = Kit:Label(bay.legend, strupper(Deck.BAY_TITLES[key] or ''), dark and 'darkDim' or 'dim', 7, true)
+	bay.name = Kit:Label(bay.legend, '', dark and 'darkInk' or 'ink', 7, true)
+	bay.name:SetWordWrap(false)
+	bay.level = Kit:Label(bay.legend, '', dark and 'darkDim' or 'dim', 7, true)
+	bay.rule = bay.legend:CreateTexture(nil, 'ARTWORK')
+	bay.rule:SetColorTexture(dark and 1 or 0, dark and 1 or 0, dark and 1 or 0, dark and 0.08 or 0.09)
+	parent.bays[key] = bay
+	return bay
+end
+
+-- The legend's parts in a row: lamp, title, the unit's name; its level at the
+-- far end; the rule between them. Text widths that can't be read (a secret
+-- name) leave the rule out rather than guess.
+function Deck.PlaceBayLegend(bay)
+	local legend = bay.legend
+	local width = legend:GetWidth()
+	local px = UI.Pixel.Px(legend, 1)
+	bay.lamp:ClearAllPoints()
+	bay.lamp:SetPoint('LEFT', legend, 'LEFT', 0, 0)
+	bay.label:ClearAllPoints()
+	bay.label:SetPoint('LEFT', bay.lamp, 'RIGHT', 4, 0)
+	bay.level:ClearAllPoints()
+	bay.level:SetPoint('RIGHT', legend, 'RIGHT', 0, 0)
+	local label = bay.label:GetStringWidth() or 0
+	bay.name:ClearAllPoints()
+	bay.name:SetPoint('LEFT', bay.label, 'RIGHT', 5, 0)
+	bay.name:SetWidth(max(width * 0.55 - label, 10))
+	bay.name:SetJustifyH('LEFT')
+	local name, level = bay.name:GetStringWidth(), bay.level:GetStringWidth()
+	local readable = not IsSecret(name) and not IsSecret(level) and name and level
+	if readable then
+		name = min(name, max(width * 0.55 - label, 10))
+		local from = 4 + 4 + label + (name > 0 and 5 + name or 0) + 6
+		local to = width - (level > 0 and level + 6 or 0)
+		bay.rule:ClearAllPoints()
+		bay.rule:SetSize(max(to - from, 0), px)
+		bay.rule:SetPoint('LEFT', legend, 'LEFT', from, 0)
+		bay.rule:SetShown(to - from > 4)
+	else
+		bay.rule:Hide()
+	end
+end
+
+-- Power a bay up (its unit is there) or down: the screen fades out or back
+-- in with its legend printed, and the lamp follows.
+function Deck.PowerBay(bay, on)
+	if bay.powered == on then return end
+	bay.powered = on
+	Kit:SetLed(bay.lamp, on)
+	-- Unlit, the screen reads as a powered-down display, a little dimmer than a lit LCD.
+	Kit:FadeTo(bay.screen, on and 0 or 0.8, 'FAST')
+	if not on and bay.ghost:GetText() ~= '' and Kit.Print then Kit:Print(bay.ghost) end
+end
+
+-- Put the bay under its block (the legend row, then the recess), follow its frame.
+function Deck.PlaceBay(parent, block, frame, legendHeight)
+	local bay = Deck.Bay(parent, block.key)
+	bay:ClearAllPoints()
+	bay:SetPoint('TOPLEFT', parent, 'TOPLEFT', block.x, -(block.y + legendHeight))
+	bay:SetSize(block.w, max(block.h - legendHeight, 1))
+	bay.screen:ClearAllPoints()
+	bay.screen:SetPoint('TOPLEFT', 2, -2)
+	bay.screen:SetPoint('BOTTOMRIGHT', -2, 2)
+	bay.ghost:SetShown(DB().targetPlate ~= 'collapse')
+	bay.legend:ClearAllPoints()
+	bay.legend:SetPoint('TOPLEFT', parent, 'TOPLEFT', block.x, -block.y)
+	bay.legend:SetSize(block.w, max(legendHeight - 2, 6))
+	bay:Show()
+	bay.legend:Show()
+	if bay.frame ~= frame then
+		bay.frame = frame
+		-- The unit's name and level, printed on the legend as the frame shows them.
+		local function Copy(target, source)
+			if not source then return end
+			target:SetText(source:GetText())
+			hooksecurefunc(source, 'SetText', function(_, text) target:SetText(text); Deck.PlaceBayLegend(bay) end)
+			hooksecurefunc(source, 'SetFormattedText', function(_, ...) target:SetFormattedText(...); Deck.PlaceBayLegend(bay) end)
+		end
+		if frame.layout then
+			Copy(bay.name, frame.nameText)
+			Copy(bay.level, frame.levelText)
+		end
+		frame:HookScript('OnShow', function() if bay.frame == frame then Deck.PowerBay(bay, true) end end)
+		frame:HookScript('OnHide', function() if bay.frame == frame then Deck.PowerBay(bay, false) end end)
+	end
+	bay.powered = nil
+	Deck.PowerBay(bay, frame:IsShown() and true or false)
+	Deck.PlaceBayLegend(bay)
+end
+
+-- Bays no longer in use (a frame taken out, the floating look) are put away.
+function Deck.HideBays(parent, used)
+	for key, bay in pairs(parent.bays or {}) do
+		local block = used[key]
+		if not (block and block.bay) then
+			bay:Hide()
+			bay.legend:Hide()
+		end
+	end
+end
+
 -- The console editor's arrangement, or nil while the console arranges itself.
 function Deck.CustomLayout()
 	local layout = DB().consoleLayout
@@ -1635,8 +1779,22 @@ local function LayoutConsoleNow()
 	-- cell), then the banks. Both columns are as wide as the widest docked frame.
 	local COLUMN = {'player', 'target', 'focus', 'tot', 'pet'}
 	for _, key in ipairs(COLUMN) do WatchDocked(parts[key], LayoutConsole) end
+	-- Embedded (the default, Hardware look): each docked frame sits in a bay cut
+	-- into the housing, on the banks' row grid, sized by its bay; its header
+	-- is printed on the housing above the bay. Floating: the frames sit on the
+	-- console at their own size.
+	local embedded = HW.On() and db.dockLook ~= 'float' and (parts.player or parts.target) and parts.module
+		and parts.module.DockBaseSize and true or false
 	local function Widest()
 		local widest = 0
+		if embedded then
+			-- The bays are as wide as the player and target frames are set to be.
+			for _, key in ipairs({'player', 'target'}) do
+				local frame = parts[key]
+				if frame then widest = max(widest, parts.module:DockBaseSize(frame) * frame:GetEffectiveScale() / scale) end
+			end
+			if widest > 0 then return widest end
+		end
 		for _, key in ipairs(COLUMN) do widest = max(widest, (Measure(parts[key]))) end
 		return widest
 	end
@@ -1651,7 +1809,7 @@ local function LayoutConsoleNow()
 	-- A fixed width too narrow even for the smallest keys: the docked frames
 	-- scale down (not under 0.8), then the function keys go under them.
 	local factor, stacked = 1, false
-	if fixedW and column > 0 then
+	if fixedW and column > 0 and not embedded then
 		local inner = fixedW - PAD * 2
 		local least = Banks(16)
 		if inner - 2 * Side(column) < least then
@@ -1758,11 +1916,32 @@ local function LayoutConsoleNow()
 	local frames = max(mainHeight, smallRow > 0 and underMain + smallRow or 0)
 	local stackHeight = (stacked and fnH > 0) and fnH + 8 or 0
 	local body = max(height, frames > 0 and frames + AUX + stackHeight or 0, fnH)
+	-- Embedded: the bays take whole bank rows (a legend and a key's height,
+	-- rows a bank gap apart). The player and target bays span the rows above
+	-- the focus and target-of-target row (at least two, more when the frame
+	-- and the lamps or auras under it need them); the cast row is one more row.
+	local pitch, mainRows, bayInset = bank + size + GAP, 0, 3
+	if embedded then
+		local small = fh > 0 or oh > 0
+		local need = 0
+		for _, key in ipairs({'player', 'target'}) do
+			local frame = parts[key]
+			if frame then
+				local ratio = frame:GetEffectiveScale() / scale
+				need = max(need, 44 * ratio + parts.module:DockRoom(frame) * ratio + bayInset * 2)
+			end
+		end
+		mainRows = max(2, small and rows - 1 or rows)
+		while (mainRows - 1) * pitch + size < need and mainRows < 8 do mainRows = mainRows + 1 end
+		local columnRows = mainRows + (small and 1 or 0)
+		body = max(max(rows, columnRows) * pitch - GAP, fnH)
+		if lowHeight > 0 then lowHeight, castRow = size, bank + size + GAP end
+	end
 	if fixedH then body = max(fixedH - HEAD - castRow - xpHeight - PAD, 0) end
 	-- An even number of pixels wide, so a centred console's edges land on pixels too.
 	local consoleWidth = Snap((fixedW or (PAD * 2 + width + sideWidth * 2)) / 2) * 2
 	-- The cast row starts on a pixel; the deck along the base is measured from the bottom.
-	local castY = SnapUp(HEAD + body + ROW_GAP)
+	local castY = SnapUp(HEAD + body + (embedded and GAP + bank or ROW_GAP))
 	local consoleHeight = fixedH and Snap(fixedH) or SnapUp((castRow > 0 and castY + lowHeight or HEAD + body) + xpHeight + PAD)
 	local left = PAD + sideWidth
 	-- The cast bars below share the banks' whole area.
@@ -1781,7 +1960,7 @@ local function LayoutConsoleNow()
 	end
 	-- The banks, top row first (bar 1 is the bottom row, as on Blizzard's
 	-- bars). In the Hardware look each has its printed legend above its keys.
-	local bankY = HEAD + max(0, floor((body - height) / 2))
+	local bankY = HEAD + (embedded and 0 or max(0, floor((body - height) / 2)))
 	for index = #console.bars, 1, -1 do
 		local bar = console.bars[index]
 		local x = align == 'left' and left or left + (area - bar.width) / 2
@@ -1793,12 +1972,32 @@ local function LayoutConsoleNow()
 	local top = HEAD + (frames > 0 and max(0, floor(min((body - frames - stackHeight) / 2, body - frames - stackHeight - AUX))) or 0)
 	local leftX, rightX = PAD + fnPart, consoleWidth - PAD - fnPart - column
 	local function Centre(x, frameWidth) return x + (column - frameWidth) / 2 end
+	local castWidth = Snap((width - 8) / 2)
+	if embedded then
+		-- Bays: the block is the legend row and the bay under it.
+		local mainBay = bank + (mainRows - 1) * pitch + size
+		local smallY = HEAD + mainRows * pitch
+		local castTop = castY - bank
+		local function Bay(key, frame, x, y, h) if frame then Put(key, 'unit', frame, x, y, column, h) end end
+		Bay('uf.player', parts.player, leftX, HEAD, mainBay)
+		Bay('uf.target', parts.target, rightX, HEAD, mainBay)
+		Bay('uf.focus', parts.focus, leftX, smallY, bank + size)
+		Bay('uf.targettarget', parts.tot, rightX, smallY, bank + size)
+		for index, cast in ipairs({parts.playerCast or false, parts.targetCast or false}) do
+			if cast then
+				Put(index == 1 and 'cb.player' or 'cb.target', 'cast', cast, left + (index - 1) * (castWidth + 8), castTop, castWidth, bank + size)
+			end
+		end
+		Bay('uf.pet', parts.pet, leftX, castTop, bank + size)
+		for _, block in ipairs(blocks) do
+			if block.kind == 'unit' or block.kind == 'cast' then block.bay = true end
+		end
+	else
 	Put('uf.player', 'unit', parts.player, Centre(leftX, pw), top + (mainHeight - ph) / 2, pw, ph)
 	Put('uf.target', 'unit', parts.target, Centre(rightX, tw), top + (mainHeight - th) / 2, tw, th)
 	Put('uf.focus', 'unit', parts.focus, Centre(leftX, fw), top + underMain + (smallRow - fh) / 2, fw, fh)
 	Put('uf.targettarget', 'unit', parts.tot, Centre(rightX, ow), top + underMain + (smallRow - oh) / 2, ow, oh)
 	-- The cast row, under the body.
-	local castWidth = Snap((width - 8) / 2)
 	for index, cast in ipairs({parts.playerCast or false, parts.targetCast or false}) do
 		if cast then
 			local _, castH = Measure(cast)
@@ -1807,6 +2006,7 @@ local function LayoutConsoleNow()
 		end
 	end
 	Put('uf.pet', 'unit', parts.pet, Centre(leftX, qw), castY + floor((lowHeight - qh) / 2), qw, qh)
+	end
 	-- The function keys, each side its own cluster: at the outer edges, or under the docked frames.
 	local lw, lh, rw, rh = Deck.FnSides()
 	if stacked then
@@ -1864,7 +2064,9 @@ local function LayoutConsoleNow()
 		for _, block in ipairs(blocks) do
 			local spot = custom[block.key]
 			if type(spot) == 'table' and tonumber(spot.x) and tonumber(spot.y) then
-				if (block.kind == 'cast' or block.kind == 'deck') and tonumber(spot.w) then block.w = Snap(max(tonumber(spot.w), 40)) end
+				if (block.kind == 'cast' or block.kind == 'deck' or block.bay) and tonumber(spot.w) then
+					block.w = Snap(max(tonumber(spot.w), block.bay and 96 or 40))
+				end
 				block.x, block.y, block.saved, block.rank = Snap(tonumber(spot.x)), SnapUp(tonumber(spot.y)), true, tonumber(spot.rank)
 			end
 		end
@@ -1902,8 +2104,25 @@ local function LayoutConsoleNow()
 		elseif (kind == 'unit' or kind == 'cast') and frame then
 			docked[block.key] = frame
 			local ratio = select(3, Measure(frame))
-			if kind == 'cast' then frame:SetWidth(block.w / ratio) end
-			parts.module:SetDocked(frame, true, keepShell)
+			if block.bay then
+				-- In its bay: the frame fills the bay inside a small inset (large
+				-- frames leave room under them for their lamps and auras).
+				local inset = Snap(kind == 'unit' and frame.layout and frame.layout.size == 'large' and bayInset or 2)
+				local room = kind == 'unit' and parts.module:DockRoom(frame) * ratio or 0
+				local w = block.w - inset * 2
+				local h = kind == 'cast' and select(2, Measure(frame)) or max(block.h - bank - inset * 2 - room, 20)
+				if kind == 'cast' then
+					frame:SetWidth(w / ratio)
+					parts.module:SetDocked(frame, true, keepShell, {w / ratio, h / ratio})
+				else
+					parts.module:SetDocked(frame, true, keepShell, {w / ratio, h / ratio})
+				end
+				Deck.PlaceBay(console, block, frame, bank)
+				x, y = x + inset, y + bank + (kind == 'cast' and floor((block.h - bank - h) / 2) or inset)
+			else
+				if kind == 'cast' then frame:SetWidth(block.w / ratio) end
+				parts.module:SetDocked(frame, true, keepShell)
+			end
 			UI:DockMover(block.key, function(target)
 				local now = target:GetEffectiveScale() / console:GetEffectiveScale()
 				target:SetPoint('TOPLEFT', console, 'TOPLEFT', x / now, -y / now)
@@ -1920,6 +2139,7 @@ local function LayoutConsoleNow()
 		end
 	end
 	console.docked = docked
+	Deck.HideBays(console, bySlot)
 	for index = 1, 2 do
 		if not bySlot[index == 1 and 'fnL' or 'fnR'] then Deck.PlaceFnAt(console, index, nil) end
 	end
@@ -1936,12 +2156,14 @@ local function LayoutConsoleNow()
 		plate:SetPoint('TOPLEFT', console, 'TOPLEFT', rect.x + (rect.w - (w or rect.w)) / 2, -rect.y)
 		plate:SetShown(not frame:IsShown())
 	end
-	Plate(console.targetSlot, parts.target, bySlot['uf.target'], pw > 0 and pw or tw, ph > 0 and ph or th)
-	Plate(console.focusSlot, parts.focus, bySlot['uf.focus'])
-	Plate(console.totSlot, parts.tot, bySlot['uf.targettarget'])
+	-- (Embedded, each bay shows its own unlit screen instead.)
+	local function Rect(key) return not embedded and bySlot[key] or nil end
+	Plate(console.targetSlot, parts.target, Rect('uf.target'), pw > 0 and pw or tw, ph > 0 and ph or th)
+	Plate(console.focusSlot, parts.focus, Rect('uf.focus'))
+	Plate(console.totSlot, parts.tot, Rect('uf.targettarget'))
 	for index, key in ipairs({'cb.player', 'cb.target'}) do
 		local rect, slot = bySlot[key], console.castSlots[index]
-		if rect then
+		if rect and not rect.bay then
 			slot:SetSize(rect.w, castHeight)
 			slot:ClearAllPoints()
 			slot:SetPoint('TOPLEFT', console, 'TOPLEFT', rect.x, -rect.y)
@@ -2089,7 +2311,7 @@ function UI:ConsoleSlots()
 	for _, slot in ipairs(console and console.slots or {}) do
 		local mini = slot.kind == 'mini' and slot.frame or nil
 		list[#list + 1] = {key = slot.key, kind = slot.kind, x = slot.x, y = slot.y, w = slot.w, h = slot.h, saved = slot.saved,
-			count = mini and mini.count or slot.count, keySize = mini and mini.size or slot.keySize}
+			count = mini and mini.count or slot.count, keySize = mini and mini.size or slot.keySize, bay = slot.bay}
 	end
 	-- Pet and stance keys tucked on the top edge (outside the body).
 	for _, slot in ipairs(console and console.tucked or {}) do list[#list + 1] = slot end
@@ -4571,6 +4793,9 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 		{'segmented', 'Layout', 'actionbars.layout', items = {{'console', 'Console'}, {'free', 'Free'}}, reload = true,
 			note = 'Console: one device with the player and target docked beside the keys. Free: every bar on its own.'},
 		{'switch', 'Dock unit frames', 'actionbars.dock', 'Player and target frames and cast bars inside the console.', reload = true},
+		{'segmented', 'Docked look', 'actionbars.dockLook', items = {{'embedded', 'Embedded'}, {'float', 'Floating'}}, since = '0.5.2',
+			hidden = function() return not DB().dock end,
+			note = 'Embedded: each docked frame sits in a bay cut into the console, its name printed over it like a bank\'s; empty bays show an unlit screen. Floating: the frames sit on the console in their own housings.'},
 		{'switch', 'Dock focus', 'actionbars.dockFocus', 'The focus frame inside the console too, under the player.',
 			since = '0.5.2', hidden = function() return not DB().dock end},
 		{'switch', 'Dock target of target', 'actionbars.dockToT', 'The target of target inside the console too, under the target.',

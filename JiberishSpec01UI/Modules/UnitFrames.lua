@@ -1595,6 +1595,8 @@ end
 local function LayoutAuras(frame)
 	local cfg = Cfg(frame)
 	local count = (DB().auras and cfg.auras) and max(0, min(cfg.auraMax or 8, 40)) or 0
+	-- An embedded small frame's bay has no room for auras.
+	if frame.embedded and frame.layout.size ~= 'large' then count = 0 end
 	frame.auras = frame.auras or {}
 	for index = #frame.auras + 1, count do AuraKey(frame, index) end
 	local size, gap = cfg.auraSize or 22, 4
@@ -2159,7 +2161,7 @@ end
 -- Secure frames change size and scale only out of combat.
 local function Resize(frame, cfg)
 	if InCombatLockdown() then
-		return UI:AfterCombat(function() Resize(frame, Cfg(frame)) end, 'uf.size.'..frame.unit)
+		return UI:AfterCombat(function() Resize(frame, frame.embedCfg or Cfg(frame)) end, 'uf.size.'..frame.unit)
 	end
 	frame:SetSize(cfg.width, cfg.height)
 	local scale = (DB().scale or 1) * (cfg.scale or 1)
@@ -2959,6 +2961,8 @@ function ApplyShell(frame, shape)
 	end
 	local shown = shape ~= 'slim'
 	if frame.docked and shape == 'device' then shown = frame.keepShell and true or false end
+	-- Embedded in a console bay: the bay is its housing.
+	if frame.embedded then shown = false end
 	shell:SetShown(shown)
 end
 
@@ -3035,7 +3039,9 @@ local function FitLamp(frame)
 end
 
 local function Layout(frame)
-	local cfg = Cfg(frame)
+	-- Embedded in the console, the frame takes its bay's size and leaves its
+	-- header to the legend printed on the console (SetDocked).
+	local cfg = frame.embedCfg or Cfg(frame)
 	FitLamp(frame)
 	Resize(frame, cfg)
 	local shape = ShapeOf(frame)
@@ -3775,13 +3781,57 @@ end
 -- Docked inside the console, a frame or cast bar sits on the console's own
 -- housing, so it drops its shell; undocked it gets it back.
 -- keepShell: an LCD-style frame keeps its own LCD face inside the console.
-function module:SetDocked(object, docked, keepShell)
+-- embed: {width, height} in the frame's own units: the frame sits embedded in
+-- a console bay at that size, without its housing or header (the console
+-- prints the header over the bay); nil for the floating docked look.
+function module:SetDocked(object, docked, keepShell, embed)
 	object.docked = docked and true or nil
 	object.keepShell = keepShell and true or nil
+	local width, height = embed and embed[1], embed and embed[2]
+	local embedded = docked and width and height and true or nil
+	if object.layout and (embedded ~= object.embedded or (embedded and (object.embedW ~= width or object.embedH ~= height))) then
+		object.embedded, object.embedW, object.embedH = embedded, width, height
+		if embedded then
+			local frame = object
+			object.embedCfg = setmetatable({}, {__index = function(_, field)
+				if field == 'width' then return frame.embedW
+				elseif field == 'height' then return frame.embedH
+				elseif field == 'header' then return false end
+				return Cfg(frame)[field]
+			end})
+		else
+			object.embedCfg = nil
+		end
+		UI:Safe(Layout, object)
+		if object:IsShown() then UI:Safe(UpdateAll, object) end
+		return
+	end
+	object.embedded = object.layout and object.embedded or (docked and embed and true or nil)
 	if object.shapeName then ApplyShell(object, object.shapeName)
 	elseif object.shell then object.shell:SetShown(not docked or keepShell and true or false) end
 	-- A cast bar's width changes with its slot; its parts follow.
 	if object.label and object.bar then LayoutCast(object) end
+end
+
+-- A frame's own size from its settings (frame units), whatever its bay made it.
+function module:DockBaseSize(frame)
+	local cfg = frame and frame.layout and Cfg(frame)
+	if not cfg then return 0, 0 end
+	return cfg.width or 0, cfg.height or 0
+end
+
+-- Room an embedded large frame needs under its face for its class lamps and
+-- one row of auras (frame units).
+function module:DockRoom(frame)
+	if not (frame and frame.layout and frame.layout.size == 'large') then return 0 end
+	local cfg = Cfg(frame)
+	local room = 0
+	if DB().auras and cfg.auras and (cfg.auraPosition or 'below') == 'below' and (cfg.auraMax or 8) > 0 then
+		room = BelowOffset(frame) + (cfg.auraSize or 22)
+	elseif frame.lampRail and cfg.classPower then
+		room = (cfg.lampSize or 6) + 12
+	end
+	return room
 end
 
 local lastPartyAsRaid

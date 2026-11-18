@@ -207,7 +207,7 @@ local function Snapshot()
 		-- Stance and pet keys still tucked on the top edge stay there.
 		if not block.tucked then
 			local spot = {x = block.x, y = block.y}
-			if block.kind == 'cast' or block.kind == 'deck' then spot.w = block.w end
+			if block.kind == 'cast' or block.kind == 'deck' or block.bay then spot.w = block.w end
 			layout[block.key] = spot
 		end
 	end
@@ -429,7 +429,7 @@ local function Widen(sign)
 	local block = Find(selected)
 	if not block then return end
 	local width = Grid.Snap(block.w + sign * GridStep() * 4, Px())
-	if width < 40 or not Grid.Free({key = block.key, x = block.x, y = block.y, w = width, h = block.h}, current, Limits()) then
+	if width < (block.bay and 96 or 40) or not Grid.Free({key = block.key, x = block.x, y = block.y, w = width, h = block.h}, current, Limits()) then
 		return Kit:Play('error')
 	end
 	Commit(block.key, {w = width})
@@ -661,7 +661,8 @@ function UpdateInspector()
 		SetContext(4, 'KEYS +', function() MiniKeys(1) end)
 		SetContext(5, 'TAKE OUT', Remove)
 	elseif block then
-		if block.kind == 'cast' or block.kind == 'deck' then
+		-- A cast bar, the meters, or a frame's bay (the frame follows its bay's width).
+		if block.kind == 'cast' or block.kind == 'deck' or block.bay then
 			SetContext(1, 'WIDTH -', function() Widen(-1) end)
 			SetContext(2, 'WIDTH +', function() Widen(1) end)
 		end
