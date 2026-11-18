@@ -2722,7 +2722,22 @@ end
 -- Bring a group's buttons onto `parent` at `size`; returns the ones to show.
 local function Collect(group, extra, parent, size, device)
 	local shown = {}
-	for _, name in ipairs(Names(group, extra)) do
+	local names = Names(group, extra)
+	-- Blizzard's micro menu lays itself out again whenever a shown button leaves
+	-- it, and then reads its first and last buttons' centres. A hidden button it
+	-- never placed (Forever's Help key) has no centre and its code errors. Such
+	-- buttons go first: a hidden button changing parent fires no OnShow/OnHide,
+	-- so no layout runs, and by the time a shown one leaves they are gone.
+	if group == 'menu' then
+		for _, name in ipairs(names) do
+			local button = _G[name]
+			if button and not Forbidden(button) and button:GetParent() ~= parent
+				and (not button:IsShown() or button:GetCenter() == nil) then
+				button:SetParent(parent)
+			end
+		end
+	end
+	for _, name in ipairs(names) do
 		local button = _G[name]
 		if button and not Forbidden(button) then
 			Guard(button)
