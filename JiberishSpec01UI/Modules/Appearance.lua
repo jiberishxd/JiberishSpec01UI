@@ -6,10 +6,11 @@
 -- digits. A small sample device hangs under the hub while this page is open,
 -- so a change shows on real SPEC-01 parts as the slider moves.
 --
--- Fade: chosen parts of the interface rest at a low alpha while nothing is
--- happening (out of combat, full health, no target, not casting) and come back
--- for a fight, a target, a cast or the mouse. Alpha only: protected frames may
--- change alpha at any time, so nothing here waits for combat to end.
+-- Fade: chosen parts of the interface rest at a low alpha (or out of sight)
+-- whenever nothing calls for them: out of combat by default, or only when fully
+-- idle, or always unless one of the chosen "show when" triggers holds. Alpha
+-- only: protected frames may change alpha at any time, so nothing here waits
+-- for combat to end.
 local _, UI = ...
 local Kit = UI.Kit
 
@@ -23,8 +24,21 @@ UI:RegisterDefaults('appearance', {
 	borderPx = 1, rounding = 1, shadowSize = 1, shadowOpacity = 1,
 	textScale = 1, textOutline = 'none', textShadow = false, ghostDigits = true,
 	barBrightness = 1, softness = 0, smoothBars = true, motionScale = 1,
-	fade = {enable = false, alpha = 0.25, openWorld = false,
-		console = true, unitframes = true, minimap = false, chat = true, objectives = false, buffs = true},
+	-- mode: 'combat' (faded whenever out of combat), 'idle' (also needs no target, no
+	-- cast, full health) or 'always' (faded unless a trigger holds).
+	fade = {enable = false, mode = 'combat', alpha = 0.3, delay = 2, fadeOut = 0.6, fadeIn = 0.15,
+		mountedMore = false, mountedAlpha = 0.1, advanced = false,
+		triggers = {combat = true, target = false, casting = false, health = false, power = false, mouseover = true,
+			group = false, instance = false, resting = false},
+		-- Each part: on, and its own faded opacity (-1: the global one; 0: out of sight).
+		parts = {
+			console = {on = true, alpha = -1}, side = {on = true, alpha = -1}, menu = {on = true, alpha = -1},
+			unitframes = {on = true, alpha = -1}, castbars = {on = false, alpha = -1}, group = {on = false, alpha = -1},
+			minimap = {on = false, alpha = -1}, chat = {on = true, alpha = -1}, objectives = {on = false, alpha = -1},
+			buffs = {on = true, alpha = -1}, timeline = {on = false, alpha = -1}, meters = {on = false, alpha = -1},
+			infopanel = {on = false, alpha = -1},
+		},
+	},
 })
 -- Interface colors: each override replaces its tokens while its switch is on
 -- (Kit:RGB). The colors saved here are the reference's own, a starting point.
@@ -183,15 +197,7 @@ UI:RegisterPage('theme', {title = 'Theme', order = 2,
 		{'button', 'Appearance', 'Reset', ResetLook, 'Borders, corners, shadows, type, bars and motion back to the reference.'},
 	}},
 	{title = 'Fade', rows = {
-		{'switch', 'Fade when idle', 'appearance.fade.enable', 'Parts rest dim out of combat, at full health, with no target and no cast. The mouse, a target or a fight brings them back.'},
-		{'slider', 'Resting opacity', 'appearance.fade.alpha', 0, 0.9, 0.05, nil, format = Percent},
-		{'switch', 'Open world only', 'appearance.fade.openWorld', 'Keep everything up in dungeons, raids, battlegrounds and arenas.'},
-		{'switch', 'Console and bars', 'appearance.fade.console'},
-		{'switch', 'Unit frames', 'appearance.fade.unitframes'},
-		{'switch', 'Minimap', 'appearance.fade.minimap'},
-		{'switch', 'Chat', 'appearance.fade.chat'},
-		{'switch', 'Objectives', 'appearance.fade.objectives'},
-		{'switch', 'Buffs', 'appearance.fade.buffs'},
+		{'note', 'Fading parts of the interface out of combat has its own page: Fade.'},
 	}},
 }})
 
@@ -491,47 +497,66 @@ UI:RegisterPage('fonts', {title = 'Fonts', order = 2.1, since = '0.5.1', cards =
 
 -- Fade ---------------------------------------------------------------------------
 local fade = UI:RegisterModule('fade', {always = true})
+local GetTime = GetTime
 
-local CONSOLE = {'JiberishSpec01Console', 'JiberishSpec01SideBars', 'JiberishSpec01PetKeys', 'JiberishSpec01StanceKeys',
-	'JiberishSpec01Menu', 'JiberishSpec01ExtraHolder', 'JiberishSpec01ZoneHolder', 'MainActionBar', 'MainMenuBar',
-	'MultiBarBottomLeft', 'MultiBarBottomRight', 'MultiBarLeft', 'MultiBarRight', 'StanceBar', 'PetActionBar', 'MicroMenuContainer',
-	'BagsBar'}
-for index = 1, 5 do CONSOLE[#CONSOLE + 1] = 'JiberishSpec01Bar'..index end
-
--- Each part: the top-level frames it covers right now. Only frames sitting
--- directly on UIParent are faded, so a child is never dimmed twice.
+-- The parts that fade. Our own frames are found by their mover keys (a key or
+-- a key prefix), the game's by name; only frames sitting directly on UIParent
+-- are faded, so a child is never dimmed twice, and a game frame our style has
+-- replaced (parked off UIParent) is skipped by the same rule.
+local CHAT = {'GeneralDockManager', 'ChatFrameMenuButton', 'ChatFrameChannelButton', 'QuickJoinToastButton'}
+for index = 1, NUM_CHAT_WINDOWS or 10 do CHAT[#CHAT + 1] = 'ChatFrame'..index end
 local PARTS = {
-	console = function(list)
-		for _, name in ipairs(CONSOLE) do list[#list + 1] = _G[name] end
-	end,
-	unitframes = function(list)
-		local unitframes = UI.modules.unitframes
-		if unitframes and unitframes.enabled and unitframes.frames then
-			for _, frame in pairs(unitframes.frames) do list[#list + 1] = frame end
-			list[#list + 1] = unitframes.playerCast
-			list[#list + 1] = unitframes.targetCast
-			list[#list + 1] = unitframes.partyHeader
-		else
-			for _, name in ipairs({'PlayerFrame', 'TargetFrame', 'FocusFrame', 'PetFrame', 'PartyFrame'}) do list[#list + 1] = _G[name] end
-		end
-	end,
-	minimap = function(list) list[#list + 1] = _G.MinimapCluster end,
-	chat = function(list)
-		for index = 1, NUM_CHAT_WINDOWS or 10 do list[#list + 1] = _G['ChatFrame'..index] end
-		list[#list + 1] = _G.GeneralDockManager
-		list[#list + 1] = _G.ChatFrameMenuButton
-		list[#list + 1] = _G.ChatFrameChannelButton
-		list[#list + 1] = _G.QuickJoinToastButton
-	end,
-	objectives = function(list) list[#list + 1] = _G.ObjectiveTrackerFrame end,
-	buffs = function(list)
-		list[#list + 1] = _G.BuffFrame
-		list[#list + 1] = _G.DebuffFrame
-	end,
+	{key = 'console', label = 'Console and bars', movers = {'ab.console', 'ab.bar', 'ab.pet', 'ab.stance', 'ab.extra', 'ab.zone'},
+		names = {'MainActionBar', 'MainMenuBar', 'MultiBarBottomLeft', 'MultiBarBottomRight', 'MultiBar5', 'MultiBar6', 'MultiBar7',
+			'StanceBar', 'PetActionBar', 'JiberishSpec01PetKeys', 'JiberishSpec01StanceKeys'}},
+	{key = 'side', label = 'Side bars', movers = {'ab.side'}, names = {'MultiBarLeft', 'MultiBarRight'}},
+	{key = 'menu', label = 'Menu and bags', movers = {'ab.menu', 'ab.bags'}, names = {'MicroMenuContainer', 'BagsBar'}},
+	{key = 'unitframes', label = 'Unit frames', movers = {'uf.'},
+		names = {'PlayerFrame', 'TargetFrame', 'FocusFrame', 'PetFrame', 'PartyFrame', 'JiberishSpec01PartyHeader'}},
+	{key = 'castbars', label = 'Cast bars', movers = {'cb.'}, names = {'PlayerCastingBarFrame'}},
+	{key = 'group', label = 'Raid, boss and arena', movers = {'group.'}, names = {'CompactRaidFrameContainer'}},
+	{key = 'minimap', label = 'Minimap', names = {'MinimapCluster'}},
+	{key = 'chat', label = 'Chat', names = CHAT, chat = true},
+	{key = 'objectives', label = 'Objectives', names = {'ObjectiveTrackerFrame'}},
+	{key = 'buffs', label = 'Buffs', names = {'BuffFrame', 'DebuffFrame'}},
+	{key = 'timeline', label = 'Aura timeline', movers = {'tl.player'}},
+	{key = 'meters', label = 'Damage meters', movers = {'dm.'}},
+	{key = 'infopanel', label = 'Info panel and HUD', movers = {'ip.'}},
 }
-local PART_ORDER = {'console', 'unitframes', 'minimap', 'chat', 'objectives', 'buffs'}
+fade.parts = PARTS
+
+-- The triggers that bring parts back, in the page's order. Modes force some on.
+local TRIGGERS = {
+	{'combat', 'In combat', 'A fight brings everything back.'},
+	{'target', 'Have a target'},
+	{'casting', 'Casting or channeling'},
+	{'health', 'Below full health'},
+	{'power', 'Below full power', 'Mana, energy, rage and the like not full (or above empty for rage and runic power).'},
+	{'mouseover', 'Mouse over a part', 'A faded part comes back at once while the mouse is over it, even when out of sight.'},
+	{'group', 'In a group or raid'},
+	{'instance', 'In an instance', 'Dungeons, raids, battlegrounds, arenas and scenarios.'},
+	{'resting', 'In a resting area', 'Cities and inns.'},
+}
+local FORCED = {combat = {combat = true}, idle = {combat = true, target = true, casting = true, health = true}, always = {}}
 
 local function DB() return UI.db.appearance.fade end
+
+-- Old saves: one switch per part, 'open world only', and the idle rule. Every
+-- profile moves to the 'out of combat' rule once.
+local function Migrate(db)
+	if db.v2 then return end
+	db.mode = 'combat'
+	for _, part in ipairs(PARTS) do
+		local old = db[part.key]
+		if type(old) == 'boolean' and type(db.parts) == 'table' and type(db.parts[part.key]) == 'table' then
+			db.parts[part.key].on = old
+		end
+		if type(old) == 'boolean' then db[part.key] = nil end
+	end
+	if db.openWorld and type(db.triggers) == 'table' then db.triggers.instance = true end
+	db.openWorld = nil
+	db.v2 = true
+end
 
 local function Usable(frame)
 	if type(frame) ~= 'table' or not frame.SetAlpha or not frame.GetParent then return false end
@@ -539,14 +564,33 @@ local function Usable(frame)
 	return frame:GetParent() == UIParent
 end
 
-local function Frames(part)
-	local list = {}
-	PARTS[part](list)
-	local usable = {}
-	for _, frame in ipairs(list) do
-		if Usable(frame) then usable[#usable + 1] = frame end
+-- Each part's frames, gathered again every two seconds (frames come and go).
+local cache, cachedAt = {}, 0
+local function Gather()
+	cachedAt = GetTime()
+	local movers = UI.GetMovers and UI:GetMovers() or {}
+	for _, part in ipairs(PARTS) do
+		local list, seen = cache[part.key] or {}, {}
+		wipe(list)
+		local function Add(frame)
+			if not seen[frame] and Usable(frame) then seen[frame] = true; list[#list + 1] = frame end
+		end
+		for _, mover in ipairs(movers) do
+			for _, prefix in ipairs(part.movers or {}) do
+				if mover.key:sub(1, #prefix) == prefix and not mover.docked then Add(mover.frame) end
+			end
+		end
+		for _, name in ipairs(part.names or {}) do
+			local frame = _G[name]
+			if frame then Add(frame) end
+		end
+		cache[part.key] = list
 	end
-	return usable
+end
+
+local function Frames(part)
+	if GetTime() - cachedAt > 2 then Gather() end
+	return cache[part.key] or {}
 end
 
 -- Lockdown starts after PLAYER_REGEN_DISABLED fires, so the event says it first.
@@ -560,20 +604,38 @@ local function Casting()
 	return IsSecret(name) or name ~= nil
 end
 
-local function FullHealth()
-	local health, most = UnitHealth('player'), UnitHealthMax('player')
-	if IsSecret(health) or IsSecret(most) then return false end
-	return health >= most
+-- Hidden values count as "not full", so a part comes back rather than stays out.
+local function Full(current, most)
+	if IsSecret(current) or IsSecret(most) or type(current) ~= 'number' or type(most) ~= 'number' then return false end
+	return current >= most
 end
 
--- Something is happening that every part should be up for.
-local function Busy()
-	if fighting or InCombatLockdown() then return true end
-	if DB().openWorld and IsInInstance() then return true end
-	if UnitExists('target') then return true end
-	if Casting() or not FullHealth() then return true end
-	local box = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
-	if box then return true end
+local EMPTYING = {RAGE = true, RUNIC_POWER = true, LUNAR_POWER = true, FURY = true, PAIN = true, INSANITY = true, MAELSTROM = true}
+local function PowerSettled()
+	local _, token = UnitPowerType('player')
+	local current, most = UnitPower('player'), UnitPowerMax('player')
+	if IsSecret(token) or IsSecret(current) then return false end
+	if token and EMPTYING[token] then return current == 0 end
+	return Full(current, most)
+end
+
+local function On(db, trigger)
+	return (FORCED[db.mode] or FORCED.combat)[trigger] or (type(db.triggers) == 'table' and db.triggers[trigger]) or false
+end
+
+-- Whether something calls every part back right now.
+local function Wanted(db)
+	if fighting or InCombatLockdown() then return On(db, 'combat') end
+	if On(db, 'target') and UnitExists('target') then return true end
+	if On(db, 'casting') and Casting() then return true end
+	if On(db, 'health') and not Full(UnitHealth('player'), UnitHealthMax('player')) then return true end
+	if On(db, 'power') and not PowerSettled() then return true end
+	if On(db, 'group') and IsInGroup() then return true end
+	if On(db, 'instance') then
+		local inside, kind = IsInInstance()
+		if inside and kind ~= 'none' then return true end
+	end
+	if On(db, 'resting') and IsResting() then return true end
 	return false
 end
 
@@ -584,64 +646,110 @@ local function Hovered(frames)
 	return false
 end
 
+local function MoverAlpha(frame) return UI.MoverAlphaFor and UI:MoverAlphaFor(frame) or 1 end
+
 -- Each frame remembers the alpha this module last chose for it, so it only
 -- animates on a change and puts back what someone else moved meanwhile.
 local chosen = setmetatable({}, {__mode = 'k'})
 
-local function SetPart(frames, alpha, speed)
+local function SetPart(frames, alpha, seconds)
 	for _, frame in ipairs(frames) do
 		local current = frame:GetAlpha()
 		-- Unlock mode's opacity and Hide stay in force under the fade.
-		local alpha = alpha * (UI.MoverAlphaFor and UI:MoverAlphaFor(frame) or 1)
-		if chosen[frame] ~= alpha or (not IsSecret(current) and abs(current - alpha) > 0.02 and not Kit:Animating(frame)) then
-			chosen[frame] = alpha
-			Kit:FadeTo(frame, alpha, speed)
+		local target = alpha * MoverAlpha(frame)
+		if chosen[frame] ~= target or (not IsSecret(current) and abs(current - target) > 0.02 and not Kit:Animating(frame)) then
+			chosen[frame] = target
+			Kit:FadeTo(frame, target, seconds)
 		end
 	end
 end
 
-local ticker
 local function Restore()
 	for frame in pairs(chosen) do
-		if Usable(frame) then Kit:FadeTo(frame, UI.MoverAlphaFor and UI:MoverAlphaFor(frame) or 1, 'FAST') end
+		if Usable(frame) then Kit:FadeTo(frame, MoverAlpha(frame), 0.15) end
 	end
 	wipe(chosen)
 end
 
+-- A part's faded opacity: its own, else the global one; mounted can go lower.
+local function FadedAlpha(db, settings)
+	local alpha = settings and type(settings.alpha) == 'number' and settings.alpha >= 0 and settings.alpha or db.alpha or 0.3
+	if db.mountedMore and (IsMounted() or (IsFlying and IsFlying())) then alpha = math.min(alpha, db.mountedAlpha or 0.1) end
+	return alpha
+end
+
+local ticker, previewUntil = nil, 0
+local awakeAt = {}       -- part key -> when it was last called back
+local faded = {}         -- part key -> true while it rests faded
+
 local function Tick()
 	local db = DB()
-	if not db.enable then return end
-	-- Pet battles hide the console and its frames themselves.
+	local previewing = GetTime() < previewUntil
+	if not (db.enable or previewing) then return end
+	-- Pet battles hide the console and its frames themselves; unlock mode shows everything.
 	if C_PetBattles and C_PetBattles.IsInBattle and C_PetBattles.IsInBattle() then return end
-	local busy = Busy()
-	for _, part in ipairs(PART_ORDER) do
+	local unlocked = UI.MoversUnlocked and UI:MoversUnlocked()
+	local now = GetTime()
+	local wanted = not previewing and (unlocked or Wanted(db))
+	local hover = not previewing and On(db, 'mouseover')
+	local typing = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
+	for _, part in ipairs(PARTS) do
+		local settings = type(db.parts) == 'table' and db.parts[part.key]
 		local frames = Frames(part)
-		if db[part] then
-			local awake = busy or Hovered(frames)
-			SetPart(frames, awake and 1 or db.alpha, awake and 'FAST' or 'SLOW')
+		if settings and settings.on and (db.enable or previewing) then
+			local awake = wanted or (part.chat and typing and not previewing)
+			-- Mouse-over is looked for only while nothing else holds the part up (out of
+			-- combat, faded or about to fade), and brings it back at once.
+			local hovered = not awake and hover and Hovered(frames)
+			if awake or hovered then awakeAt[part.key] = now end
+			local stay = not previewing and now - (awakeAt[part.key] or 0) < (db.delay or 2)
+			if awake or hovered or stay then
+				faded[part.key] = nil
+				SetPart(frames, 1, hovered and 0 or (db.fadeIn or 0.15))
+			else
+				faded[part.key] = true
+				SetPart(frames, FadedAlpha(db, settings), db.fadeOut or 0.6)
+			end
 		else
-			SetPart(frames, 1, 'FAST')
+			faded[part.key] = nil
+			SetPart(frames, 1, db.fadeIn or 0.15)
 		end
 	end
 end
 
 local function Update()
-	local on = DB().enable
+	local db = DB()
+	Migrate(db)
+	cachedAt = 0
+	local on = db.enable or GetTime() < previewUntil
 	if on and not ticker then
-		ticker = C_Timer.NewTicker(0.15, function() UI:Safe(Tick) end)
+		-- Ten times a second: triggers, the delay, and the mouse over faded parts.
+		ticker = C_Timer.NewTicker(0.1, function() UI:Safe(Tick) end)
 		Tick()
 	elseif not on and ticker then
 		ticker:Cancel()
 		ticker = nil
+		wipe(faded)
 		Restore()
+	elseif on then
+		Tick()
 	end
+end
+
+-- Fade every chosen part now, for three seconds, to show how it looks.
+function fade:Preview()
+	previewUntil = GetTime() + 3
+	wipe(awakeAt)
+	Update()
+	C_Timer.After(3.05, function() UI:Safe(Update) end)
 end
 
 function fade:Enable()
 	local driver = CreateFrame('Frame')
-	driver:RegisterEvent('PLAYER_REGEN_DISABLED')
-	driver:RegisterEvent('PLAYER_REGEN_ENABLED')
-	driver:RegisterEvent('PLAYER_TARGET_CHANGED')
+	for _, event in ipairs({'PLAYER_REGEN_DISABLED', 'PLAYER_REGEN_ENABLED', 'PLAYER_TARGET_CHANGED', 'GROUP_ROSTER_UPDATE',
+		'PLAYER_UPDATE_RESTING', 'ZONE_CHANGED_NEW_AREA', 'PLAYER_MOUNT_DISPLAY_CHANGED'}) do
+		pcall(driver.RegisterEvent, driver, event)
+	end
 	driver:SetScript('OnEvent', function(_, event)
 		if event == 'PLAYER_REGEN_DISABLED' then fighting = true
 		elseif event == 'PLAYER_REGEN_ENABLED' then fighting = false end
@@ -651,3 +759,52 @@ function fade:Enable()
 end
 
 function fade:Refresh() Update() end
+
+-- The Fade page ------------------------------------------------------------------------
+local function Seconds(value) return format('%.1f s', value) end
+local function PartAlpha(value) return value < 0 and 'Global' or value == 0 and 'Hidden' or Percent(value) end
+local function Mode() return DB().mode end
+
+local fadeRows = {
+	{'switch', 'Fade', 'appearance.fade.enable', 'Chosen parts rest faded when nothing calls for them.'},
+	{'segmented', 'Fade when', 'appearance.fade.mode', items = {{'combat', 'Out of combat'}, {'idle', 'Idle'}, {'always', 'Always'}},
+		note = 'Out of combat: faded whenever you are not fighting. Idle: also needs no target, no cast and full health. Always: faded unless one of the triggers below holds.', since = '0.5.2'},
+	{'slider', 'Faded opacity', 'appearance.fade.alpha', 0, 0.9, 0.05, '0% puts parts out of sight; the mouse still brings them back.', format = Percent},
+	{'slider', 'Fade-out delay', 'appearance.fade.delay', 0, 10, 0.5, 'How long parts stay up after the last trigger ends.', format = Seconds, since = '0.5.2'},
+	{'slider', 'Fade out over', 'appearance.fade.fadeOut', 0, 2, 0.05, nil, format = Seconds, since = '0.5.2'},
+	{'slider', 'Fade in over', 'appearance.fade.fadeIn', 0, 1, 0.05, 'The mouse brings a part back at once.', format = Seconds, since = '0.5.2'},
+	{'switch', 'Fade more when mounted', 'appearance.fade.mountedMore', 'Mounted or flying out of combat, parts go lower still.', since = '0.5.2'},
+	{'slider', 'Mounted opacity', 'appearance.fade.mountedAlpha', 0, 0.9, 0.05, nil, format = Percent,
+		hidden = function() return not DB().mountedMore end},
+	{'button', 'Preview', 'Fade', function() fade:Preview() end, 'Fade every chosen part for three seconds.', since = '0.5.2'},
+}
+
+local triggerRows = {}
+for _, trigger in ipairs(TRIGGERS) do
+	local key = trigger[1]
+	triggerRows[#triggerRows + 1] = {'switch', trigger[2], 'appearance.fade.triggers.'..key, trigger[3], since = '0.5.2',
+		get = function() return On(DB(), key) and true or false end,
+		disabled = function() return (FORCED[Mode()] or FORCED.combat)[key] == true end}
+end
+triggerRows[#triggerRows + 1] = {'note', 'Triggers the mode needs are on and locked: out of combat always counts a fight, and idle also a target, a cast and lost health.'}
+
+local partRows = {
+	{'switch', 'Per-part opacity', 'appearance.fade.advanced', 'Give each part its own faded opacity, or put it out of sight.', since = '0.5.2'},
+}
+for _, part in ipairs(PARTS) do
+	local path = 'appearance.fade.parts.'..part.key
+	partRows[#partRows + 1] = {'switch', part.label, path..'.on', since = '0.5.2'}
+	partRows[#partRows + 1] = {'slider', part.label..' opacity', path..'.alpha', -0.05, 0.9, 0.05, nil, format = PartAlpha,
+		hidden = function() return not DB().advanced end,
+		get = function()
+			local settings = DB().parts[part.key]
+			return settings and type(settings.alpha) == 'number' and math.max(settings.alpha, -0.05) or -0.05
+		end,
+		set = function(value) DB().parts[part.key].alpha = value < 0 and -1 or value end}
+end
+
+UI:RegisterPage('fade', {title = 'Fade', order = 2.09, since = '0.5.2', cards = {
+	{title = 'Fade', rows = fadeRows},
+	{title = 'Show when', rows = triggerRows},
+	{title = 'Parts', rows = partRows},
+}})
