@@ -26,6 +26,7 @@ Modules\Appearance.lua
 Modules\Motion.lua
 Modules\Movers.lua
 Modules\Layouts.lua
+Modules\DefaultProfile.lua
 Modules\Profiles.lua
 Modules\Setup.lua
 Modules\Runtime.lua

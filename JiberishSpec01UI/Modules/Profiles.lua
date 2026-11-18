@@ -106,12 +106,23 @@ local function Wanted(store) return store.chars[CharKey()] or DEFAULT end
 local loader = CreateFrame('Frame')
 loader:RegisterEvent('ADDON_LOADED')
 loader:RegisterEvent('PLAYER_LOGOUT')
+loader:RegisterEvent('PLAYER_LOGIN')
 loader:SetScript('OnEvent', function(_, event, name)
 	if event == 'ADDON_LOADED' then
 		if name ~= ADDON then return end
 		local db = JiberishSpec01DB
 		if type(db) ~= 'table' then return end -- first run: Core makes it, and logout saves it
 		local store = Store(db)
+		-- A new install starts from the shipped default profile (frame positions
+		-- left out: the layout it names is solved for this screen after login).
+		if UI.freshInstall and UI.DEFAULT_PROFILE then
+			local ok, data = pcall(UI.DecodeProfile, UI, UI.DEFAULT_PROFILE)
+			if ok and type(data) == 'table' then
+				data.movers, data.hub = nil, nil
+				LoadInto(db, data)
+				UI.applyDefaultLayout = type(db.layout) == 'table' and db.layout.preset or nil
+			end
+		end
 		local wanted = Wanted(store)
 		if store.live == nil then store.live = wanted end
 		store.discard = nil -- from 0.5 builds that deferred a reset to the next load
@@ -120,6 +131,15 @@ loader:SetScript('OnEvent', function(_, event, name)
 			store.profiles[store.live] = Copy(db)
 			LoadInto(db, store.profiles[wanted])
 			store.live = wanted
+		end
+	elseif event == 'PLAYER_LOGIN' then
+		-- The default profile's layout, solved for this screen once frames exist.
+		local preset = UI.applyDefaultLayout
+		if preset and UI.ApplyLayoutPreset then
+			UI.applyDefaultLayout = nil
+			C_Timer.After(2.5, function()
+				UI:AfterCombat(function() UI:Safe(UI.ApplyLayoutPreset, UI, preset) end, 'defaultLayout')
+			end)
 		end
 	elseif event == 'PLAYER_LOGOUT' then
 		local db = JiberishSpec01DB

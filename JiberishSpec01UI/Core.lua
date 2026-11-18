@@ -203,6 +203,8 @@ driver:RegisterEvent('PLAYER_REGEN_ENABLED')
 driver:SetScript('OnEvent', function(_, event, name)
 	if event == 'ADDON_LOADED' then
 		if name ~= ADDON then return end
+		-- No saved settings at all: a new install, which starts from the default profile.
+		UI.freshInstall = type(JiberishSpec01DB) ~= 'table'
 		JiberishSpec01DB = Fill(type(JiberishSpec01DB) == 'table' and JiberishSpec01DB or {}, defaults)
 		UI.db = JiberishSpec01DB
 		UI:Migrate(UI.db)
