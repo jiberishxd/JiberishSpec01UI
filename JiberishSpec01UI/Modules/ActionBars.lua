@@ -1640,7 +1640,7 @@ local function LayoutConsoleNow()
 		for _, key in ipairs(COLUMN) do widest = max(widest, (Measure(parts[key]))) end
 		return widest
 	end
-	local fnW, fnH, fnColumns = Deck.FnBlock(nil)
+	local fnW, fnH = Deck.FnBlock()
 	local column = Widest()
 	local function Side(frameWidth, stacked)
 		local frame = frameWidth > 0 and frameWidth + COL_GAP or 0
@@ -1679,13 +1679,20 @@ local function LayoutConsoleNow()
 	local xpHeight = Deck.BottomHeight()
 	local bank = HW.On() and HW.BANK_H or 0
 	local rows = #console.bars
-	-- Menu and bag keys set into the console: a strip in the header (when it
-	-- fits beside the name and the readouts) or along the bottom, over the stats.
+	-- Menu and bag keys set into the console: a strip in the header (centred
+	-- between the name and the readouts, when it fits), along the bottom over
+	-- the stats, or anywhere in the body (placed in the console editor, in
+	-- its own columns and key size).
+	local menuSpot = Deck.CustomLayout() and Deck.CustomLayout().menu
+	if type(menuSpot) ~= 'table' then menuSpot = nil end
+	local inBody = menuSpot and tonumber(menuSpot.x) and tonumber(menuSpot.y) and true or false
 	local stripKey = max(16, floor(KeySize() * 0.6))
-	local edge = Deck.MenuEdge and Deck.MenuEdge() or 'bottom'
+	local edge = inBody and 'body' or (Deck.MenuEdge and Deck.MenuEdge() or 'bottom')
+	if edge ~= 'header' and menuSpot and tonumber(menuSpot.keys) then stripKey = Kit:Clamp(floor(tonumber(menuSpot.keys)), 16, 40) end
 	if edge == 'header' then stripKey = min(stripKey, HEAD - 6) end
+	local stripColumns = edge == 'body' and menuSpot and tonumber(menuSpot.columns) or nil
 	local stripW, stripH, stripCount = 0, 0, 0
-	if Deck.MenuStrip and console.menuStrip then stripW, stripH, stripCount = Deck.MenuStrip(stripKey) end
+	if Deck.MenuStrip and console.menuStrip then stripW, stripH, stripCount = Deck.MenuStrip(stripKey, stripColumns) end
 	if edge == 'header' and stripCount > 0 then
 		local right = PAD + (db.readout ~= 'off' and console.lcd:GetWidth() or 0) + (console.pager and console.pager:GetWidth() + 10 or 0)
 		for _, panel in ipairs(console.panels or {}) do
@@ -1699,7 +1706,7 @@ local function LayoutConsoleNow()
 			stripW, stripH, stripCount = Deck.MenuStrip(stripKey)
 		end
 	end
-	console.menuStripKey, console.menuStripCount, console.menuStripEdge = stripKey, stripCount, edge
+	console.menuStripKey, console.menuStripCount, console.menuStripEdge, console.menuStripColumns = stripKey, stripCount, edge, stripColumns
 	if edge == 'bottom' and stripCount > 0 then xpHeight = xpHeight + stripH + ROW_GAP end
 
 	-- The key size: the one asked for, made just small enough to fit a fixed
@@ -1801,7 +1808,7 @@ local function LayoutConsoleNow()
 	end
 	Put('uf.pet', 'unit', parts.pet, Centre(leftX, qw), castY + floor((lowHeight - qh) / 2), qw, qh)
 	-- The function keys, each side its own cluster: at the outer edges, or under the docked frames.
-	local lw, lh, rw, rh = Deck.FnSides(fnColumns)
+	local lw, lh, rw, rh = Deck.FnSides()
 	if stacked then
 		local fnY = top + frames + 8
 		Put('fnL', 'fn', 1, PAD + (column - lw) / 2, fnY, lw, lh)
@@ -1810,13 +1817,19 @@ local function LayoutConsoleNow()
 		Put('fnL', 'fn', 1, PAD, HEAD + max(0, floor((body - lh) / 2)), lw, lh)
 		Put('fnR', 'fn', 2, consoleWidth - PAD - rw, HEAD + max(0, floor((body - rh) / 2)), rw, rh)
 	end
+	for side, key in ipairs({'fnL', 'fnR'}) do
+		if bySlot[key] then bySlot[key].count = #select(3, Deck.FnCluster(side)) end
+	end
 	-- The meters and stats strip along the base, and the menu keys over them.
 	local deckHeight = max(Deck.BottomHeight() - ROW_GAP, 0)
 	Put('deck', 'deck', false, PAD, consoleHeight - PAD - deckHeight, consoleWidth - PAD * 2, deckHeight)
 	local strip = console.menuStrip
 	if strip and stripCount > 0 and edge == 'bottom' then
 		Put('menu', 'menu', strip, (consoleWidth - stripW) / 2, consoleHeight - PAD - Deck.BottomHeight() - stripH, stripW, stripH)
+	elseif strip and stripCount > 0 and edge == 'body' then
+		Put('menu', 'menu', strip, 0, 0, stripW, stripH)
 	end
+	if bySlot.menu then bySlot.menu.count, bySlot.menu.keySize = stripCount, stripKey end
 	-- The stance and pet keys: tucked on the console's top edge, out on their
 	-- own spot (taken out), or set into the body like a bank (a saved spot).
 	-- Stance keys with no stances for this character take no room.
@@ -1880,7 +1893,7 @@ local function LayoutConsoleNow()
 			frame.header:ClearAllPoints()
 			frame.header:SetPoint('TOPLEFT', console, 'TOPLEFT', x + 2, -(y + bank))
 		elseif kind == 'fn' then
-			Deck.PlaceFnAt(console, frame, x, y, fnColumns)
+			Deck.PlaceFnAt(console, frame, x, y)
 		elseif kind == 'menu' then
 			frame:ClearAllPoints()
 			frame:SetPoint('TOPLEFT', console, 'TOPLEFT', x, -y)
@@ -1948,10 +1961,18 @@ local function LayoutConsoleNow()
 		local used = PAD + (console.lcd:IsShown() and console.lcd:GetWidth() or 0) + (console.pager and console.pager:GetWidth() + 10 or 0) + 8
 		if headerStrip then used = used + stripW + 12 end
 		local last = Deck.PlacePanels(console, anchor, used)
-		-- The header strip sits left of the readouts; the name ends before it.
+		-- The header strip sits centred between the name and the readouts
+		-- (against the readouts when the name is long); the name ends before it.
 		if headerStrip then
 			strip:ClearAllPoints()
-			strip:SetPoint('RIGHT', last, 'LEFT', -12, 0)
+			local x = Deck.HeaderStripX(console, last, stripW)
+			if x then
+				strip:SetPoint('LEFT', console, 'TOPLEFT', x, -HEAD / 2)
+				console.headerStripX = x
+			else
+				strip:SetPoint('RIGHT', last, 'LEFT', -12, 0)
+				console.headerStripX = nil
+			end
 			last = strip
 		end
 		console.title:SetPoint('RIGHT', last, 'LEFT', -8, 0)
@@ -1970,18 +1991,30 @@ local function LayoutConsoleNow()
 	-- taken-out ones go back to their own spot. The editor sees the tucked
 	-- ones too (outside the body, so they hold no room in it).
 	local tucked = {}
+	local stanceRect
 	for _, mini in ipairs(minis) do
 		if mini.state == 'out' then
 			Deck.FreeMini(mini)
 		elseif mini.state == 'tucked' then
 			local w, h = Measure(mini.module)
 			local x = mini.key == 'stance' and left - 8 or consoleWidth - left + 8 - w
-			Deck.PlaceMini(mini, console, x, 8 - h, true)
+			local y = 8 - h
+			-- Never over the other one: the pet keys go above the stance keys if they would meet.
+			if stanceRect and mini.count > 0 and x < stanceRect.x + stanceRect.w + 4 and stanceRect.x < x + w + 4 then
+				y = stanceRect.y - h - 4
+			end
+			Deck.PlaceMini(mini, console, x, y, true)
 			if mini.count > 0 then
-				tucked[#tucked + 1] = {key = mini.key, kind = 'mini', x = x, y = 8 - h, w = w, h = h, tucked = true,
-					count = mini.count, keySize = mini.size}
+				local rect = {key = mini.key, kind = 'mini', x = x, y = y, w = w, h = h, tucked = true, count = mini.count, keySize = mini.size}
+				tucked[#tucked + 1] = rect
+				if mini.key == 'stance' then stanceRect = rect end
 			end
 		end
+	end
+	-- The menu strip in the header, as the editor sees it (outside the body).
+	if strip and stripCount > 0 and edge == 'header' and console.headerStripX then
+		tucked[#tucked + 1] = {key = 'menu', kind = 'menu', x = console.headerStripX, y = (HEAD - stripH) / 2, w = stripW, h = stripH,
+			tucked = true, header = true, count = stripCount, keySize = stripKey}
 	end
 	console.tucked = tucked
 end
@@ -2056,7 +2089,7 @@ function UI:ConsoleSlots()
 	for _, slot in ipairs(console and console.slots or {}) do
 		local mini = slot.kind == 'mini' and slot.frame or nil
 		list[#list + 1] = {key = slot.key, kind = slot.kind, x = slot.x, y = slot.y, w = slot.w, h = slot.h, saved = slot.saved,
-			count = mini and mini.count, keySize = mini and mini.size}
+			count = mini and mini.count or slot.count, keySize = mini and mini.size or slot.keySize}
 	end
 	-- Pet and stance keys tucked on the top edge (outside the body).
 	for _, slot in ipairs(console and console.tucked or {}) do list[#list + 1] = slot end
@@ -2791,8 +2824,18 @@ local function StripCount(group, extra)
 	return count
 end
 
--- The strip's width and height at `size` keys (0, 0 without one).
-function Deck.MenuStrip(size)
+-- The strip's width and height at `size` keys (0, 0 without one): one line,
+-- or with `columns` a grid of every key (menu then bags), evenly spaced.
+function Deck.MenuStrip(size, columns)
+	if columns then
+		local total = 0
+		for _, group in ipairs(Integrated()) do total = total + StripCount(group, group == 'bags' and 'KeyRingButton' or nil) end
+		if total == 0 then return 0, 0, 0 end
+		local gap = GroupSpacing('menu')
+		local across = Kit:Clamp(floor(columns), 1, total)
+		local lines = math.ceil(total / across)
+		return across * size + (across - 1) * gap, lines * size + (lines - 1) * gap, total
+	end
 	local width, total = 0, 0
 	for index, group in ipairs(Integrated()) do
 		local count = StripCount(group, group == 'bags' and 'KeyRingButton' or nil)
@@ -2809,11 +2852,34 @@ end
 -- Edge of the console the strip runs along: 'header' or 'bottom'.
 function Deck.MenuEdge() return DB().menuEdge == 'header' and 'header' or 'bottom' end
 
+-- Where the header strip starts: centred between the console's name and its
+-- readouts (`last`, the leftmost of them), or nil when it doesn't fit there.
+function Deck.HeaderStripX(parent, last, width)
+	local left, title = parent:GetLeft(), parent.title
+	if not (left and title and last and last.GetLeft) then return nil end
+	local titleLeft, readLeft = title:GetLeft(), last:GetLeft()
+	if not titleLeft or not readLeft then return nil end
+	local name = title.GetUnboundedStringWidth and title:GetUnboundedStringWidth() or title:GetStringWidth()
+	local from, to = titleLeft - left + (name or 0) + 12, readLeft - left - 12
+	if to - from < width then return nil end
+	return UI.Pixel.Snap(parent, (from + to) / 2 - width / 2)
+end
+
 local function LayStrip()
 	local strip = console and console.menuStrip
 	if not strip then return 0 end
 	local size = console.menuStripKey or 18
 	local x, total = 0, 0
+	-- A grid (set in the body by the console editor): every key in order, evenly spaced.
+	local columns = console.menuStripColumns
+	if columns then
+		local all = {}
+		for _, group in ipairs(Integrated()) do
+			for _, button in ipairs(Collect(group, group == 'bags' and 'KeyRingButton' or nil, strip, size)) do all[#all + 1] = button end
+		end
+		Place(all, strip, 0, 0, size, GroupSpacing('menu'), Kit:Clamp(floor(columns), 1, max(#all, 1)), false)
+		return #all
+	end
 	for _, group in ipairs(Integrated()) do
 		local shown = Collect(group, group == 'bags' and 'KeyRingButton' or nil, strip, size)
 		if #shown > 0 then
@@ -3948,13 +4014,26 @@ local function FnCounts()
 	return left, right
 end
 
+-- Round glyph keycaps (the reference's round key) on the light keys; the
+-- charcoal caps keep their own shape. No slot or well behind them.
+function Deck.FnSprite(down)
+	if LightCap() then return down and 'key-round-down' or 'key-round' end
+	return Sprites()[down and 2 or 1]
+end
+
+-- The face: pressed one unit down, lifted one unit while the mouse is over it.
+local function FnFace(key)
+	local offset = key.down and -1 or (key.hover and 1 or 0)
+	key.face:ClearAllPoints()
+	key.face:SetPoint('TOPLEFT', 0, offset)
+	key.face:SetPoint('BOTTOMRIGHT', 0, offset)
+end
+
 local function FnPress(key, down)
 	if key.down == down then return end
 	key.down = down
-	Kit:SetSprite(key.skin, Sprites()[down and 2 or 1])
-	key.face:ClearAllPoints()
-	key.face:SetPoint('TOPLEFT', 0, down and -1 or 0)
-	key.face:SetPoint('BOTTOMRIGHT', 0, down and -1 or 0)
+	Kit:SetSprite(key.skin, Deck.FnSprite(down))
+	FnFace(key)
 	Sound(down)
 end
 
@@ -3967,9 +4046,8 @@ local function FnKey(parent, index)
 	back:EnableMouse(false)
 	back:SetFrameLevel(max(button:GetFrameLevel() - 1, 0))
 	key.back = back
-	key.skin = Kit:Skin(back, Sprites()[1], 'BACKGROUND', 0)
+	key.skin = Kit:Skin(back, Deck.FnSprite(false), 'BACKGROUND', 0)
 	key.skin.kitMaxCorner = 6
-	if HW.On() then key.slotRing = HW.Slot(back, back); HW.ShowSlot(key.slotRing, true) end
 	key.face = CreateFrame('Frame', nil, button)
 	key.face:SetAllPoints()
 	key.face:EnableMouse(false)
@@ -3981,10 +4059,12 @@ local function FnKey(parent, index)
 	key.cooldown:SetDrawEdge(false)
 	key.cooldown:SetHideCountdownNumbers(true)
 	if key.cooldown.SetSwipeTexture then key.cooldown:SetSwipeTexture(Kit.media..'mask-icon.tga', 0, 0, 0, 0.45) end
-	key.lamp = Kit:Led(key.face, 4, false)
-	key.lamp:SetPoint('TOPRIGHT', -3, -3)
+	-- The lamp inside the cap's top, clear of a round cap's edge.
+	key.lamp = Kit:Led(key.face, 3, false)
+	key.lamp:SetPoint('TOP', 0, -2)
+	-- The legend is printed beside or under the key (see Deck.PlaceFnAt).
 	key.legend = Kit:Label(parent, '', Surface() == 'dark' and 'darkDim' or 'dim', 6, true)
-	key.legend:SetPoint('TOP', button, 'BOTTOM', 0, -3)
+	key.legend:SetWordWrap(false)
 	button:HookScript('OnMouseDown', function() FnPress(key, true) end)
 	button:HookScript('OnMouseUp', function() FnPress(key, false) end)
 	button:HookScript('OnHide', function() FnPress(key, false) end)
@@ -3997,12 +4077,19 @@ local function FnKey(parent, index)
 	button:SetScript('OnEnter', function(self)
 		local def = key.def
 		if not def then return end
+		key.hover = true
+		FnFace(key)
+		Kit:Play('tick')
 		GameTooltip:SetOwner(self, 'ANCHOR_TOP')
 		GameTooltip:AddLine(def.name or def.legend, 1, 1, 1)
 		GameTooltip:AddLine(def.tip, 0.85, 0.85, 0.82, true)
 		GameTooltip:Show()
 	end)
-	button:SetScript('OnLeave', function() GameTooltip:Hide() end)
+	button:SetScript('OnLeave', function()
+		key.hover = nil
+		FnFace(key)
+		GameTooltip:Hide()
+	end)
 	fnKeys[index] = key
 	return key
 end
@@ -4039,7 +4126,11 @@ function Deck.ConfigureFn()
 			if def.macro and strtrim(db.fnMacro or '') ~= '' then legend = strsub(strtrim(db.fnMacro), 1, 6) end
 			key.legend:SetText(strupper(legend))
 			button:SetSize(size, size)
+			Kit:SetSprite(key.skin, Deck.FnSprite(key.down))
 			Kit:FitSprite(key.skin, size, size)
+			if key.cooldown.SetSwipeTexture then
+				key.cooldown:SetSwipeTexture(Kit.media..(LightCap() and 'circle' or 'mask-icon')..'.tga', 0, 0, 0, 0.45)
+			end
 			button:Show()
 		else
 			button:Hide()
@@ -4075,84 +4166,101 @@ function Deck.BuildFn(parent)
 	Deck.ConfigureFn()
 end
 
--- Room the function keys need within `width` (nil: two across, a narrow
--- column beside the banks): cluster width, height and keys across.
-function Deck.FnBlock(width)
-	local left, right = FnCounts()
-	local count = max(left, right)
-	if count == 0 or #fnKeys == 0 then return 0, 0, 1 end
-	local size, gap = FnSize(), 6
-	local fit = width and max(1, floor((width + gap) / (size + gap))) or 2
-	local across = min(count, fit)
-	local lines = ceil(count / across)
-	return across * size + (across - 1) * gap, lines * (size + 12) - 4, across
+-- The function keys' clusters. Each side's keys run in `columns` (from the
+-- console editor; one column by default) with their legends printed beside
+-- them, facing the banks; in two or more columns the legends go under each
+-- key and the keys space out to fit them. Legends are measured, never overlap.
+-- Gap between keys, between a key and its legend, and the widest legend.
+-- (A column's keys sit closer: 4 keys of 22 stay inside a 2-row console.)
+Deck.FN_GAP, Deck.FN_LEGEND_GAP, Deck.FN_LEGEND_MAX, Deck.FN_COLUMN_GAP = 6, 5, 44, 4
+function Deck.FnColumns(side)
+	local custom = Deck.CustomLayout()
+	local spot = custom and custom[side == 1 and 'fnL' or 'fnR']
+	return Kit:Clamp(floor(type(spot) == 'table' and tonumber(spot.columns) or 1), 1, FN_SLOTS / 2)
 end
 
--- Place the two clusters: `x` from each side, `y` from the top, `columns` across.
-function Deck.PlaceFn(parent, leftX, rightX, y, columns)
-	if #fnKeys == 0 or not parent.fnLeft then return end
-	if InCombatLockdown() then return UI:AfterCombat(function() Deck.PlaceFn(parent, leftX, rightX, y, columns) end, 'ab.fnplace') end
-	local size, gap = FnSize(), 6
-	for side, cluster in ipairs({parent.fnLeft, parent.fnRight}) do
-		local placed = 0
-		local first = side == 1 and 1 or FN_SLOTS / 2 + 1
-		for index = first, first + FN_SLOTS / 2 - 1 do
-			local key = fnKeys[index]
-			if key.def then
-				local line, place = floor(placed / columns), placed % columns
-				key.button:ClearAllPoints()
-				key.button:SetPoint('TOPLEFT', cluster, 'TOPLEFT', place * (size + gap), -line * (size + 12))
-				placed = placed + 1
-			end
+-- A side's shown keys, the widest legend among them, and its size: width,
+-- height, keys, legend width, columns.
+function Deck.FnCluster(side)
+	local FN_GAP, FN_LEGEND_GAP, FN_LEGEND_MAX = Deck.FN_GAP, Deck.FN_LEGEND_GAP, Deck.FN_LEGEND_MAX
+	local list, legend = {}, 0
+	if #fnKeys == 0 or DB().fnKeys == false then return 0, 0, list, 0, 1 end
+	local first = side == 1 and 1 or FN_SLOTS / 2 + 1
+	for index = first, first + FN_SLOTS / 2 - 1 do
+		local key = fnKeys[index]
+		if key and key.def then
+			list[#list + 1] = key
+			local text = key.legend
+			local width = text.GetUnboundedStringWidth and text:GetUnboundedStringWidth() or text:GetStringWidth()
+			legend = max(legend, width or 0)
 		end
-		local across = min(placed, columns)
-		local lines = ceil(placed / columns)
-		cluster:SetSize(max(across * size + (across - 1) * gap, 1), max(lines * (size + 12) - 4, 1))
-		cluster:ClearAllPoints()
-		if side == 1 then cluster:SetPoint('TOPLEFT', parent, 'TOPLEFT', leftX, y)
-		else cluster:SetPoint('TOPRIGHT', parent, 'TOPRIGHT', -rightX, y) end
-		cluster:SetShown(placed > 0)
 	end
+	if #list == 0 then return 0, 0, list, 0, 1 end
+	legend = min(math.ceil(legend), FN_LEGEND_MAX)
+	local size, columns = FnSize(), Deck.FnColumns(side)
+	local across = min(columns, #list)
+	local lines = math.ceil(#list / across)
+	if across == 1 then
+		return size + FN_LEGEND_GAP + legend, lines * size + (lines - 1) * Deck.FN_COLUMN_GAP, list, legend, 1
+	end
+	local pitch = max(size, legend) + FN_GAP
+	return across * pitch - FN_GAP, lines * (size + 12) - 4, list, legend, across
 end
 
--- Each cluster's size at `columns` across: left width, height, right width, height.
-function Deck.FnSides(columns)
-	local size, gap = FnSize(), 6
-	local function Measure(count)
-		if count == 0 or #fnKeys == 0 then return 0, 0 end
-		local across = min(count, columns or 2)
-		return across * size + (across - 1) * gap, ceil(count / across) * (size + 12) - 4
-	end
-	local left, right = FnCounts()
-	local lw, lh = Measure(left)
-	local rw, rh = Measure(right)
+-- The larger side's size (for the console's side columns and body).
+function Deck.FnBlock()
+	local lw, lh = Deck.FnCluster(1)
+	local rw, rh = Deck.FnCluster(2)
+	if lw == 0 and rw == 0 then return 0, 0, 1 end
+	return max(lw, rw), max(lh, rh), 1
+end
+
+-- Each cluster's size: left width, height, right width, height.
+function Deck.FnSides()
+	local lw, lh = Deck.FnCluster(1)
+	local rw, rh = Deck.FnCluster(2)
 	return lw, lh, rw, rh
 end
 
 -- One cluster (side 1 left, 2 right) with its top-left at x, y in the parent
 -- (y down); no x hides it.
-function Deck.PlaceFnAt(parent, side, x, y, columns)
+function Deck.PlaceFnAt(parent, side, x, y)
 	if #fnKeys == 0 or not parent.fnLeft then return end
-	if InCombatLockdown() then return UI:AfterCombat(function() Deck.PlaceFnAt(parent, side, x, y, columns) end, 'ab.fnplace'..side) end
+	if InCombatLockdown() then return UI:AfterCombat(function() Deck.PlaceFnAt(parent, side, x, y) end, 'ab.fnplace'..side) end
 	local cluster = side == 1 and parent.fnLeft or parent.fnRight
 	if not x then cluster:Hide() return end
-	local size, gap = FnSize(), 6
-	local placed = 0
-	local first = side == 1 and 1 or FN_SLOTS / 2 + 1
-	for index = first, first + FN_SLOTS / 2 - 1 do
-		local key = fnKeys[index]
-		if key.def then
-			local line, place = floor(placed / columns), placed % columns
-			key.button:ClearAllPoints()
-			key.button:SetPoint('TOPLEFT', cluster, 'TOPLEFT', place * (size + gap), -line * (size + 12))
-			placed = placed + 1
+	local FN_GAP, FN_LEGEND_GAP = Deck.FN_GAP, Deck.FN_LEGEND_GAP
+	local width, height, list, legend, across = Deck.FnCluster(side)
+	local size = FnSize()
+	local pitch = max(size, legend) + FN_GAP
+	for index, key in ipairs(list) do
+		local line, place = floor((index - 1) / across), (index - 1) % across
+		local button, text = key.button, key.legend
+		button:ClearAllPoints()
+		text:ClearAllPoints()
+		text:SetWidth(across == 1 and legend or pitch - 2)
+		if across == 1 then
+			-- One column, the legend beside each key, facing the banks.
+			local top = -(index - 1) * (size + Deck.FN_COLUMN_GAP)
+			if side == 1 then
+				button:SetPoint('TOPLEFT', cluster, 'TOPLEFT', 0, top)
+				text:SetPoint('LEFT', button, 'RIGHT', FN_LEGEND_GAP, 0)
+				text:SetJustifyH('LEFT')
+			else
+				button:SetPoint('TOPRIGHT', cluster, 'TOPRIGHT', 0, top)
+				text:SetPoint('RIGHT', button, 'LEFT', -FN_LEGEND_GAP, 0)
+				text:SetJustifyH('RIGHT')
+			end
+		else
+			button:SetPoint('TOPLEFT', cluster, 'TOPLEFT', place * pitch + (pitch - FN_GAP - size) / 2, -line * (size + 12))
+			text:SetPoint('TOP', button, 'BOTTOM', 0, -3)
+			text:SetJustifyH('CENTER')
 		end
 	end
-	local across = min(placed, columns)
-	cluster:SetSize(max(across * size + (across - 1) * gap, 1), max(ceil(placed / columns) * (size + 12) - 4, 1))
+	cluster:SetSize(max(width, 1), max(height, 1))
 	cluster:ClearAllPoints()
 	cluster:SetPoint('TOPLEFT', parent, 'TOPLEFT', x, -y)
-	cluster:SetShown(placed > 0)
+	cluster:SetShown(#list > 0)
 end
 
 -- Header panels -------------------------------------------------------------------------------
@@ -4293,6 +4401,12 @@ function module:Enable()
 		return
 	end
 	local db = DB()
+	-- Once: the micro menu moves into the console's header (where the console
+	-- has one); its own device stays an option (Layout: One line).
+	if not db.menuInConsole then
+		db.menuInConsole = true
+		if db.layout ~= 'free' then db.menuLayout, db.menuEdge = 'console', 'header' end
+	end
 	-- Once: earlier saves move to the minimal deck (text stats, slim meter, a
 	-- quiet header). A flag outside the defaults marks it done.
 	if not db.minimalDeck then

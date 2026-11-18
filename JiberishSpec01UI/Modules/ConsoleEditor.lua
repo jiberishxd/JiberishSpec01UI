@@ -151,7 +151,7 @@ local LABELS = {['uf.player'] = 'Player', ['uf.target'] = 'Target', ['uf.focus']
 	deck = 'Meters', menu = 'Menu keys', stance = 'Stance keys', petbar = 'Pet keys'}
 -- Frames the layouts dock with a setting of their own; the rest are taken out with an off flag.
 local DOCK_SETTING = {['uf.focus'] = 'dockFocus', ['uf.targettarget'] = 'dockToT', ['uf.pet'] = 'dockPet'}
-local REMOVABLE = {unit = true, cast = true, fn = true, deck = true, mini = true}
+local REMOVABLE = {unit = true, cast = true, fn = true, deck = true, mini = true, menu = true}
 
 local editing, selected, drag, wasUnlocked = false, nil, nil, false
 local overlay, inspector, keyboard, editKey
@@ -380,7 +380,8 @@ local function BlockFrame(index)
 		GameTooltip:AddLine(Label(self.block.key), 1, 1, 1)
 		GameTooltip:AddLine('Drag to move it. Arrow keys nudge one pixel, Shift one grid step.', 0.8, 0.8, 0.78, true)
 		if self.block.tucked then
-			GameTooltip:AddLine('Tucked on the console\'s top edge: drag it into the console to set it in. Reset block tucks it back.', 0.8, 0.8, 0.78, true)
+			GameTooltip:AddLine(self.block.header and 'In the console\'s header: drag it into the body to place it freely. Reset block puts it back.'
+				or 'Tucked on the console\'s top edge: drag it into the console to set it in. Reset block tucks it back.', 0.8, 0.8, 0.78, true)
 		end
 		GameTooltip:Show()
 	end)
@@ -399,7 +400,7 @@ function Draw()
 		frame.block = block
 		frame:SetSize(max(block.w, 2), max(block.h, 2))
 		Place(frame, block.x, block.y)
-		frame.label:SetText(strupper(Label(block.key))..(block.tucked and '  (TOP EDGE)' or ''))
+		frame.label:SetText(strupper(Label(block.key))..(block.header and '  (HEADER)' or block.tucked and '  (TOP EDGE)' or ''))
 		frame.label:SetWidth(max(block.w - 8, 1))
 		frame.label:SetShown(block.w > 30 and block.h > 9)
 		Paint(frame)
@@ -439,9 +440,10 @@ local function Columns(sign)
 	local block = Find(selected)
 	if not block then return end
 	local spot = Layout()[block.key]
-	-- A bank has 12 keys; the stance and pet keys as many as they show.
-	local most = block.kind == 'mini' and max(block.count or 1, 1) or 12
-	local now = type(spot) == 'table' and tonumber(spot.columns) or most
+	-- A bank has 12 keys; the stance, pet, menu and function keys as many as
+	-- they show (function keys start in one column, the others in one line).
+	local most = block.kind == 'bank' and 12 or max(block.count or 1, 1)
+	local now = type(spot) == 'table' and tonumber(spot.columns) or (block.kind == 'fn' and 1 or most)
 	local value = Kit:Clamp(now + sign, 1, most)
 	if value == now then return Kit:Play('error') end
 	Commit(block.key, {columns = value})
@@ -454,7 +456,7 @@ local function MiniKeys(sign)
 	if not block then return end
 	local spot = Layout()[block.key]
 	local now = type(spot) == 'table' and tonumber(spot.keys) or floor((block.keySize or 24) + 0.5)
-	local value = Kit:Clamp(now + sign, 16, 48)
+	local value = Kit:Clamp(now + sign, 16, block.kind == 'menu' and 40 or 48)
 	if value == now then return Kit:Play('error') end
 	Commit(block.key, {keys = value})
 	Kit:Play('tick')
@@ -471,7 +473,10 @@ local function Remove()
 	if not block or not REMOVABLE[block.kind] then return Kit:Play('error') end
 	local setting = DOCK_SETTING[block.key]
 	selected = nil
-	if setting then
+	if block.key == 'menu' then
+		-- The menu keys go back to their own device and mover.
+		SetOption('actionbars.menuLayout', 'line')
+	elseif setting then
 		SetOption('actionbars.'..setting, false)
 	else
 		Commit(block.key, {off = true})
@@ -493,13 +498,16 @@ local function Removed()
 	for key, spot in pairs(Layout()) do
 		if type(spot) == 'table' and spot.off then list[#list + 1] = {key = key} end
 	end
+	if DB().menuLayout ~= 'console' and DB().menuEnable ~= false then list[#list + 1] = {key = 'menu'} end
 	table.sort(list, function(a, b) return a.key < b.key end)
 	return list
 end
 
 local function Add(key)
 	local setting = DOCK_SETTING[key]
-	if setting then
+	if key == 'menu' then
+		SetOption('actionbars.menuLayout', 'console')
+	elseif setting then
 		SetOption('actionbars.'..setting, true)
 	else
 		local spot = Layout()[key]
@@ -640,7 +648,13 @@ function UpdateInspector()
 		SetContext(2, 'COLS +', function() Columns(1) end)
 		SetContext(3, 'KEYS -', function() KeySize(-1) end)
 		SetContext(4, 'KEYS +', function() KeySize(1) end)
-	elseif block and block.kind == 'mini' then
+	elseif block and block.kind == 'menu' and block.header then
+		SetContext(5, 'TAKE OUT', Remove)
+	elseif block and block.kind == 'fn' then
+		SetContext(1, 'COLS -', function() Columns(-1) end)
+		SetContext(2, 'COLS +', function() Columns(1) end)
+		SetContext(5, 'TAKE OUT', Remove)
+	elseif block and (block.kind == 'mini' or block.kind == 'menu') then
 		SetContext(1, 'COLS -', function() Columns(-1) end)
 		SetContext(2, 'COLS +', function() Columns(1) end)
 		SetContext(3, 'KEYS -', function() MiniKeys(-1) end)
