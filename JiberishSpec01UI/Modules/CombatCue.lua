@@ -35,7 +35,7 @@ UI:RegisterDefaults('combatcue', {enable = true, where = 'always', sound = true,
 	-- Arming ring.
 	ring = true, ringPos = 'player', ringRadius = 74, ringTicks = 60, ringLength = 6, ringWidth = 2,
 	ringIn = {1, 0.23, 0.19}, ringOut = {0.18, 0.62, 0.37}, ringDir = 'cw', ringSpeed = 1, ringStyle = 'ticks',
-	ringHold = false,
+	ringHold = false, ringPlaced = false, showcase = false,
 	-- Device lamps.
 	lamps = true, lampSpeed = 0.3, lampColor = 'red', lampScope = 'all', lampUnits = true, lampBars = true,
 	lampGroup = true, lampOther = true,
@@ -242,7 +242,7 @@ local function Status()
 			status:SetPoint('CENTER', holder, 'CENTER', 0, 0)
 			status:SetAlpha(1)
 			status:Show()
-		elseif not (fighting or preview or DB().idle) then
+		elseif not (fighting or preview or DB().idle or DB().showcase) then
 			status:Hide()
 		end
 	end
@@ -358,23 +358,38 @@ local function PlayerFrame()
 end
 
 -- Where the ring sits: its own mover when custom, else docked to a spot.
+-- Only "on your unit frame" follows another frame; every other spot is a
+-- plain mover spot, so Unlock mode can always drag the ring (and a drag makes
+-- it Custom). A preset spot is applied once, when it is chosen.
+local placingRing = false
 local function PlaceRing()
 	if not ringHolder then return end
 	local db = DB()
 	local size = 2 * (db.ringRadius or 74) + 40
 	ringHolder:SetSize(size, size)
-	if db.ringPos == 'custom' then
-		UI:DockMover('cue.ring', nil)
+	if db.ringPos == 'frame' then
+		UI:DockMover('cue.ring', function(frame)
+			local player = PlayerFrame()
+			if player then frame:SetPoint('CENTER', player, 'CENTER', 0, 0)
+			else frame:SetPoint('CENTER', UIParent, 'CENTER', 0, -70) end
+		end)
 		return
 	end
-	UI:DockMover('cue.ring', function(frame)
-		if db.ringPos == 'frame' then
-			local player = PlayerFrame()
-			if player then frame:SetPoint('CENTER', player, 'CENTER', 0, 0) return end
-		end
-		frame:SetPoint('CENTER', UIParent, 'CENTER', 0, db.ringPos == 'center' and 0 or -70)
-	end)
+	UI:DockMover('cue.ring', nil)
+	if db.ringPlaced ~= db.ringPos and db.ringPos ~= 'custom' then
+		placingRing = true
+		UI:SetMoverPosition('cue.ring', 'CENTER', 0, db.ringPos == 'center' and 0 or -70)
+		placingRing = false
+	end
+	db.ringPlaced = db.ringPos
 end
+
+-- Dragging the ring in Unlock mode makes its position Custom.
+UI:OnMoversChanged(function(key)
+	if key ~= 'cue.ring' or placingRing or not UI:MoversUnlocked() then return end
+	local db = DB()
+	if db.ringPos ~= 'frame' and db.ringPos ~= 'custom' then db.ringPos, db.ringPlaced = 'custom', 'custom' end
+end)
 
 local function Ring()
 	if ring then return ring end
@@ -396,7 +411,7 @@ local function Ring()
 			ring:Show()
 			ring:SetAlpha(0.6)
 			for _, tick in ipairs(ring.ticks) do tick:SetAlpha(0.8) end
-		elseif ring.preview then
+		elseif ring.preview and not DB().showcase then
 			ring.preview = nil
 			if not (fighting and DB().ringHold) then ring:Hide() end
 		end
@@ -490,6 +505,52 @@ local function ArmRing(entering)
 		end, function() if not hold or not (fighting or preview) then r:Hide() end end, 'linear')
 	end, 'cubic')
 end
+
+-- Show while configuring: the status device in its live state and the ring
+-- lit, held on screen out of combat so they can be styled and placed.
+local showing = false
+local function ShowCase(on)
+	if fighting then return end
+	showing = on and true or false
+	local db = DB()
+	if showing then
+		if db.status then
+			local device = Status()
+			LayoutStatus()
+			device.token = {}
+			StopClock()
+			SetState(true)
+			device:ClearAllPoints()
+			device:SetPoint('CENTER', holder, 'CENTER', 0, 0)
+			device:SetScale(db.statusScale or 1)
+			device:SetAlpha(1)
+			device.time:SetText(Clock(42))
+			device:Show()
+		elseif status then
+			status:Hide()
+		end
+		if db.ring then
+			local r = Ring()
+			PlaceRing()
+			LayoutRing(db.ringDir == 'cw')
+			local ticks = {}
+			for index = 1, r.count do ticks[index] = r.ticks[index] end
+			Paint(db.ringIn, RED, r.core, unpack(ticks))
+			for index = 1, r.count do ticks[index]:SetAlpha(ticks[index].major and 1 or 0.85) end
+			r.core:SetAlpha(0.12)
+			r.preview = true
+			r:SetAlpha(1)
+			r:Show()
+		elseif ring then
+			ring:Hide()
+		end
+	else
+		if status and not (preview or db.idle) then status:Hide() end
+		if status and db.idle then Idle() end
+		if ring then ring.preview = nil; ring:Hide() end
+	end
+end
+module.ShowCase = ShowCase
 
 -- Device lamps -------------------------------------------------------------------------------
 local lit = setmetatable({}, {__mode = 'k'}) -- lamps we lit for the fight
@@ -783,6 +844,7 @@ end
 function module:Enable()
 	local db = DB()
 	Upgrade(db)
+	db.showcase = false
 	if not db.enable then return end
 	Status()
 	if db.ring then Ring() end
@@ -796,8 +858,9 @@ function module:Enable()
 			return
 		end
 		local entering = event == 'PLAYER_REGEN_DISABLED'
-		-- A real fight ends any preview.
+		-- A real fight ends any preview, and the configuring view.
 		preview = nil
+		if entering and showing then showing = false; DB().showcase = false; if ring then ring.preview = nil end end
 		if entering and not Allowed() then fighting = true return end
 		if not entering and not fighting then return end
 		local cued = entering or (status and status:IsShown()) or next(lit) ~= nil or Allowed()
@@ -819,6 +882,7 @@ function module:Refresh()
 	end
 	if DB().ring then Ring() end
 	PlaceRing()
+	if showing or DB().showcase then ShowCase(DB().showcase) end
 end
 
 -- Previews: going in runs for a few seconds, then plays coming out by itself,
@@ -911,10 +975,14 @@ UI:RegisterPage('combatcue', {title = 'Combat cues', order = 4.2, onHide = StopL
 		{'button', 'Preset: Off', 'Apply', function() ApplyPreset('off') end},
 	}},
 	{title = 'Preview', rows = {
+		{'switch', 'Show while configuring', 'combatcue.showcase', 'Keeps the status device and the ring on screen out of combat, so you can style them and place them in Unlock mode. Off again after a reload or when a fight starts.',
+			disabled = Off, since = '0.5.2', set = function(value) DB().showcase = value and true or false; UI:Safe(ShowCase, value) end},
+		{'button', 'Move them', 'Unlock', function() if UI.ToggleHub then UI:ToggleHub(nil, false) end; UI:ToggleMovers(false) end,
+			'Unlock mode: drag the status device or the ring; a dragged ring becomes Custom.'},
 		{'button', 'Going in', 'Play', function() module:Preview(true) end},
 		{'button', 'Coming out', 'Play', function() module:Preview(false) end},
 		{'button', 'Loop preview', 'Start / stop', ToggleLoop},
-		{'note', 'Previews follow every setting here. Place the status device and a custom ring in Unlock mode.'},
+		{'note', 'Previews follow every setting here.'},
 	}},
 	{title = 'Status device', rows = {
 		{'switch', 'Status device', 'combatcue.status', 'A CB-1 device: a lamp, the legend and the fight\'s time.', disabled = Off, since = '0.5.1'},
