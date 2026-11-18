@@ -304,6 +304,8 @@ module.extras.SettingsPanel = function(panel)
 	if type(list) == 'table' then
 		P.Strip(list)
 		if First('setcatscreen', list) then Own(Kit:Shell(list, {surface = 'screen', radius = 6, shadow = false})) end
+		-- Already a black screen: the list inside gets no second one from the walk.
+		if P.Screened then P.Screened(list) end
 		P.ScrollBar(list.ScrollBar)
 		WatchBox(list.ScrollBox, CategoryRow)
 	end
@@ -311,6 +313,7 @@ module.extras.SettingsPanel = function(panel)
 	if type(container) == 'table' then
 		P.Strip(container)
 		if First('setcontainer', container) then Own(Kit:Shell(container, {surface = 'screen', radius = 6, shadow = false})) end
+		if P.Screened then P.Screened(container) end
 		local settings = container.SettingsList
 		if type(settings) == 'table' then
 			P.Strip(settings)
