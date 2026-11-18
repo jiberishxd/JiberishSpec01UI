@@ -40,15 +40,29 @@ end
 
 -- These only take effect after a reload.
 local RELOAD = {['actionbars.layout'] = true, ['actionbars.rows'] = true, ['actionbars.side'] = true, ['actionbars.dock'] = true,
-	['actionbars.keySize'] = true, ['actionbars.dockFocus'] = true, ['actionbars.dockToT'] = true, ['actionbars.dockPet'] = true,
-	['group.partyAsRaid'] = true}
+	['actionbars.keySize'] = true, ['group.partyAsRaid'] = true}
+
+-- Settings may be tables (the console's own arrangement): compared by content
+-- and written as copies, so a layout's own table is never edited in place.
+local function Copy(value)
+	if type(value) ~= 'table' then return value end
+	local copy = {}
+	for key, item in pairs(value) do copy[key] = Copy(item) end
+	return copy
+end
+local function Same(a, b)
+	if type(a) ~= 'table' or type(b) ~= 'table' then return a == b end
+	for key, item in pairs(a) do if not Same(item, b[key]) then return false end end
+	for key in pairs(b) do if a[key] == nil then return false end end
+	return true
+end
 
 local function ApplySettings(settings)
 	local reload = false
 	for path, value in pairs(settings or {}) do
 		local node, leaf = Resolve(path)
-		if node and node[leaf] ~= value then
-			Kit:SetOption(path, value)
+		if node and not Same(node[leaf], value) then
+			Kit:SetOption(path, Copy(value))
 			if RELOAD[path] or path:find('^style%.') then reload = true end
 		end
 	end
@@ -74,7 +88,7 @@ local function Lookup(key) return type(key) == 'string' and PRESET_BY_KEY[RENAME
 -- Custom layouts: positions as fractions of the screen, so they carry across resolutions.
 local SNAPSHOT = {'actionbars.layout', 'actionbars.dock', 'actionbars.rows', 'actionbars.side', 'actionbars.keySize',
 	'actionbars.consoleWidth', 'actionbars.consoleHeight', 'actionbars.dockFocus', 'actionbars.dockToT', 'actionbars.dockPet',
-	'unitframes.scale', 'nameplates.scale', 'style.infopanel'}
+	'actionbars.consoleLayout', 'unitframes.scale', 'nameplates.scale', 'style.infopanel'}
 
 local function SaveCustom(name)
 	name = strtrim(name or '')
@@ -83,7 +97,7 @@ local function SaveCustom(name)
 	local entry = {name = name, settings = {}, movers = {}}
 	for _, path in ipairs(SNAPSHOT) do
 		local node, leaf = Resolve(path)
-		if node then entry.settings[path] = node[leaf] end
+		if node then entry.settings[path] = Copy(node[leaf]) end
 	end
 	for key, saved in pairs(UI.db.movers) do
 		if type(saved) == 'table' and saved[1] then
@@ -809,7 +823,8 @@ PRESETS = {
 		note = 'Jiberish\'s own setup: a compact console, player and target mirrored over its ends with their cast bars, the timeline above, raid over chat.',
 		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = false, ['actionbars.rows'] = 2, ['actionbars.side'] = true,
 			['actionbars.keySize'] = 34, ['actionbars.consoleWidth'] = 640, ['actionbars.consoleHeight'] = 0,
-			['actionbars.dockFocus'] = false, ['actionbars.dockToT'] = false, ['actionbars.dockPet'] = false},
+			['actionbars.dockFocus'] = false, ['actionbars.dockToT'] = false, ['actionbars.dockPet'] = false,
+			['actionbars.consoleLayout'] = {}},
 		rules = function(s)
 			local console = Console(s)
 			local cx, top = console.x + console.w / 2, console.y + console.h
@@ -832,7 +847,8 @@ PRESETS = {
 		note = 'One CX-1 console holds it all: the key banks, player and target with the focus under the player, both cast bars, pet and target of target.',
 		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true, ['actionbars.rows'] = 3, ['actionbars.side'] = true,
 			['actionbars.keySize'] = 34, ['actionbars.consoleWidth'] = 0, ['actionbars.consoleHeight'] = 0,
-			['actionbars.dockFocus'] = true, ['actionbars.dockToT'] = true, ['actionbars.dockPet'] = true},
+			['actionbars.dockFocus'] = true, ['actionbars.dockToT'] = true, ['actionbars.dockPet'] = true,
+			['actionbars.consoleLayout'] = {}},
 		rules = function(s)
 			-- Centred; on a narrow screen it steps right of the chat rather than over it.
 			local console = Console(s, {'right', 'up'})
@@ -1420,7 +1436,13 @@ local function BuildPresetsCard(content, page)
 		for _, tile in ipairs(page.presetTiles) do
 			local entries, tight = PresetEntries(tile.preset)
 			tile.map:Draw(entries)
-			Kit:SetLed(tile.lamp, DB().preset == tile.preset.key)
+			-- A console arranged in its editor makes the layout the user's own.
+			local edited = false
+			for _ in pairs(UI.db.actionbars and type(UI.db.actionbars.consoleLayout) == 'table' and UI.db.actionbars.consoleLayout or {}) do
+				edited = true
+				break
+			end
+			Kit:SetLed(tile.lamp, DB().preset == tile.preset.key and not edited)
 			Kit:SetLed(tile.warn, tight, 'amber')
 			Kit:ShowLed(tile.warn, tight)
 			tile.warnText:SetShown(tight)

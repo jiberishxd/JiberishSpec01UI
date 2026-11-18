@@ -36,6 +36,7 @@ Modules\Calendar.lua
 Modules\UnitFrames.lua
 Modules\Group.lua
 Modules\ActionBars.lua
+Modules\ConsoleEditor.lua
 Modules\Minimap.lua
 Modules\InfoPanel.lua
 Modules\Meters.lua

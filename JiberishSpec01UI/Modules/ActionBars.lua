@@ -121,6 +121,11 @@ UI:RegisterDefaults('actionbars', {
 	-- Also docked with the player and target: the focus under the player, the
 	-- target of target under the target, the pet at the cast row's left end.
 	dockFocus = false, dockToT = false, dockPet = false,
+	-- The console editor: each block's spot in console units from the console's
+	-- top-left ({x, y}, a bank's columns, a cast bar's or the deck's width, off
+	-- to take it out), empty for the automatic arrangement; the editor's grid in
+	-- screen pixels.
+	consoleLayout = {}, consoleGrid = 2,
 	-- The menu (micro buttons) and bags: two small devices of their own.
 	-- Layout: 'line', 'column', 'grid' (Columns across, a short last line
 	-- centred), 'balanced' (the most even grid for the keys shown) or 'console'
@@ -1532,11 +1537,39 @@ local function UnitParts()
 	local unitframes = UI.modules.unitframes
 	if not (Docking() and DB().dock and unitframes and unitframes.enabled and unitframes.frames) then return {} end
 	local frames, db = unitframes.frames, DB()
-	return {player = frames.player, target = frames.target, playerCast = unitframes.playerCast,
-		targetCast = unitframes.targetCast, module = unitframes,
+	-- A frame the console editor took out stays out.
+	local custom = Deck.CustomLayout()
+	local function In(key, frame)
+		local spot = custom and custom[key]
+		if type(spot) == 'table' and spot.off then return nil end
+		return frame
+	end
+	return {player = In('uf.player', frames.player), target = In('uf.target', frames.target),
+		playerCast = In('cb.player', unitframes.playerCast), targetCast = In('cb.target', unitframes.targetCast), module = unitframes,
 		-- The small frames dock only when asked (each frame may not exist on every client).
 		focus = db.dockFocus and frames.focus or nil, tot = db.dockToT and frames.targettarget or nil,
 		pet = db.dockPet and frames.pet or nil}
+end
+
+-- The console editor's arrangement, or nil while the console arranges itself.
+function Deck.CustomLayout()
+	local layout = DB().consoleLayout
+	if type(layout) == 'table' and next(layout) ~= nil then return layout end
+end
+
+-- The dim plates where docked frames show up (made when a frame first docks).
+function Deck.Plates(parent, parts)
+	for _, spec in ipairs({{'targetSlot', parts.target, 'No target'}, {'focusSlot', parts.focus, 'No focus'},
+		{'totSlot', parts.tot, 'No ToT'}}) do
+		if spec[2] and not parent[spec[1]] then
+			local plate = Slot(parent, spec[3])
+			-- A dim plate, not a box: it only marks where the frame appears.
+			plate:SetAlpha(0.5)
+			Kit:Font(plate.text, 7, nil, true)
+			Follow(plate, spec[2])
+			parent[spec[1]] = plate
+		end
+	end
 end
 
 -- Docked unit frames hide with the console in pet battles. Alpha only: they are
@@ -1706,10 +1739,14 @@ local function LayoutConsoleNow()
 	size = max(size, 16)
 	console.keySize = size
 
-	-- The keyboard: each bar one row, as wide as its shown keys.
+	-- The user's own arrangement (the console editor), or nil for the automatic one.
+	local custom = Deck.CustomLayout()
+	local function Saved(key) return custom and custom[key] or nil end
+	-- The keyboard: each bar one row (or the columns its bank was given), as wide as its shown keys.
 	local width, height = 0, 0
 	for _, bar in ipairs(console.bars) do
-		LayoutBar(bar, size, Gap(bar), Shown(bar.id), 12, false)
+		local shape = Saved('bank'..bar.id)
+		LayoutBar(bar, size, Gap(bar), Shown(bar.id), shape and tonumber(shape.columns) or 12, false)
 		width = max(width, bar.width)
 		height = height + bar.height + bank
 	end
@@ -1718,7 +1755,7 @@ local function LayoutConsoleNow()
 	area = area or width
 	local align = db.bankAlign or 'center'
 	-- Spread: the keys share out the whole width with even gaps.
-	if align == 'spread' and fixedW then
+	if align == 'spread' and fixedW and not custom then
 		for _, bar in ipairs(console.bars) do
 			local count = Shown(bar.id)
 			if count > 1 then LayoutBar(bar, size, max(Gap(bar), (area - count * size) / (count - 1)), count, 12, false) end
@@ -1739,76 +1776,140 @@ local function LayoutConsoleNow()
 	local consoleWidth = Snap((fixedW or (PAD * 2 + width + sideWidth * 2)) / 2) * 2
 	-- The cast row starts on a pixel; the deck along the base is measured from the bottom.
 	local castY = SnapUp(HEAD + body + ROW_GAP)
-	console:SetSize(consoleWidth, fixedH and Snap(fixedH) or SnapUp((castRow > 0 and castY + lowHeight or HEAD + body) + xpHeight + PAD))
+	local consoleHeight = fixedH and Snap(fixedH) or SnapUp((castRow > 0 and castY + lowHeight or HEAD + body) + xpHeight + PAD)
 	local left = PAD + sideWidth
-
-	-- Bar 1 is the bottom row, as on Blizzard's bars. In the Hardware look each
-	-- bank has its printed legend and rule above it. In a taller fixed console
-	-- the banks sit in the middle of the body; so they do beside taller frames.
-	local y = -HEAD - max(0, floor((body - height) / 2))
-	for index = #console.bars, 1, -1 do
-		local bar = console.bars[index]
-		local x = Snap(align == 'left' and left or left + (area - bar.width) / 2)
-		if bar.bank then HW.PlaceBank(bar.bank, console, x - 2, y, bar.width + 4, bank > 0) end
-		y = y - bank
-		bar.header:ClearAllPoints()
-		bar.header:SetPoint('TOPLEFT', console, 'TOPLEFT', x, y)
-		y = y - bar.height - GAP
-	end
 	-- The cast bars below share the banks' whole area.
 	width = area
 
-	-- Docked elements as slots: a rect in console units from its top-left
-	-- (x right, y down), pixel-snapped. They are worked out here, then placed
-	-- from the list, so the arrangement can be read (UI:ConsoleSlots) and
-	-- rewritten (Deck.AdjustSlots) without touching the anchoring.
-	local slots = {}
-	local function Put(key, frame, x, y, w, h)
-		if w <= 0 or h <= 0 then return end
-		-- Down to the next pixel, so nothing creeps into the header above.
-		slots[#slots + 1] = {key = key, frame = frame, x = Snap(x), y = SnapUp(y), w = w, h = h}
+	-- Every element of the console is a block: a rect in console units from its
+	-- top-left (x right, y down), on whole pixels. They are worked out here (the
+	-- automatic arrangement, then the user's own over it), checked so none
+	-- covers another or leaves the body, and then placed from the list.
+	local blocks, bySlot = {}, {}
+	local function Put(key, kind, frame, x, y, w, h)
+		if w <= 0 or h <= 0 or (Saved(key) and Saved(key).off) then return end
+		local block = {key = key, kind = kind, frame = frame, x = Snap(x), y = SnapUp(y), w = w, h = h}
+		blocks[#blocks + 1] = block
+		bySlot[key] = block
+	end
+	-- The banks, top row first (bar 1 is the bottom row, as on Blizzard's
+	-- bars). In the Hardware look each has its printed legend above its keys.
+	local bankY = HEAD + max(0, floor((body - height) / 2))
+	for index = #console.bars, 1, -1 do
+		local bar = console.bars[index]
+		local x = align == 'left' and left or left + (area - bar.width) / 2
+		Put('bank'..bar.id, 'bank', bar, x - 2, bankY, bar.width + 4, bank + bar.height)
+		bankY = bankY + bank + bar.height + GAP
 	end
 	-- The columns sit centred on the body (the keys under them when stacked),
 	-- never so low that the lamps or auras under the last frame leave it.
 	local top = HEAD + (frames > 0 and max(0, floor(min((body - frames - stackHeight) / 2, body - frames - stackHeight - AUX))) or 0)
 	local leftX, rightX = PAD + fnPart, consoleWidth - PAD - fnPart - column
 	local function Centre(x, frameWidth) return x + (column - frameWidth) / 2 end
-	Put('uf.player', parts.player, Centre(leftX, pw), top + (mainHeight - ph) / 2, pw, ph)
-	Put('uf.target', parts.target, Centre(rightX, tw), top + (mainHeight - th) / 2, tw, th)
-	Put('uf.focus', parts.focus, Centre(leftX, fw), top + underMain + (smallRow - fh) / 2, fw, fh)
-	Put('uf.targettarget', parts.tot, Centre(rightX, ow), top + underMain + (smallRow - oh) / 2, ow, oh)
+	Put('uf.player', 'unit', parts.player, Centre(leftX, pw), top + (mainHeight - ph) / 2, pw, ph)
+	Put('uf.target', 'unit', parts.target, Centre(rightX, tw), top + (mainHeight - th) / 2, tw, th)
+	Put('uf.focus', 'unit', parts.focus, Centre(leftX, fw), top + underMain + (smallRow - fh) / 2, fw, fh)
+	Put('uf.targettarget', 'unit', parts.tot, Centre(rightX, ow), top + underMain + (smallRow - oh) / 2, ow, oh)
 	-- The cast row, under the body.
 	local castWidth = Snap((width - 8) / 2)
 	for index, cast in ipairs({parts.playerCast or false, parts.targetCast or false}) do
 		if cast then
 			local _, castH = Measure(cast)
-			Put(index == 1 and 'cb.player' or 'cb.target', cast, left + (index - 1) * (castWidth + 8), castY + floor((lowHeight - castHeight) / 2),
-				castWidth, castH)
+			Put(index == 1 and 'cb.player' or 'cb.target', 'cast', cast, left + (index - 1) * (castWidth + 8),
+				castY + floor((lowHeight - castHeight) / 2), castWidth, castH)
 		end
 	end
-	Put('uf.pet', parts.pet, Centre(leftX, qw), castY + floor((lowHeight - qh) / 2), qw, qh)
-	if Deck.AdjustSlots then UI:Safe(Deck.AdjustSlots, slots, console) end
-	console.slots = slots
+	Put('uf.pet', 'unit', parts.pet, Centre(leftX, qw), castY + floor((lowHeight - qh) / 2), qw, qh)
+	-- The function keys, each side its own cluster: at the outer edges, or under the docked frames.
+	local lw, lh, rw, rh = Deck.FnSides(fnColumns)
+	if stacked then
+		local fnY = top + frames + 8
+		Put('fnL', 'fn', 1, PAD + (column - lw) / 2, fnY, lw, lh)
+		Put('fnR', 'fn', 2, consoleWidth - PAD - (column + rw) / 2, fnY, rw, rh)
+	else
+		Put('fnL', 'fn', 1, PAD, HEAD + max(0, floor((body - lh) / 2)), lw, lh)
+		Put('fnR', 'fn', 2, consoleWidth - PAD - rw, HEAD + max(0, floor((body - rh) / 2)), rw, rh)
+	end
+	-- The meters and stats strip along the base, and the menu keys over them.
+	local deckHeight = max(Deck.BottomHeight() - ROW_GAP, 0)
+	Put('deck', 'deck', false, PAD, consoleHeight - PAD - deckHeight, consoleWidth - PAD * 2, deckHeight)
+	local strip = console.menuStrip
+	if strip and stripCount > 0 and edge == 'bottom' then
+		Put('menu', 'menu', strip, (consoleWidth - stripW) / 2, consoleHeight - PAD - Deck.BottomHeight() - stripH, stripW, stripH)
+	end
+
+	-- The user's arrangement: each saved block at its spot (a cast bar or the
+	-- deck at its width). Nothing may cover another block or leave the body,
+	-- so a block that would (another grew, a new one docked) moves to the
+	-- nearest free spot; the saved ones keep theirs first. The console then
+	-- fits its blocks; a fixed size is kept when they fit inside it.
+	local px = UI.Pixel.Px(console, 1)
+	local bounds = {left = SnapUp(PAD), top = SnapUp(HEAD), right = fixedW and floor((consoleWidth - PAD) / px) * px or nil,
+		bottom = fixedH and floor((consoleHeight - PAD) / px) * px or nil}
+	if custom then
+		for _, block in ipairs(blocks) do
+			local spot = custom[block.key]
+			if type(spot) == 'table' and tonumber(spot.x) and tonumber(spot.y) then
+				if (block.kind == 'cast' or block.kind == 'deck') and tonumber(spot.w) then block.w = Snap(max(tonumber(spot.w), 40)) end
+				block.x, block.y, block.saved = Snap(tonumber(spot.x)), SnapUp(tonumber(spot.y)), true
+			end
+		end
+		local grid = UI.ConsoleGrid
+		if grid then grid.Resolve(blocks, bounds, px * 2, px) end
+		local right, bottom = 300 - PAD, HEAD
+		for _, block in ipairs(blocks) do right, bottom = max(right, block.x + block.w), max(bottom, block.y + block.h) end
+		consoleWidth = max(fixedW and consoleWidth or 0, Snap((right + PAD) / 2) * 2)
+		consoleHeight = max(fixedH and consoleHeight or 0, SnapUp(bottom + PAD))
+		-- The stance and pet keys tuck in over the first bank's ends.
+		local first = bySlot['bank'..(console.bars[1] and console.bars[1].id or 1)]
+		if first then left = first.x + 2 end
+	end
+	console:SetSize(consoleWidth, consoleHeight)
+	console.blocks, console.slots, console.bounds = blocks, blocks, bounds
+	if Deck.AdjustSlots then UI:Safe(Deck.AdjustSlots, blocks, console) end
 
 	-- Place them. An LCD-style frame keeps its own LCD face; paper and dark ones
-	-- sit on the housing. A cast bar takes its slot's width.
+	-- sit on the housing. A cast bar takes its block's width.
 	local keepShell = UI:Style('unitframes') == 'lcd'
-	local byKey = {}
-	for _, slot in ipairs(slots) do
-		local frame, x, y = slot.frame, slot.x, slot.y
-		if frame then
-			byKey[slot.key] = slot
+	local docked = {}
+	for _, block in ipairs(blocks) do
+		local kind, frame, x, y = block.kind, block.frame, block.x, block.y
+		if kind == 'bank' then
+			if frame.bank then HW.PlaceBank(frame.bank, console, x, -y, block.w, bank > 0) end
+			frame.header:ClearAllPoints()
+			frame.header:SetPoint('TOPLEFT', console, 'TOPLEFT', x + 2, -(y + bank))
+		elseif kind == 'fn' then
+			Deck.PlaceFnAt(console, frame, x, y, fnColumns)
+		elseif kind == 'menu' then
+			frame:ClearAllPoints()
+			frame:SetPoint('TOPLEFT', console, 'TOPLEFT', x, -y)
+		elseif (kind == 'unit' or kind == 'cast') and frame then
+			docked[block.key] = frame
 			local ratio = select(3, Measure(frame))
-			if slot.key:find('^cb%.') then frame:SetWidth(slot.w / ratio) end
+			if kind == 'cast' then frame:SetWidth(block.w / ratio) end
 			parts.module:SetDocked(frame, true, keepShell)
-			UI:DockMover(slot.key, function(docked)
-				local now = docked:GetEffectiveScale() / console:GetEffectiveScale()
-				docked:SetPoint('TOPLEFT', console, 'TOPLEFT', x / now, -y / now)
+			UI:DockMover(block.key, function(target)
+				local now = target:GetEffectiveScale() / console:GetEffectiveScale()
+				target:SetPoint('TOPLEFT', console, 'TOPLEFT', x / now, -y / now)
 			end)
 		end
 	end
+	-- Frames taken out of the console get their own spot back.
+	for key, frame in pairs(console.docked or {}) do
+		if not docked[key] then
+			UI:DockMover(key, nil)
+			local unitframes = UI.modules.unitframes
+			if unitframes and unitframes.SetDocked then unitframes:SetDocked(frame, false) end
+			DockScale(frame, 1)
+		end
+	end
+	console.docked = docked
+	for index = 1, 2 do
+		if not bySlot[index == 1 and 'fnL' or 'fnR'] then Deck.PlaceFnAt(console, index, nil) end
+	end
 	-- Plates where a docked frame shows up when it has no unit: dim, the frame's
 	-- size (the target's is the player's), or nothing.
+	Deck.Plates(console, parts)
 	local plateOn = db.targetPlate ~= 'collapse'
 	local function Plate(plate, frame, rect, w, h)
 		if not plate then return end
@@ -1819,28 +1920,25 @@ local function LayoutConsoleNow()
 		plate:SetPoint('TOPLEFT', console, 'TOPLEFT', rect.x + (rect.w - (w or rect.w)) / 2, -rect.y)
 		plate:SetShown(not frame:IsShown())
 	end
-	local targetRect = byKey['uf.target']
-	Plate(console.targetSlot, parts.target, targetRect, pw > 0 and pw or tw, ph > 0 and ph or th)
-	Plate(console.focusSlot, parts.focus, byKey['uf.focus'])
-	Plate(console.totSlot, parts.tot, byKey['uf.targettarget'])
+	Plate(console.targetSlot, parts.target, bySlot['uf.target'], pw > 0 and pw or tw, ph > 0 and ph or th)
+	Plate(console.focusSlot, parts.focus, bySlot['uf.focus'])
+	Plate(console.totSlot, parts.tot, bySlot['uf.targettarget'])
 	for index, key in ipairs({'cb.player', 'cb.target'}) do
-		local rect, slot = byKey[key], console.castSlots[index]
+		local rect, slot = bySlot[key], console.castSlots[index]
 		if rect then
 			slot:SetSize(rect.w, castHeight)
 			slot:ClearAllPoints()
 			slot:SetPoint('TOPLEFT', console, 'TOPLEFT', rect.x, -rect.y)
 		end
 	end
-	-- The function keys: at the outer edge, or under the docked frames.
-	if stacked then
-		Deck.PlaceFn(console, PAD + (column - fnW) / 2, PAD + (column - fnW) / 2, -(top + frames + 8), fnColumns)
+	local deck = bySlot.deck
+	if deck then
+		Deck.PlaceBottom(console, deck.x, consoleWidth - deck.x - deck.w, consoleHeight - deck.y - deck.h)
 	else
-		Deck.PlaceFn(console, PAD, PAD, -HEAD - max(0, floor((body - fnH) / 2)), fnColumns)
+		Deck.PlaceBottom(console, PAD, PAD, PAD, true)
 	end
-	Deck.PlaceBottom(console, PAD)
 	if console.lcd then console.lcd:SetShown(DB().readout ~= 'off') end
 	-- Header panels, leftward from the page lamps (or the LCD) while they fit.
-	local strip = console.menuStrip
 	local headerStrip = strip and stripCount > 0 and edge == 'header'
 	if console.panels then
 		local anchor = console.pager or console.lcd
@@ -1862,10 +1960,6 @@ local function LayoutConsoleNow()
 	if strip then
 		strip:SetSize(max(stripW, 1), max(stripH, 1))
 		strip:SetShown(stripCount > 0)
-		if stripCount > 0 and edge == 'bottom' then
-			strip:ClearAllPoints()
-			strip:SetPoint('BOTTOM', console, 'BOTTOM', 0, PAD + Deck.BottomHeight())
-		end
 		-- Put the menu and bag keys into it (or back on their own devices).
 		if Deck.LayoutMenu then Deck.LayoutMenu() end
 	end
@@ -1919,23 +2013,7 @@ local function BuildConsole()
 			if HW.On() then BARS[row].bank = HW.Bank(console, 'Bank '..strsub('ABC', row, row)..(row == 1 and '  Main' or '')) end
 		end
 	end
-	local parts = UnitParts()
-	if parts.target then
-		console.targetSlot = Slot(console, 'No target')
-		-- A dim plate, not a box: it only marks where the target appears.
-		console.targetSlot:SetAlpha(0.5)
-		Kit:Font(console.targetSlot.text, 7, nil, true)
-		Follow(console.targetSlot, parts.target)
-	end
-	for _, spec in ipairs({{'focusSlot', parts.focus, 'No focus'}, {'totSlot', parts.tot, 'No ToT'}}) do
-		if spec[2] then
-			local plate = Slot(console, spec[3])
-			plate:SetAlpha(0.5)
-			Kit:Font(plate.text, 7, nil, true)
-			Follow(plate, spec[2])
-			console[spec[1]] = plate
-		end
-	end
+	Deck.Plates(console, UnitParts())
 	-- The cast slots only hold the space: a cast bar appears there when a cast
 	-- starts, and nothing is printed while nothing is casting.
 	console.castSlots = {Slot(console, ''), Slot(console, '')}
@@ -1958,15 +2036,21 @@ function UI:ConsoleSize()
 	return floor(console:GetWidth() + 0.5), floor(console:GetHeight() + 0.5), console.keySize
 end
 
--- The docked elements' slots as the console last laid them out: a list of
--- {key, x, y, w, h} in console units from its top-left corner (y down).
+-- The console's blocks as it last laid them out: a list of {key, kind, x, y,
+-- w, h} in console units from its top-left corner (y down); kind is 'bank',
+-- 'unit', 'cast', 'fn', 'deck' or 'menu'. Also its body's bounds.
 function UI:ConsoleSlots()
 	local list = {}
 	for _, slot in ipairs(console and console.slots or {}) do
-		list[#list + 1] = {key = slot.key, x = slot.x, y = slot.y, w = slot.w, h = slot.h}
+		list[#list + 1] = {key = slot.key, kind = slot.kind, x = slot.x, y = slot.y, w = slot.w, h = slot.h, saved = slot.saved}
 	end
-	return list
+	return list, console and console.bounds
 end
+UI.ConsoleBlocks = UI.ConsoleSlots
+
+-- The console device (nil in the free layout), and laying it out again now.
+function UI:ConsoleFrame() return console end
+function UI:RelayoutConsole() if console then LayoutConsole() end end
 
 -- Free layout: every bar is its own device, sized to its keys.
 local function LayoutFree()
@@ -3610,22 +3694,31 @@ function Deck.BottomHeight()
 end
 
 -- Place the meters and the strip along `parent`'s base, `inset` in from its edges.
-function Deck.PlaceBottom(parent, inset)
+-- right and bottom: the insets from those edges (the left one's by default);
+-- hidden: the console editor took the deck out.
+function Deck.PlaceBottom(parent, inset, right, bottom, hidden)
 	if not xp then return end
 	local db = DB()
-	local y = inset
+	right = right or inset
+	local y = bottom or inset
+	if hidden then
+		xp:Hide()
+		if xp.secondMeter then xp.secondMeter:Hide() end
+		if xp.strip then xp.strip:Hide() end
+		return
+	end
 	xp:SetShown(db.xpbar and true or false)
-	HW.PlaceMeter(xp, parent, inset, inset, y, MeterHeight())
+	HW.PlaceMeter(xp, parent, inset, right, y, MeterHeight())
 	if db.xpbar then y = y + MeterHeight() end
 	local second = xp.secondMeter
 	if second then
 		second:SetShown(SecondShown() and true or false)
 		if second:IsShown() then
 			y = y + 4
-			HW.PlaceMeter(second, parent, inset, inset, y, MeterHeight())
+			HW.PlaceMeter(second, parent, inset, right, y, MeterHeight())
 			y = y + MeterHeight()
 		else
-			HW.PlaceMeter(second, parent, inset, inset, y, MeterHeight())
+			HW.PlaceMeter(second, parent, inset, right, y, MeterHeight())
 		end
 	end
 	local strip = xp.strip
@@ -3636,8 +3729,8 @@ function Deck.PlaceBottom(parent, inset)
 			if db.xpbar or SecondShown() then y = y + ROW_GAP end
 			strip:ClearAllPoints()
 			strip:SetPoint('BOTTOMLEFT', parent, 'BOTTOMLEFT', inset, y)
-			strip:SetPoint('BOTTOMRIGHT', parent, 'BOTTOMRIGHT', -inset, y)
-			LayoutStrip(strip, parent:GetWidth() - inset * 2)
+			strip:SetPoint('BOTTOMRIGHT', parent, 'BOTTOMRIGHT', -right, y)
+			LayoutStrip(strip, parent:GetWidth() - inset - right)
 			UpdateStrip(strip)
 		end
 	end
@@ -3920,6 +4013,46 @@ function Deck.PlaceFn(parent, leftX, rightX, y, columns)
 		else cluster:SetPoint('TOPRIGHT', parent, 'TOPRIGHT', -rightX, y) end
 		cluster:SetShown(placed > 0)
 	end
+end
+
+-- Each cluster's size at `columns` across: left width, height, right width, height.
+function Deck.FnSides(columns)
+	local size, gap = FnSize(), 6
+	local function Measure(count)
+		if count == 0 or #fnKeys == 0 then return 0, 0 end
+		local across = min(count, columns or 2)
+		return across * size + (across - 1) * gap, ceil(count / across) * (size + 12) - 4
+	end
+	local left, right = FnCounts()
+	local lw, lh = Measure(left)
+	local rw, rh = Measure(right)
+	return lw, lh, rw, rh
+end
+
+-- One cluster (side 1 left, 2 right) with its top-left at x, y in the parent
+-- (y down); no x hides it.
+function Deck.PlaceFnAt(parent, side, x, y, columns)
+	if #fnKeys == 0 or not parent.fnLeft then return end
+	if InCombatLockdown() then return UI:AfterCombat(function() Deck.PlaceFnAt(parent, side, x, y, columns) end, 'ab.fnplace'..side) end
+	local cluster = side == 1 and parent.fnLeft or parent.fnRight
+	if not x then cluster:Hide() return end
+	local size, gap = FnSize(), 6
+	local placed = 0
+	local first = side == 1 and 1 or FN_SLOTS / 2 + 1
+	for index = first, first + FN_SLOTS / 2 - 1 do
+		local key = fnKeys[index]
+		if key.def then
+			local line, place = floor(placed / columns), placed % columns
+			key.button:ClearAllPoints()
+			key.button:SetPoint('TOPLEFT', cluster, 'TOPLEFT', place * (size + gap), -line * (size + 12))
+			placed = placed + 1
+		end
+	end
+	local across = min(placed, columns)
+	cluster:SetSize(max(across * size + (across - 1) * gap, 1), max(ceil(placed / columns) * (size + 12) - 4, 1))
+	cluster:ClearAllPoints()
+	cluster:SetPoint('TOPLEFT', parent, 'TOPLEFT', x, -y)
+	cluster:SetShown(placed > 0)
 end
 
 -- Header panels -------------------------------------------------------------------------------
@@ -4209,12 +4342,16 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 		{'segmented', 'Layout', 'actionbars.layout', items = {{'console', 'Console'}, {'free', 'Free'}}, reload = true,
 			note = 'Console: one device with the player and target docked beside the keys. Free: every bar on its own.'},
 		{'switch', 'Dock unit frames', 'actionbars.dock', 'Player and target frames and cast bars inside the console.', reload = true},
-		{'switch', 'Dock focus', 'actionbars.dockFocus', 'The focus frame inside the console too, under the player.', reload = true,
+		{'switch', 'Dock focus', 'actionbars.dockFocus', 'The focus frame inside the console too, under the player.',
 			since = '0.5.2', hidden = function() return not DB().dock end},
 		{'switch', 'Dock target of target', 'actionbars.dockToT', 'The target of target inside the console too, under the target.',
-			reload = true, since = '0.5.2', hidden = function() return not DB().dock end},
-		{'switch', 'Dock pet', 'actionbars.dockPet', 'The pet frame inside the console, in the cast row under the player.', reload = true,
 			since = '0.5.2', hidden = function() return not DB().dock end},
+		{'switch', 'Dock pet', 'actionbars.dockPet', 'The pet frame inside the console, in the cast row under the player.',
+			since = '0.5.2', hidden = function() return not DB().dock end},
+		{'button', 'Arrangement', 'Edit console', function()
+			UI:ToggleHub(nil, false)
+			if UI.EditConsole then UI:EditConsole(true) end
+		end, 'Move each key bank, unit frame, cast bar, the function keys and the meters anywhere inside the console, on a pixel grid. Also /spec console.', since = '0.5.2'},
 		{'switch', 'Housing', 'actionbars.housing', 'The device housings around the keys.'},
 		{'slider', 'Rows', 'actionbars.rows', 1, 3, 1, 'Bars in the console: bar 1, then the bottom left and right bars.', reload = true},
 		{'slider', 'Key size', 'actionbars.keySize', 24, 48, 1, 'Width of each key. In a fixed-size console the keys shrink just enough to fit; the readout shows the size in use.',
