@@ -804,8 +804,62 @@ local function CreateSlot(strip, index)
 	return slot
 end
 
+-- Measuring: what a module needs, from its real text in the current typeface,
+-- so a wide face (Audiowide) gets the room it takes. Readouts that tick are
+-- measured from their widest form.
+local Fit
+do
+local SAMPLES = {time = '88:88', system = '888 FPS  888 MS', coords = '88.8 88.8'}
+local measure
+local function Width(text, size)
+	if not measure then
+		measure = UIParent:CreateFontString(nil, 'OVERLAY')
+		measure:Hide()
+	end
+	Kit:Font(measure, size, nil, true)
+	measure:SetText(text or '')
+	local width = measure:GetStringWidth()
+	return (not IsSecret(width) and width) or 0
+end
+
+local function Sample(key)
+	if SAMPLES[key] then return SAMPLES[key] end
+	local data = DATA[key]
+	local ok, text = pcall(data and data.Value or function() return '' end)
+	if not ok or IsSecret(text) or type(text) ~= 'string' then return '8888' end
+	return text
+end
+
+local function ValueSize(height) return height >= 28 and 12 or max(9, floor(height * 0.42)) end
+
+-- Pieces of a module: the left cluster with and without its printed legend,
+-- the readout, and the frame-rate graph. In widths, at this strip height.
+Fit = {}
+function Fit.Parts(key, height)
+	local db = DB()
+	local dress = DRESS[key] or {}
+	local legendMode = db.legend or 'both'
+	local cluster = 6 + (db.leds and 8 or 0)
+	if (legendMode == 'both' or legendMode == 'icon') and dress.icon then cluster = cluster + min(12, height - 8) + 3 end
+	local legend = ((legendMode == 'both' or legendMode == 'text') and dress.legend) and (Width(dress.legend, 7) + 6) or 0
+	local graph = (key == 'system' and db.graphs) and (GRAPH_COLUMNS * 3 + 6) or 0
+	local dots = (key == 'spec' and SpecCount() > 1) and min(SpecCount(), 4) * 5 + 4 or 0
+	return cluster, legend, ceil(Width(Sample(key), ValueSize(height))) + 2, graph, dots
+end
+
+-- What a module asks for on the strip: everything shown, plus its margin.
+function Fit.Need(key, height)
+	local cluster, legend, value, graph, dots = Fit.Parts(key, height)
+	if height >= 28 then return max(cluster + legend + graph + dots, value) + 12 end
+	return cluster + legend + graph + dots + value + 8
+end
+Fit.ValueSize = ValueSize
+end
+
 -- Lay out one module: lamp, glyph, legend and extras on the left, the readout on
--- the right; on a tall strip (28+) the legend sits above the readout.
+-- the right; on a tall strip (28+) the legend sits above the readout. When the
+-- module is short of room the printed legend goes first, then the graph and the
+-- spec dots, then the digits shrink; the readout never runs over the left side.
 local function LayoutSlot(slot, width, height)
 	local db, style = DB(), Style()
 	local key = slot.key
@@ -823,8 +877,22 @@ local function LayoutSlot(slot, width, height)
 
 	local legendMode = db.legend or 'both'
 	local showText = (legendMode == 'both' or legendMode == 'text') and dress.legend ~= nil
-	local showIcon = (legendMode == 'both' or legendMode == 'icon') and dress.icon ~= nil and (stacked or width >= 84)
-	local size = stacked and 12 or max(9, floor(height * 0.42))
+	local showIcon = (legendMode == 'both' or legendMode == 'icon') and dress.icon ~= nil
+	local size = Fit.ValueSize(height)
+	-- Room: drop what doesn't fit, in order, until the readout does.
+	local cluster, legendW, valueW, graphW, dotsW = Fit.Parts(key, height)
+	local allowGraph, allowDots = true, true
+	if not stacked then
+		local function Over()
+			return cluster + (showText and legendW or 0) + (allowGraph and graphW or 0) + (allowDots and dotsW or 0) + valueW + 8 > width
+		end
+		if Over() and showIcon and showText then showText = false end
+		if Over() then allowGraph = false end
+		if Over() then allowDots = false end
+		if Over() and showIcon then showIcon = false; cluster = 6 + (db.leds and 8 or 0) end
+		local room = width - cluster - (showText and legendW or 0) - 8
+		if valueW > room and valueW > 0 then size = max(7, floor(size * room / valueW)) end
+	end
 	-- With no housing behind it, text over the world gets an outline.
 	local flags = style == 'minimal' and 'OUTLINE' or nil
 	Kit:Font(slot.value, size, flags, true)
@@ -861,20 +929,8 @@ local function LayoutSlot(slot, width, height)
 	Kit:Tint(slot.label, dim)
 	if showText then last = slot.label end
 
-	-- The readout over its ghost segments.
-	slot.value:ClearAllPoints()
-	slot.ghost:ClearAllPoints()
-	if stacked then
-		slot.value:SetPoint('BOTTOMRIGHT', slot.inner, 'BOTTOMRIGHT', -6, 5)
-	else
-		slot.value:SetPoint('RIGHT', slot.inner, 'RIGHT', -6, key == 'coords' and db.tape and 1 or 0)
-	end
-	slot.ghost:SetPoint('RIGHT', slot.value, 'RIGHT', 0, 0)
-	slot.ghost:SetShown(db.ghost and style ~= 'minimal' and Kit:Look('ghostDigits') and true or false)
-	slot.ghost:SetText('')
-
 	-- Extras.
-	slot.graphShown = key == 'system' and db.graphs and (stacked and width >= 90 or width >= 124)
+	slot.graphShown = key == 'system' and db.graphs and allowGraph and (not stacked or width >= 90)
 	slot.graph:SetShown(slot.graphShown and true or false)
 	if slot.graphShown then
 		BuildGraph(slot)
@@ -883,7 +939,7 @@ local function LayoutSlot(slot, width, height)
 		else slot.graph:SetPoint('LEFT', last or slot.inner, last and 'RIGHT' or 'LEFT', 6, 0) end
 		DrawGraph(slot)
 	end
-	slot.dotsShown = key == 'spec' and (stacked or width >= 96) and SpecCount() > 1
+	slot.dotsShown = key == 'spec' and allowDots and SpecCount() > 1
 	slot.dotAnchor = last or slot.label
 	slot.tapeShown = key == 'coords' and db.tape and true or false
 	slot.tape:SetShown(slot.tapeShown)
@@ -894,6 +950,25 @@ local function LayoutSlot(slot, width, height)
 		slot.tape:SetHeight(4)
 		LayoutTape(slot)
 	end
+	-- The readout over its ghost segments, after the extras: bounded on the left
+	-- by whatever sits there, so a long value cuts short rather than overlap.
+	slot.value:ClearAllPoints()
+	slot.ghost:ClearAllPoints()
+	if stacked then
+		slot.value:SetPoint('BOTTOMRIGHT', slot.inner, 'BOTTOMRIGHT', -6, 5)
+		slot.value:SetPoint('BOTTOMLEFT', slot.inner, 'BOTTOMLEFT', 6, 5)
+	else
+		local lift = key == 'coords' and db.tape and 1 or 0
+		slot.value:SetPoint('RIGHT', slot.inner, 'RIGHT', -6, lift)
+		if slot.graphShown then slot.value:SetPoint('LEFT', slot.graph, 'RIGHT', 4, lift)
+		elseif slot.dotsShown then slot.value:SetPoint('LEFT', slot.dotAnchor, 'RIGHT', 5 + min(SpecCount(), 4) * 5 + 2, lift)
+		elseif last then slot.value:SetPoint('LEFT', last, 'RIGHT', 4, lift)
+		else slot.value:SetPoint('LEFT', slot.inner, 'LEFT', 6, lift) end
+	end
+	slot.ghost:SetPoint('TOPLEFT', slot.value, 'TOPLEFT', 0, 0)
+	slot.ghost:SetPoint('BOTTOMRIGHT', slot.value, 'BOTTOMRIGHT', 0, 0)
+	slot.ghost:SetShown(db.ghost and style ~= 'minimal' and Kit:Look('ghostDigits') and true or false)
+	slot.ghost:SetText('')
 end
 
 local function CreateStrip(key, label, default)
@@ -928,7 +1003,26 @@ local function LayoutStrip(strip)
 	strip.shell:SetShown(style ~= 'minimal')
 	strip.model:SetShown(style ~= 'minimal')
 	local left = style == 'minimal' and 9 + 5 + 6 or 9 + 5 + 5 + (strip.model:GetStringWidth() or 24) + 8
-	local width = (db.width - left - PAD - (count - 1) * GAP) / count
+	-- Each module gets what it measures as needing; spare room is shared out
+	-- evenly, and a strip too short for all of them shrinks each in proportion.
+	local avail = db.width - left - PAD - (count - 1) * GAP
+	local needs, total = {}, 0
+	for index = 1, count do
+		local key = db[strip.key..index] or 'none'
+		key = DATA[key] and key or 'none'
+		local need = key ~= 'none' and Fit.Need(key, db.height) or 0
+		needs[index] = need
+		total = total + need
+	end
+	local widths, offsets, x = {}, {}, left
+	for index = 1, count do
+		local width
+		if total <= 0 then width = avail / count
+		elseif total <= avail then width = needs[index] + (needs[index] > 0 and (avail - total) / max(1, count) or 0)
+		else width = avail * needs[index] / total end
+		widths[index], offsets[index] = width, x
+		x = x + width + (needs[index] > 0 and GAP or 0)
+	end
 	strip.screen:SetShown(style == 'lcd')
 	if style == 'lcd' then
 		strip.screen:ClearAllPoints()
@@ -943,11 +1037,11 @@ local function LayoutStrip(strip)
 		else
 			slot.key = DATA[key] and key or 'none'
 			slot:ClearAllPoints()
-			slot:SetPoint('LEFT', strip, 'LEFT', left + (index - 1) * (width + GAP), 0)
-			slot:SetSize(max(width, 10), db.height)
+			slot:SetPoint('LEFT', strip, 'LEFT', offsets[index], 0)
+			slot:SetSize(max(widths[index], 10), db.height)
 			slot:SetShown(slot.key ~= 'none')
 			if slot.key ~= 'none' then
-				UI:Safe(LayoutSlot, slot, max(width, 10), db.height)
+				UI:Safe(LayoutSlot, slot, max(widths[index], 10), db.height)
 				Paint(slot)
 			end
 		end
