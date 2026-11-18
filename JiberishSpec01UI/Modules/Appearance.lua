@@ -29,7 +29,8 @@ UI:RegisterDefaults('appearance', {
 	fade = {enable = false, mode = 'combat', alpha = 0.3, delay = 2, fadeOut = 0.6, fadeIn = 0.15,
 		mountedMore = false, mountedAlpha = 0.1, advanced = false,
 		-- How parts change state (see STYLES), and the sounds they make doing it.
-		style = 'smooth', sound = true, soundScope = 'console', dimSound = 'latch-up', wakeSound = 'latch-down',
+		-- dimSound / wakeSound: 'match' plays the style's own pair. afterglow: Phosphor's tint.
+		style = 'smooth', sound = true, soundScope = 'console', dimSound = 'match', wakeSound = 'match', afterglow = 'amber',
 		triggers = {combat = true, target = false, casting = false, health = false, power = false, mouseover = true,
 			group = false, instance = false, resting = false},
 		-- Each part: on, and its own faded opacity (-1: the global one; 0: out of sight).
@@ -549,6 +550,11 @@ local function DB() return UI.db.appearance.fade end
 -- Old saves: one switch per part, 'open world only', and the idle rule. Every
 -- profile moves to the 'out of combat' rule once.
 local function Migrate(db)
+	-- The sounds moved to 'match the style' once, where they were the old defaults.
+	if not db.v3 then
+		if db.dimSound == 'latch-up' and db.wakeSound == 'latch-down' then db.dimSound, db.wakeSound = 'match', 'match' end
+		db.v3 = true
+	end
 	if db.v2 then return end
 	db.mode = 'combat'
 	for _, part in ipairs(PARTS) do
@@ -679,382 +685,550 @@ local chosen = setmetatable({}, {__mode = 'k'})
 
 -- Fade styles ---------------------------------------------------------------------------
 -- Each style is SPEC-01 hardware changing state, both ways: going dim and
--- waking. Each takes the part's fade time; all of them only ever change the
--- part's alpha (Retract also moves our own, unprotected frames a few pixels),
--- and draw anything else on overlays of our own that follow the part, never
--- take the mouse, and go away when the animation ends or the part hides.
+-- waking. Styles run over the part's fade time (scaled per style, so the
+-- mechanical ones have room to read), only ever change the part's alpha
+-- (Retract also moves our own, unprotected frames a few pixels), and draw
+-- anything else on overlays of our own that follow the part, never take the
+-- mouse, and are cleared when the animation ends, is interrupted or the part
+-- hides. Reduce motion makes every style an instant change.
+--
+-- STYLE_LIST: key, name, description, dim sound, wake sound (the 'Match style'
+-- pair; nil where the style clicks as it goes instead), out and in scale.
 local STYLE_LIST = {
-	{'smooth', 'Smooth', 'An eased fade.'},
-	{'detent', 'Detent dimmer', 'Clicks through five steps, like a rotary dimmer.'},
-	{'power', 'Power down', 'Flickers off like a screen; wakes with a flicker and a scan line.'},
-	{'shutter', 'Shutter', 'Slats close over the part from their middles, and open on waking.'},
-	{'scan', 'Scan wipe', 'A lit line wipes down as the part dims, and up as it wakes.'},
-	{'retract', 'Retract', 'Slides a few pixels toward the nearest screen edge as it dims, and glides back.'},
-	{'cascade', 'LED cascade', 'Its lamps go out one by one, then it dims; they light again one by one.'},
+	{'smooth', 'Smooth', 'An eased fade.', 'latch-up', 'latch-down', 1, 1},
+	{'detent', 'Detent dimmer', 'Clicks through five settled steps, like a rotary dimmer.', nil, nil, 1, 1.5},
+	{'power', 'Power down', 'Switches off like a screen: the picture closes to a line, the line to a dot, and an afterglow. Waking opens a dot into the picture.', 'power-down', 'power-up', 0.75, 2},
+	{'rolltop', 'Roll-top cover', 'A slatted cover rolls down over the part, and back up on waking.', 'servo', 'servo', 1, 2},
+	{'relay', 'Relay bank', 'The part switches off in bands, left to right, one relay click each.', nil, nil, 1, 2},
+	{'iris', 'Iris', 'An aperture closes toward the part\'s centre, and opens on waking.', 'iris', 'iris', 0.9, 2},
+	{'phosphor', 'Phosphor decay', 'The picture fades while a tinted afterglow lingers; waking blooms bright.', 'power-down', 'power-up', 1.4, 1.6},
+	{'shutter', 'Shutter', 'Slats close over the part from their middles, and open on waking.', 'shutter', 'shutter', 1, 2},
+	{'scan', 'Scan wipe', 'A lit line wipes down as the part dims, and up as it wakes.', 'iris', 'iris', 1, 2},
+	{'retract', 'Retract', 'Slides a few pixels toward the nearest screen edge as it dims, and glides back.', 'servo', 'servo', 1, 2},
+	{'cascade', 'LED cascade', 'Its lamps go out one by one, then it dims; they light again one by one.', 'relay', 'relay', 1, 2},
 }
-local STYLES = {}
-local ease = Kit.ease
-local floor, min, max = math.floor, math.min, math.max
+local FX = {}   -- the engine's entry points, used by the fade below
 
-local function Reduced() return UI.db.reduceMotion end
-local function Lerp(a, b, t) return a + (b - a) * t end
+do
+	local STYLES, SPEC = {}, {}
+	for _, entry in ipairs(STYLE_LIST) do SPEC[entry[1]] = entry end
+	local ease = Kit.ease
+	local floor, min, max, sin, pi = math.floor, math.min, math.max, math.sin, math.pi
 
--- One overlay per frame: a lit scan line, a dark strip and shutter slats, on
--- UIParent (so the part's alpha doesn't dim them), anchored over the part.
-local overlays = setmetatable({}, {__mode = 'k'})
-local SLATS = 6
-local function Overlay(frame)
-	local overlay = overlays[frame]
-	if not overlay then
-		overlay = CreateFrame('Frame', nil, UIParent)
-		overlay:EnableMouse(false)
-		overlay:Hide()
-		overlay.line = overlay:CreateTexture(nil, 'OVERLAY', nil, 7)
-		overlay.line:SetColorTexture(1, 1, 1, 1)
-		overlay.line:SetBlendMode('ADD')
-		overlay.strip = overlay:CreateTexture(nil, 'ARTWORK')
-		overlay.strip:SetColorTexture(0, 0, 0, 1)
-		overlay.slats = {}
+	local function Reduced() return UI.db.reduceMotion end
+	local function Lerp(a, b, t) return a + (b - a) * t end
+	local function Px(region, n) return UI.Pixel and UI.Pixel.Px(region, n or 1) or (n or 1) end
+	local function Clamp(value) return value < 0 and 0 or value > 1 and 1 or value end
+	local function Span(progress, from, to) return Clamp((progress - from) / (to - from)) end
+
+	-- One overlay per frame, on UIParent (so the part's alpha doesn't dim it),
+	-- laid over the part: a pool of solid pieces each style arranges.
+	local overlays = setmetatable({}, {__mode = 'k'})
+	local function Piece(overlay, index, layer, sublevel)
+		local piece = overlay.pieces[index]
+		if not piece then
+			piece = overlay:CreateTexture(nil, layer or 'ARTWORK', nil, sublevel or 0)
+			overlay.pieces[index] = piece
+		end
+		piece:SetDrawLayer(layer or 'ARTWORK', sublevel or 0)
+		piece:SetTexture(nil)
+		piece:SetBlendMode('BLEND')
+		piece:SetTexCoord(0, 1, 0, 1)
+		piece:ClearAllPoints()
+		piece:SetAlpha(1)
+		piece:Show()
+		return piece
+	end
+
+	local function Overlay(frame)
+		local overlay = overlays[frame]
+		if not overlay then
+			overlay = CreateFrame('Frame', nil, UIParent)
+			overlay:EnableMouse(false)
+			overlay.pieces = {}
+			overlays[frame] = overlay
+		end
+		for _, piece in ipairs(overlay.pieces) do piece:Hide() end
+		overlay:ClearAllPoints()
+		overlay:SetAllPoints(frame)
+		overlay:SetFrameStrata(frame:GetFrameStrata())
+		overlay:SetFrameLevel(min(frame:GetFrameLevel() + 30, 9000))
+		overlay:SetAlpha(1)
+		overlay:Show()
+		return overlay
+	end
+
+	local function HideOverlay(frame)
+		local overlay = overlays[frame]
+		if overlay then overlay:Hide() end
+	end
+
+	local function Solid(piece, r, g, b, a) piece:SetColorTexture(r, g, b, a or 1) return piece end
+
+	-- The part's width and height, when plain.
+	local function Size(frame)
+		local width, height = frame:GetSize()
+		if IsSecret(width) or IsSecret(height) or not width or not height or width <= 0 or height <= 0 then return nil end
+		return width, height
+	end
+
+	-- An animation on the frame's own key (a new one replaces it), with a
+	-- cleanup that always runs, and the overlay let go if the part hides.
+	local function Drive(frame, seconds, step, finish)
+		Kit:Animate(frame, seconds, 0, 1, function(_, progress)
+			if not frame:IsVisible() then HideOverlay(frame) end
+			step(progress)
+		end, finish, 'linear')
+	end
+
+	local function Done(frame, to)
+		return function()
+			frame:SetAlpha(to)
+			HideOverlay(frame)
+		end
+	end
+
+	-- A cover style's skeleton: the part's alpha follows the cover. Going dim,
+	-- the cover closes over the first 75% and then lets go as the part settles;
+	-- waking, the part is up at once under a closed cover that opens.
+	local function Cover(frame, from, to, seconds, waking, draw)
+		local width, height = Size(frame)
+		if not height then return STYLES.smooth(frame, from, to, seconds) end
+		local overlay = Overlay(frame)
+		if waking then frame:SetAlpha(to) end
+		Drive(frame, seconds, function(progress)
+			if waking then
+				draw(overlay, width, height, 1 - ease.inout(progress), 1)
+			else
+				local closing = Span(progress, 0, 0.75)
+				draw(overlay, width, height, ease.inout(closing), 1 - Span(progress, 0.75, 1))
+				if progress >= 0.75 then frame:SetAlpha(Lerp(from, to, ease.sine(Span(progress, 0.75, 1)))) end
+			end
+		end, Done(frame, to))
+	end
+
+	function STYLES.smooth(frame, from, to, seconds)
+		Kit:FadeTo(frame, to, seconds)
+	end
+
+	-- Five detents, each settling into place rather than jumping; the part's
+	-- leading frame clicks at each (when the part is heard).
+	local DETENTS = 5
+	function STYLES.detent(frame, from, to, seconds, _, audible)
+		local last = 0
+		Drive(frame, seconds, function(progress)
+			local step = min(DETENTS, floor(progress * DETENTS + 0.0001))
+			local within = progress * DETENTS - step
+			if step ~= last then
+				last = step
+				if audible then Kit:Play('detent', true) end
+			end
+			-- Each detent: a quick settle over the first third of its slot, then held.
+			local level = step >= DETENTS and 1 or (step + ease.detent(Clamp(within / 0.35))) / DETENTS
+			frame:SetAlpha(Lerp(from, to, level))
+		end, function() frame:SetAlpha(to) end)
+	end
+
+	-- Power down: the picture closes from top and bottom toward a soft line at
+	-- the middle, the line shrinks to a dot and fades with an afterglow. Waking:
+	-- a dot opens into a line, the line opens into the picture, with a brief warm-up glow.
+	function STYLES.power(frame, from, to, seconds, waking)
+		local width, height = Size(frame)
+		if not height then return STYLES.smooth(frame, from, to, seconds) end
+		local overlay = Overlay(frame)
+		local top, bottom = Solid(Piece(overlay, 1), 0.02, 0.02, 0.02), Solid(Piece(overlay, 2), 0.02, 0.02, 0.02)
+		local line = Solid(Piece(overlay, 3, 'OVERLAY', 2), 1, 0.98, 0.92)
+		line:SetBlendMode('ADD')
+		local halo = Solid(Piece(overlay, 4, 'OVERLAY', 1), 1, 0.85, 0.6)
+		halo:SetBlendMode('ADD')
+		local thin = Px(overlay, 2)
+		local function Panels(open, alpha)
+			-- open: 1 shows the whole picture, 0 a closed screen.
+			local cover = max(0.01, height / 2 * (1 - open))
+			top:SetPoint('TOPLEFT', overlay, 'TOPLEFT'); top:SetPoint('TOPRIGHT', overlay, 'TOPRIGHT'); top:SetHeight(cover)
+			bottom:SetPoint('BOTTOMLEFT', overlay, 'BOTTOMLEFT'); bottom:SetPoint('BOTTOMRIGHT', overlay, 'BOTTOMRIGHT'); bottom:SetHeight(cover)
+			top:SetAlpha(alpha); bottom:SetAlpha(alpha)
+		end
+		local function Line(span, alpha, glow)
+			line:ClearAllPoints()
+			line:SetPoint('CENTER', overlay, 'CENTER')
+			line:SetSize(max(thin, width * span), thin)
+			line:SetAlpha(alpha)
+			halo:ClearAllPoints()
+			halo:SetPoint('CENTER', overlay, 'CENTER')
+			halo:SetSize(max(thin * 3, width * span), thin * 4)
+			halo:SetAlpha(alpha * (glow or 0.3))
+		end
+		if waking then
+			frame:SetAlpha(to)
+			local wash = Solid(Piece(overlay, 5, 'OVERLAY', 0), 1, 0.9, 0.75)
+			wash:SetBlendMode('ADD')
+			wash:SetAllPoints(overlay)
+			Drive(frame, seconds, function(progress)
+				local dot, open, warm = Span(progress, 0, 0.3), Span(progress, 0.3, 0.8), Span(progress, 0.55, 1)
+				Panels(ease.settle(open), 1 - Span(progress, 0.8, 1))
+				Line(0.04 + 0.96 * ease.inout(dot), 0.8 * (1 - ease.sine(open)), 0.5)
+				wash:SetAlpha(0.18 * sin(pi * warm))
+			end, Done(frame, to))
+		else
+			Drive(frame, seconds, function(progress)
+				local close, shrink, glow = Span(progress, 0, 0.5), Span(progress, 0.45, 0.75), Span(progress, 0.7, 1)
+				Panels(1 - ease.inout(close), 1 - Span(progress, 0.85, 1))
+				if progress >= 0.5 then frame:SetAlpha(to) end
+				-- The line forms as the panels meet, shrinks to a dot and leaves an afterglow.
+				local lineAlpha = 0.85 * ease.sine(Span(progress, 0.25, 0.5)) * (1 - 0.7 * ease.sine(glow))
+				Line(1 - 0.94 * ease.inout(shrink), lineAlpha, 0.35 + 0.4 * shrink)
+			end, Done(frame, to))
+		end
+	end
+
+	-- Roll-top cover: a dark tambour of fine slats (the machined material's
+	-- grooves, one texel per pixel) rolls down from the top edge, its rolling
+	-- edge lit; it rolls back up on waking.
+	local function Tambour(overlay, width, height, cover, alpha)
+		local body = Solid(Piece(overlay, 1), 0.07, 0.07, 0.068, 0.92)
+		local grain = Piece(overlay, 2, 'ARTWORK', 1)
+		grain:SetTexture(Kit.media..'Materials\\machined.tga', 'REPEAT', 'REPEAT', 'NEAREST')
+		local edge = Solid(Piece(overlay, 3, 'OVERLAY', 1), 1, 1, 1, 0.22)
+		local lip = Solid(Piece(overlay, 4, 'OVERLAY', 0), 0, 0, 0, 0.6)
+		local drop = max(0.01, height * cover)
+		body:SetPoint('TOPLEFT', overlay, 'TOPLEFT'); body:SetPoint('TOPRIGHT', overlay, 'TOPRIGHT'); body:SetHeight(drop)
+		local px = Px(overlay, 1)
+		grain:SetAllPoints(body)
+		grain:SetTexCoord(0, width / px / 1024, 0, drop / px / 256)
+		edge:SetPoint('BOTTOMLEFT', body, 'BOTTOMLEFT'); edge:SetPoint('BOTTOMRIGHT', body, 'BOTTOMRIGHT'); edge:SetHeight(px)
+		lip:SetPoint('TOPLEFT', body, 'BOTTOMLEFT'); lip:SetPoint('TOPRIGHT', body, 'BOTTOMRIGHT'); lip:SetHeight(px * 2)
+		lip:SetShown(cover > 0.01 and cover < 0.999)
+		overlay:SetAlpha(alpha)
+	end
+	function STYLES.rolltop(frame, from, to, seconds, waking)
+		Cover(frame, from, to, seconds, waking, Tambour)
+	end
+
+	-- Iris: four bevelled blades close toward the centre, and open on waking.
+	local function Aperture(overlay, width, height, closed, alpha)
+		local insetX, insetY = width / 2 * closed, height / 2 * closed
+		local blades = {Solid(Piece(overlay, 1), 0.05, 0.05, 0.05, 0.9), Solid(Piece(overlay, 2), 0.05, 0.05, 0.05, 0.9),
+			Solid(Piece(overlay, 3), 0.05, 0.05, 0.05, 0.9), Solid(Piece(overlay, 4), 0.05, 0.05, 0.05, 0.9)}
+		blades[1]:SetPoint('TOPLEFT', overlay, 'TOPLEFT'); blades[1]:SetPoint('TOPRIGHT', overlay, 'TOPRIGHT'); blades[1]:SetHeight(max(0.01, insetY))
+		blades[2]:SetPoint('BOTTOMLEFT', overlay, 'BOTTOMLEFT'); blades[2]:SetPoint('BOTTOMRIGHT', overlay, 'BOTTOMRIGHT'); blades[2]:SetHeight(max(0.01, insetY))
+		blades[3]:SetPoint('TOPLEFT', blades[1], 'BOTTOMLEFT'); blades[3]:SetPoint('BOTTOMLEFT', blades[2], 'TOPLEFT'); blades[3]:SetWidth(max(0.01, insetX))
+		blades[4]:SetPoint('TOPRIGHT', blades[1], 'BOTTOMRIGHT'); blades[4]:SetPoint('BOTTOMRIGHT', blades[2], 'TOPRIGHT'); blades[4]:SetWidth(max(0.01, insetX))
+		-- The bevel: a lit hairline on each blade's inner edge.
+		local px = Px(overlay, 1)
+		local edges = {}
+		for index = 1, 4 do edges[index] = Solid(Piece(overlay, 4 + index, 'OVERLAY', 1), 1, 1, 1, 0.2) end
+		edges[1]:SetPoint('BOTTOMLEFT', blades[1], 'BOTTOMLEFT', insetX, 0); edges[1]:SetPoint('BOTTOMRIGHT', blades[1], 'BOTTOMRIGHT', -insetX, 0); edges[1]:SetHeight(px)
+		edges[2]:SetPoint('TOPLEFT', blades[2], 'TOPLEFT', insetX, 0); edges[2]:SetPoint('TOPRIGHT', blades[2], 'TOPRIGHT', -insetX, 0); edges[2]:SetHeight(px)
+		edges[3]:SetPoint('TOPRIGHT', blades[3], 'TOPRIGHT'); edges[3]:SetPoint('BOTTOMRIGHT', blades[3], 'BOTTOMRIGHT'); edges[3]:SetWidth(px)
+		edges[4]:SetPoint('TOPLEFT', blades[4], 'TOPLEFT'); edges[4]:SetPoint('BOTTOMLEFT', blades[4], 'BOTTOMLEFT'); edges[4]:SetWidth(px)
+		for _, edge in ipairs(edges) do edge:SetShown(closed > 0.01 and closed < 0.995) end
+		overlay:SetAlpha(alpha)
+	end
+	function STYLES.iris(frame, from, to, seconds, waking)
+		Cover(frame, from, to, seconds, waking, Aperture)
+	end
+
+	-- Relay bank: bands switch off left to right, each with a relay click; the
+	-- part then rests dim. Waking, the bands switch back on right to left.
+	local BANDS = 5
+	function STYLES.relay(frame, from, to, seconds, waking, audible)
+		local width, height = Size(frame)
+		if not height then return STYLES.detent(frame, from, to, seconds, waking, audible) end
+		local overlay = Overlay(frame)
+		local bands = {}
+		for index = 1, BANDS do
+			local band = Solid(Piece(overlay, index), 0.03, 0.03, 0.03, 0.82)
+			band:SetPoint('TOPLEFT', overlay, 'TOPLEFT', width * (index - 1) / BANDS, 0)
+			band:SetPoint('BOTTOMRIGHT', overlay, 'BOTTOMLEFT', width * index / BANDS, 0)
+			band:Hide()
+			bands[index] = band
+		end
+		if waking then
+			frame:SetAlpha(to)
+			for _, band in ipairs(bands) do band:Show() end
+		end
+		local switched = 0
+		Drive(frame, seconds, function(progress)
+			-- The bands switch over the first 80%, then the part settles behind them.
+			local count = min(BANDS, floor(Span(progress, 0, 0.8) * BANDS + 0.0001) + (progress > 0 and 1 or 0))
+			for index = switched + 1, count do
+				local band = waking and bands[BANDS + 1 - index] or bands[index]
+				band:SetShown(not waking)
+				if audible then Kit:Play('relay', true) end
+			end
+			switched = max(switched, count)
+			if not waking and progress >= 0.8 then
+				frame:SetAlpha(Lerp(from, to, Span(progress, 0.8, 1)))
+				overlay:SetAlpha(1 - Span(progress, 0.85, 1))
+			end
+		end, Done(frame, to))
+	end
+
+	-- Phosphor decay: the picture fades fast while a tinted afterglow lingers and
+	-- fades slowly; waking, a quick bright bloom.
+	local GLOWS = {amber = {1, 0.62, 0.22}, green = {0.35, 1, 0.45}, white = {1, 1, 1}}
+	local function GlowColor()
+		local choice = UI.db.appearance.fade.afterglow
+		if choice == 'key' then return Kit:RGB('lamp') end
+		local color = GLOWS[choice] or GLOWS.amber
+		return color[1], color[2], color[3]
+	end
+	function STYLES.phosphor(frame, from, to, seconds, waking)
+		local _, height = Size(frame)
+		if not height then return STYLES.smooth(frame, from, to, seconds) end
+		local overlay = Overlay(frame)
+		local glow = Solid(Piece(overlay, 1, 'OVERLAY', 0), GlowColor())
+		glow:SetBlendMode('ADD')
+		glow:SetAllPoints(overlay)
+		Drive(frame, seconds, function(progress)
+			if waking then
+				frame:SetAlpha(Lerp(from, to, ease.cubic(Span(progress, 0, 0.35))))
+				glow:SetAlpha(0.35 * (1 - ease.sine(progress)) * (progress < 0.08 and progress / 0.08 or 1))
+			else
+				frame:SetAlpha(Lerp(from, to, ease.cubic(Span(progress, 0, 0.3))))
+				-- The afterglow: up as the picture goes, then an exponential decay.
+				glow:SetAlpha(0.28 * min(1, progress / 0.12) * (1 - Span(progress, 0.12, 1)) ^ 2.2)
+			end
+		end, Done(frame, to))
+	end
+
+	-- Shutter: dark slats, lit along their top edges, close from their middles.
+	local SLATS = 6
+	local function Slats(overlay, width, height, closed, alpha)
+		local pitch, px = height / SLATS, Px(overlay, 1)
 		for index = 1, SLATS do
-			local slat = {body = overlay:CreateTexture(nil, 'ARTWORK', nil, 1), lit = overlay:CreateTexture(nil, 'ARTWORK', nil, 2),
-				dark = overlay:CreateTexture(nil, 'ARTWORK', nil, 2)}
-			slat.body:SetColorTexture(0.05, 0.05, 0.05, 1)
-			slat.lit:SetColorTexture(1, 1, 1, 0.16)
-			slat.dark:SetColorTexture(0, 0, 0, 0.85)
-			overlay.slats[index] = slat
-		end
-		overlays[frame] = overlay
-	end
-	overlay:ClearAllPoints()
-	overlay:SetAllPoints(frame)
-	overlay:SetFrameStrata(frame:GetFrameStrata())
-	overlay:SetFrameLevel(min(frame:GetFrameLevel() + 30, 9000))
-	overlay.line:Hide(); overlay.strip:Hide()
-	for _, slat in ipairs(overlay.slats) do slat.body:Hide(); slat.lit:Hide(); slat.dark:Hide() end
-	overlay:SetAlpha(1)
-	overlay:Show()
-	return overlay
-end
-
-local function HideOverlay(frame)
-	local overlay = overlays[frame]
-	if overlay then overlay:Hide() end
-end
-
--- The part's height and width, when plain.
-local function Size(frame)
-	local width, height = frame:GetSize()
-	if IsSecret(width) or IsSecret(height) or not width or not height or width <= 0 or height <= 0 then return nil end
-	return width, height
-end
-
--- Run an animation on the frame's own key (so a new one replaces it), with a
--- cleanup that always runs, and stopping the overlay if the part hides.
-local function Drive(frame, seconds, step, finish)
-	Kit:Animate(frame, seconds, 0, 1, function(_, progress)
-		if not frame:IsVisible() then HideOverlay(frame) end
-		step(progress)
-	end, finish, 'linear')
-end
-
-function STYLES.smooth(frame, from, to, seconds)
-	Kit:FadeTo(frame, to, seconds)
-end
-
--- Five detents; the leading frame of a part clicks at each.
-local DETENTS = 5
-function STYLES.detent(frame, from, to, seconds, _, leader)
-	local last = 0
-	Drive(frame, seconds, function(progress)
-		local step = min(DETENTS, floor(progress * DETENTS + 0.0001))
-		if step ~= last then
-			last = step
-			frame:SetAlpha(Lerp(from, to, step / DETENTS))
-			if leader then Kit:Play('tick', true) end
-		end
-	end, function() frame:SetAlpha(to) end)
-end
-
--- Power down: two or three blips, then it settles dim. Power up: a flicker and
--- a thin scan line running down the part.
-local POWER_DOWN = {1, 0.3, 0.95, 0.2, 0.7}
-local POWER_UP = {0, 0.7, 0.15, 0.85, 0.4, 1}
-function STYLES.power(frame, from, to, seconds, waking)
-	local _, height = Size(frame)
-	local overlay = waking and height and Overlay(frame)
-	if overlay then overlay.line:Show() end
-	Drive(frame, seconds, function(progress)
-		if waking then
-			frame:SetAlpha(Lerp(from, to, POWER_UP[min(#POWER_UP, floor(progress * #POWER_UP) + 1)]))
-			if overlay then
-				local line = overlay.line
-				line:ClearAllPoints()
-				line:SetPoint('TOPLEFT', overlay, 'TOPLEFT', 0, -height * progress)
-				line:SetPoint('TOPRIGHT', overlay, 'TOPRIGHT', 0, -height * progress)
-				line:SetHeight(max(1, UI.Pixel and UI.Pixel.Px(overlay, 2) or 1))
-				line:SetAlpha(0.45 * (1 - progress))
-			end
-		elseif progress < 0.45 then
-			-- 1 is the part fully up, 0 fully at its faded opacity.
-			frame:SetAlpha(Lerp(to, from, POWER_DOWN[min(#POWER_DOWN, floor(progress / 0.45 * #POWER_DOWN) + 1)]))
-		else
-			frame:SetAlpha(Lerp(Lerp(to, from, 0.7), to, ease.sine((progress - 0.45) / 0.55)))
-		end
-	end, function()
-		frame:SetAlpha(to)
-		HideOverlay(frame)
-	end)
-end
-
--- Shutter: dark slats with a lit top hairline close from their middles over the
--- part as it dims, then let go; waking, they start closed and open.
-function STYLES.shutter(frame, from, to, seconds, waking)
-	local _, height = Size(frame)
-	if not height then return STYLES.smooth(frame, from, to, seconds) end
-	local overlay = Overlay(frame)
-	local pitch = height / SLATS
-	local px = UI.Pixel and UI.Pixel.Px(overlay, 1) or 1
-	local function Close(amount)
-		for index, slat in ipairs(overlay.slats) do
 			local centre = -(index - 0.5) * pitch
-			local half = max(0, pitch * amount / 2)
+			local half = pitch * closed / 2
+			local body = Solid(Piece(overlay, index), 0.05, 0.05, 0.05, 0.85)
+			local lit = Solid(Piece(overlay, SLATS + index, 'ARTWORK', 2), 1, 1, 1, 0.2)
+			local dark = Solid(Piece(overlay, 2 * SLATS + index, 'ARTWORK', 2), 0, 0, 0, 0.85)
 			local shown = half > 0.05
-			for _, piece in pairs(slat) do piece:SetShown(shown) end
-			if shown then
-				slat.body:ClearAllPoints()
-				slat.body:SetPoint('TOPLEFT', overlay, 'TOPLEFT', 0, centre + half)
-				slat.body:SetPoint('BOTTOMRIGHT', overlay, 'TOPRIGHT', 0, centre - half)
-				slat.lit:ClearAllPoints()
-				slat.lit:SetPoint('TOPLEFT', slat.body, 'TOPLEFT')
-				slat.lit:SetPoint('TOPRIGHT', slat.body, 'TOPRIGHT')
-				slat.lit:SetHeight(px)
-				slat.dark:ClearAllPoints()
-				slat.dark:SetPoint('BOTTOMLEFT', slat.body, 'BOTTOMLEFT')
-				slat.dark:SetPoint('BOTTOMRIGHT', slat.body, 'BOTTOMRIGHT')
-				slat.dark:SetHeight(px)
+			body:SetShown(shown); lit:SetShown(shown); dark:SetShown(shown)
+			body:SetPoint('TOPLEFT', overlay, 'TOPLEFT', 0, centre + half)
+			body:SetPoint('BOTTOMRIGHT', overlay, 'TOPRIGHT', 0, centre - half)
+			lit:SetPoint('TOPLEFT', body, 'TOPLEFT'); lit:SetPoint('TOPRIGHT', body, 'TOPRIGHT'); lit:SetHeight(px)
+			dark:SetPoint('BOTTOMLEFT', body, 'BOTTOMLEFT'); dark:SetPoint('BOTTOMRIGHT', body, 'BOTTOMRIGHT'); dark:SetHeight(px)
+		end
+		overlay:SetAlpha(0.75 * alpha)
+	end
+	function STYLES.shutter(frame, from, to, seconds, waking)
+		Cover(frame, from, to, seconds, waking, Slats)
+	end
+
+	-- Scan wipe: a lit line runs down and the part dims behind it; waking, it
+	-- runs up and uncovers the part.
+	function STYLES.scan(frame, from, to, seconds, waking)
+		local _, height = Size(frame)
+		if not height then return STYLES.smooth(frame, from, to, seconds) end
+		local overlay = Overlay(frame)
+		local strip = Solid(Piece(overlay, 1), 0, 0, 0, 1)
+		local line = Solid(Piece(overlay, 2, 'OVERLAY', 2), 1, 1, 1, 1)
+		line:SetBlendMode('ADD')
+		local px = Px(overlay, 2)
+		if waking then frame:SetAlpha(to) end
+		local shade = waking and 0.5 or min(0.6, max(0.25, 1 - to / max(from, 0.01)))
+		Drive(frame, seconds, function(progress)
+			local eased = ease.inout(progress)
+			local y = height * (waking and (1 - eased) or eased)
+			strip:ClearAllPoints()
+			strip:SetPoint('TOPLEFT', overlay, 'TOPLEFT'); strip:SetPoint('TOPRIGHT', overlay, 'TOPRIGHT')
+			strip:SetHeight(max(y, 0.01))
+			strip:SetAlpha(shade)
+			line:ClearAllPoints()
+			line:SetPoint('TOPLEFT', overlay, 'TOPLEFT', 0, -y); line:SetPoint('TOPRIGHT', overlay, 'TOPRIGHT', 0, -y)
+			line:SetHeight(px)
+			line:SetAlpha(0.55 * sin(pi * progress) + 0.15)
+		end, Done(frame, to))
+	end
+
+	-- Retract: our own frames (or a protected unit frame's inner face) slide
+	-- toward the nearest screen edge while they dim. Points are shifted, never
+	-- re-anchored; a frame its module has placed again meanwhile starts from there.
+	local RETRACT = 6
+	local retracted = setmetatable({}, {__mode = 'k'})   -- moved region -> {dx, dy, x =, y =}
+	local function Movable(frame)
+		if not ours[frame] then return nil end
+		if not frame.IsProtected or not frame:IsProtected() then return frame end
+		local face = frame.face
+		if type(face) == 'table' and face.AdjustPointsOffset and not (face.IsProtected and face:IsProtected()) then return face end
+	end
+
+	local function Edge(region)
+		local x, y = region:GetCenter()
+		if IsSecret(x) or IsSecret(y) or not x or not y then return 0, 0 end
+		local width, height = UIParent:GetSize()
+		local scale = region:GetEffectiveScale() / UIParent:GetEffectiveScale()
+		x, y = x * scale, y * scale
+		local left, right, bottom, top = x, width - x, y, height - y
+		local nearest = min(left, right, bottom, top)
+		if nearest == left then return -1, 0 elseif nearest == right then return 1, 0 elseif nearest == bottom then return 0, -1 end
+		return 0, 1
+	end
+
+	local function Shift(region, dx, dy)
+		local state = retracted[region]
+		if not state then state = {0, 0}; retracted[region] = state end
+		local _, _, _, x, y = region:GetPoint(1)
+		if state.x and (x ~= state.x or y ~= state.y) then state[1], state[2] = 0, 0 end
+		local moveX, moveY = dx - state[1], dy - state[2]
+		if moveX ~= 0 or moveY ~= 0 then region:AdjustPointsOffset(moveX, moveY) end
+		state[1], state[2] = dx, dy
+		state.x, state.y = select(4, region:GetPoint(1))
+	end
+
+	function STYLES.retract(frame, from, to, seconds, waking, audible)
+		local region = Movable(frame)
+		if not (region and region.AdjustPointsOffset and region:GetNumPoints() > 0) then
+			return STYLES.detent(frame, from, to, seconds, waking, audible)
+		end
+		local sx, sy = Edge(region)
+		local state = retracted[region]
+		local startX, startY = state and state[1] or 0, state and state[2] or 0
+		local endX, endY = waking and 0 or sx * RETRACT, waking and 0 or sy * RETRACT
+		Drive(frame, seconds, function(progress)
+			local eased = ease.cubic(progress)
+			frame:SetAlpha(Lerp(from, to, eased))
+			Shift(region, Lerp(startX, endX, eased), Lerp(startY, endY, eased))
+		end, function()
+			frame:SetAlpha(to)
+			Shift(region, endX, endY)
+		end)
+	end
+
+	-- LED cascade: the part's lamps go out left to right before it dims; waking,
+	-- it brightens and they light again. Lamps keep their own state (Kit:SetLed
+	-- puts it back); only their look is borrowed.
+	local darkened = setmetatable({}, {__mode = 'k'})   -- frame -> its lamps put out
+	local function LampsIn(frame)
+		local lamps = {}
+		for led in pairs(Kit.leds or {}) do
+			local node = led.GetParent and led:GetParent()
+			for _ = 1, 12 do
+				if node == frame then lamps[#lamps + 1] = led break end
+				if not node or not node.GetParent then break end
+				node = node:GetParent()
 			end
 		end
+		table.sort(lamps, function(a, b)
+			local ax, bx = a:GetLeft(), b:GetLeft()
+			if IsSecret(ax) or IsSecret(bx) or not ax or not bx then return false end
+			return ax < bx
+		end)
+		return lamps
 	end
-	overlay:SetAlpha(0.6)
-	Drive(frame, seconds, function(progress)
-		local eased = ease.detent(progress)
-		frame:SetAlpha(Lerp(from, to, eased))
-		if waking then
-			Close(1 - eased)
-		else
-			-- Closes over the first 70%, then the slats let go as the part settles.
-			Close(min(1, progress / 0.7))
-			overlay:SetAlpha(progress < 0.7 and 0.6 or 0.6 * (1 - (progress - 0.7) / 0.3))
-		end
-	end, function()
-		frame:SetAlpha(to)
+
+	local function Lamp(led, lit)
+		if lit then Kit:SetLed(led, led.on) return end
+		Kit:Tint(led, 'ledOff')
+		if led.glow then led.glow:Hide() end
+	end
+
+	function STYLES.cascade(frame, from, to, seconds, waking)
+		local lamps = LampsIn(frame)
+		local count = #lamps
+		if count == 0 then return STYLES.smooth(frame, from, to, seconds) end
+		darkened[frame] = not waking and lamps or nil
+		local done = 0
+		Drive(frame, seconds, function(progress)
+			if waking then
+				frame:SetAlpha(Lerp(from, to, ease.sine(Span(progress, 0, 0.5))))
+				local lit = progress < 0.5 and 0 or floor(Span(progress, 0.5, 1) * count + 0.0001)
+				for index = done + 1, min(lit, count) do Lamp(lamps[index], true) end
+				done = max(done, min(lit, count))
+			else
+				local dark = floor(Span(progress, 0, 0.5) * count + 0.0001)
+				for index = done + 1, min(dark, count) do Lamp(lamps[index], false) end
+				done = max(done, min(dark, count))
+				if progress > 0.5 then frame:SetAlpha(Lerp(from, to, ease.sine(Span(progress, 0.5, 1)))) end
+			end
+		end, function()
+			frame:SetAlpha(to)
+			if waking then for _, led in ipairs(lamps) do Lamp(led, true) end end
+		end)
+	end
+
+	-- Undo whatever a style left behind: an overlay, a shift, lamps put out.
+	local function Settle(frame, style)
 		HideOverlay(frame)
-	end)
-end
-
--- Scan wipe: a lit line runs down and the part dims behind it; waking, it runs
--- up and uncovers the part.
-function STYLES.scan(frame, from, to, seconds, waking)
-	local _, height = Size(frame)
-	if not height then return STYLES.smooth(frame, from, to, seconds) end
-	local overlay = Overlay(frame)
-	overlay.line:Show(); overlay.strip:Show()
-	local px = UI.Pixel and UI.Pixel.Px(overlay, 2) or 1
-	if waking then frame:SetAlpha(to) end
-	local shade = waking and 0.5 or min(0.6, max(0.25, 1 - to / max(from, 0.01)))
-	Drive(frame, seconds, function(progress)
-		local eased = ease.inout(progress)
-		local y = height * (waking and (1 - eased) or eased)
-		overlay.strip:ClearAllPoints()
-		overlay.strip:SetPoint('TOPLEFT', overlay, 'TOPLEFT')
-		overlay.strip:SetPoint('TOPRIGHT', overlay, 'TOPRIGHT')
-		overlay.strip:SetHeight(max(y, 0.01))
-		overlay.strip:SetAlpha(shade)
-		overlay.line:ClearAllPoints()
-		overlay.line:SetPoint('TOPLEFT', overlay, 'TOPLEFT', 0, -y)
-		overlay.line:SetPoint('TOPRIGHT', overlay, 'TOPRIGHT', 0, -y)
-		overlay.line:SetHeight(px)
-		overlay.line:SetAlpha(0.55 * math.sin(math.pi * progress) + 0.15)
-	end, function()
-		frame:SetAlpha(to)
-		HideOverlay(frame)
-	end)
-end
-
--- Retract: our own frames (or a unit frame's inner face) slide toward the
--- nearest screen edge while they dim. Points are shifted, never re-anchored,
--- and a frame its module has placed again meanwhile is left where it is.
-local RETRACT = 6
-local retracted = setmetatable({}, {__mode = 'k'})   -- moved region -> {dx, dy, x, y}
-local function Movable(frame)
-	if not ours[frame] then return nil end
-	if not frame.IsProtected or not frame:IsProtected() then return frame end
-	local face = frame.face
-	if type(face) == 'table' and face.AdjustPointsOffset and not (face.IsProtected and face:IsProtected()) then return face end
-end
-
-local function Edge(region)
-	local x, y = region:GetCenter()
-	if IsSecret(x) or IsSecret(y) or not x or not y then return 0, 0 end
-	local width, height = UIParent:GetSize()
-	local scale = region:GetEffectiveScale() / UIParent:GetEffectiveScale()
-	x, y = x * scale, y * scale
-	local left, right, bottom, top = x, width - x, y, height - y
-	local nearest = min(left, right, bottom, top)
-	if nearest == left then return -1, 0 elseif nearest == right then return 1, 0 elseif nearest == bottom then return 0, -1 end
-	return 0, 1
-end
-
-local function Shift(region, dx, dy)
-	local state = retracted[region]
-	if not state then state = {0, 0}; retracted[region] = state end
-	-- Placed again by its module since we last moved it: start from there.
-	local _, _, _, x, y = region:GetPoint(1)
-	if state.x and (x ~= state.x or y ~= state.y) then state[1], state[2] = 0, 0 end
-	local moveX, moveY = dx - state[1], dy - state[2]
-	if moveX ~= 0 or moveY ~= 0 then region:AdjustPointsOffset(moveX, moveY) end
-	state[1], state[2] = dx, dy
-	state.x, state.y = select(4, region:GetPoint(1))
-end
-
-function STYLES.retract(frame, from, to, seconds, waking, leader)
-	local region = Movable(frame)
-	if not (region and region.AdjustPointsOffset and region:GetNumPoints() > 0) then
-		return STYLES.detent(frame, from, to, seconds, waking, leader)
-	end
-	local sx, sy = Edge(region)
-	local state = retracted[region]
-	local startX, startY = state and state[1] or 0, state and state[2] or 0
-	local endX, endY = waking and 0 or sx * RETRACT, waking and 0 or sy * RETRACT
-	Drive(frame, seconds, function(progress)
-		local eased = ease.cubic(progress)
-		frame:SetAlpha(Lerp(from, to, eased))
-		Shift(region, Lerp(startX, endX, eased), Lerp(startY, endY, eased))
-	end, function()
-		frame:SetAlpha(to)
-		Shift(region, endX, endY)
-	end)
-end
-
--- LED cascade: the lamps inside the part go out left to right before it dims;
--- waking, it brightens and they light again. Lamps keep their own state
--- (Kit:SetLed puts it back); only their look is borrowed.
-local function LampsIn(frame)
-	local lamps = {}
-	for led in pairs(Kit.leds or {}) do
-		local node = led.GetParent and led:GetParent()
-		for _ = 1, 12 do
-			if node == frame then lamps[#lamps + 1] = led break end
-			if not node or not node.GetParent then break end
-			node = node:GetParent()
+		local region = style ~= 'retract' and Movable(frame)
+		local state = region and retracted[region]
+		if state and (state[1] ~= 0 or state[2] ~= 0) then Shift(region, 0, 0) end
+		local lamps = style ~= 'cascade' and darkened[frame]
+		if lamps then
+			darkened[frame] = nil
+			for _, led in ipairs(lamps) do Lamp(led, true) end
 		end
 	end
-	table.sort(lamps, function(a, b)
-		local ax, bx = a:GetLeft(), b:GetLeft()
-		if IsSecret(ax) or IsSecret(bx) or not ax or not bx then return false end
-		return ax < bx
-	end)
-	return lamps
-end
+	FX.Settle = Settle
 
-local darkened = setmetatable({}, {__mode = 'k'})   -- frame -> its lamps put out
-local function Lamp(led, lit)
-	if lit then Kit:SetLed(led, led.on) return end
-	Kit:Tint(led, 'ledOff')
-	if led.glow then led.glow:Hide() end
-end
-
-function STYLES.cascade(frame, from, to, seconds, waking)
-	local lamps = LampsIn(frame)
-	local count = #lamps
-	if count == 0 then return STYLES.smooth(frame, from, to, seconds) end
-	darkened[frame] = not waking and lamps or nil
-	local done = 0
-	Drive(frame, seconds, function(progress)
-		if waking then
-			frame:SetAlpha(Lerp(from, to, ease.sine(min(1, progress / 0.5))))
-			local lit = progress < 0.5 and 0 or floor((progress - 0.5) / 0.5 * count + 0.0001)
-			for index = done + 1, min(lit, count) do Lamp(lamps[index], true) end
-			done = max(done, min(lit, count))
-		else
-			local dark = floor(min(1, progress / 0.5) * count + 0.0001)
-			for index = done + 1, min(dark, count) do Lamp(lamps[index], false) end
-			done = max(done, min(dark, count))
-			if progress > 0.5 then frame:SetAlpha(Lerp(from, to, ease.sine((progress - 0.5) / 0.5))) end
+	-- Move one frame to an alpha in a style. Reduced motion, an instant change or a
+	-- hidden part: straight there.
+	local function Run(frame, to, seconds, style, waking, audible)
+		Settle(frame, style)
+		local from = frame:GetAlpha()
+		if IsSecret(from) then from = waking and 0 or 1 end
+		if Reduced() or seconds <= 0 or not frame:IsVisible() then
+			Kit:Animate(frame, 0, from, to, function(value) frame:SetAlpha(value) end)
+			return
 		end
-	end, function()
-		frame:SetAlpha(to)
-		-- Whatever the timing, the lamps end as their owners want them when awake.
-		if waking then for _, led in ipairs(lamps) do Lamp(led, true) end end
-	end)
-end
-
--- Move one frame to an alpha in a style. Reduced motion, an instant change or a
--- hidden part: straight there.
--- Undo whatever a style left behind: an overlay, a shift, lamps put out.
-local function Settle(frame, style)
-	HideOverlay(frame)
-	local region = style ~= 'retract' and Movable(frame)
-	local state = region and retracted[region]
-	if state and (state[1] ~= 0 or state[2] ~= 0) then Shift(region, 0, 0) end
-	local lamps = style ~= 'cascade' and darkened[frame]
-	if lamps then
-		darkened[frame] = nil
-		for _, led in ipairs(lamps) do Lamp(led, true) end
+		local run = STYLES[style] or STYLES.smooth
+		run(frame, from, to, seconds, waking, audible)
 	end
-end
 
-local function Run(frame, to, seconds, style, waking, leader)
-	Settle(frame, style)
-	local from = frame:GetAlpha()
-	if IsSecret(from) then from = waking and 0 or 1 end
-	if Reduced() or seconds <= 0 or not frame:IsVisible() then
-		Kit:Animate(frame, 0, from, to, function(value) frame:SetAlpha(value) end)
-		HideOverlay(frame)
-		if style == 'cascade' and waking then for _, led in ipairs(LampsIn(frame)) do Lamp(led, true) end end
-		return
+	-- A style's own time: the fade time scaled so the mechanism reads.
+	function FX.Seconds(style, seconds, waking)
+		local spec = SPEC[style]
+		return seconds * (spec and (waking and spec[7] or spec[6]) or 1)
 	end
-	local run = STYLES[style] or STYLES.smooth
-	run(frame, from, to, seconds, waking, leader)
-end
 
-local function StyleOf(db, settings)
-	local own = db.advanced and settings and settings.style
-	if own and own ~= 'global' and STYLES[own] then return own end
-	return STYLES[db.style] and db.style or 'smooth'
-end
+	function FX.Style(db, settings)
+		local own = db.advanced and settings and settings.style
+		if own and own ~= 'global' and STYLES[own] then return own end
+		return STYLES[db.style] and db.style or 'smooth'
+	end
 
--- Returns true when any frame of the part started to change.
-local function SetPart(frames, alpha, seconds, style, waking)
-	local changed, leader = false, true
-	for _, frame in ipairs(frames) do
-		local current = frame:GetAlpha()
-		-- Unlock mode's opacity and Hide stay in force under the fade.
-		local target = alpha * MoverAlpha(frame)
-		if chosen[frame] ~= target or (not IsSecret(current) and abs(current - target) > 0.02 and not Kit:Animating(frame)) then
-			chosen[frame] = target
-			Run(frame, target, seconds, style, waking, leader)
-			changed, leader = true, false
+	-- Returns true when any frame of the part started to change. audible: the
+	-- part is heard (its leading frame clicks for the styles that click as they go).
+	function FX.SetPart(frames, alpha, seconds, style, waking, audible)
+		local changed = false
+		for _, frame in ipairs(frames) do
+			local current = frame:GetAlpha()
+			-- Unlock mode's opacity and Hide stay in force under the fade.
+			local target = alpha * MoverAlpha(frame)
+			if chosen[frame] ~= target or (not IsSecret(current) and abs(current - target) > 0.02 and not Kit:Animating(frame)) then
+				chosen[frame] = target
+				Run(frame, target, seconds, style, waking, audible and not changed)
+				changed = true
+			end
 		end
+		return changed
 	end
-	return changed
-end
 
--- One sound per transition, whichever parts take part, at most every 0.25 s.
-local lastSound = {}
-local function Sound(db, waking)
-	if not db.sound then return end
-	local now = GetTime()
-	local kind = waking and 'wake' or 'dim'
-	if now - (lastSound[kind] or 0) < 0.25 then return end
-	lastSound[kind] = now
-	Kit:Play(waking and (db.wakeSound or 'latch-down') or (db.dimSound or 'latch-up'), true)
+	-- One sound per transition, whichever parts take part, at most every 0.25 s.
+	-- 'match': the style's own pair (none for the styles that click as they go).
+	local lastSound = {}
+	function FX.Sound(db, waking, style)
+		if not db.sound then return end
+		local now = GetTime()
+		local kind = waking and 'wake' or 'dim'
+		if now - (lastSound[kind] or 0) < 0.25 then return end
+		local choice = waking and db.wakeSound or db.dimSound
+		local name = choice
+		if not choice or choice == 'match' then
+			local spec = SPEC[style] or SPEC.smooth
+			name = waking and spec[5] or spec[4]
+		end
+		if not name then return end
+		lastSound[kind] = now
+		Kit:Play(name, true)
+	end
 end
 
 local function Restore()
 	for frame in pairs(chosen) do
 		if Usable(frame) then
-			Settle(frame, nil)
+			FX.Settle(frame, nil)
 			Kit:FadeTo(frame, MoverAlpha(frame), 0.15)
 		end
 	end
@@ -1084,13 +1258,14 @@ local function Tick()
 	local wanted = not previewing and (unlocked or now < wakeUntil or Wanted(db))
 	local hover = not previewing and On(db, 'mouseover')
 	local typing = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
-	local dimmed, woke = false, false
+	local dimmed, woke = nil, nil   -- the style of the first heard part to change
 	local everyPart = db.soundScope == 'all'
 	for _, part in ipairs(PARTS) do
 		local settings = type(db.parts) == 'table' and db.parts[part.key]
 		local frames = Frames(part)
-		local style = StyleOf(db, settings)
+		local style = FX.Style(db, settings)
 		local heard = everyPart or part.key == 'console'
+		local audible = heard and db.sound
 		if settings and settings.on and (db.enable or previewing) then
 			local awake = wanted or (part.chat and typing and not previewing)
 			-- Mouse-over is looked for only while nothing else holds the part up (out of
@@ -1101,20 +1276,23 @@ local function Tick()
 			local stay = not previewing and now - (awakeAt[part.key] or 0) < (db.delay or 2)
 			if awake or hovered or stay then
 				faded[part.key] = nil
-				local seconds = hovered and min(db.fadeIn or 0.15, 0.12) or (db.fadeIn or 0.15)
-				if SetPart(frames, 1, seconds, style, true) and heard then woke = true end
+				local seconds = hovered and 0.12 or FX.Seconds(style, db.fadeIn or 0.15, true)
+				if FX.SetPart(frames, 1, seconds, style, true, audible) and heard then woke = woke or style end
 			else
 				faded[part.key] = true
-				if SetPart(frames, FadedAlpha(db, settings), db.fadeOut or 0.6, style, false) and heard then dimmed = true end
+				local seconds = FX.Seconds(style, db.fadeOut or 0.6, false)
+				if FX.SetPart(frames, FadedAlpha(db, settings), seconds, style, false, audible) and heard then dimmed = dimmed or style end
 			end
 		else
 			faded[part.key] = nil
 			-- The preview's wake plays the style even with fading off.
-			if SetPart(frames, 1, db.fadeIn or 0.15, previewWake and style or 'smooth', true) and previewWake and heard then woke = true end
+			local wakeStyle = previewWake and style or 'smooth'
+			if FX.SetPart(frames, 1, FX.Seconds(wakeStyle, db.fadeIn or 0.15, true), wakeStyle, true, previewWake and audible)
+				and previewWake and heard then woke = woke or style end
 		end
 	end
-	if dimmed then Sound(db, false) end
-	if woke then Sound(db, true) end
+	if dimmed then FX.Sound(db, false, dimmed) end
+	if woke then FX.Sound(db, true, woke) end
 end
 
 local function Update()
@@ -1174,8 +1352,9 @@ for _, entry in ipairs(STYLE_LIST) do
 	STYLE_ITEMS[#STYLE_ITEMS + 1] = {entry[1], entry[2]}
 	PART_STYLE_ITEMS[#PART_STYLE_ITEMS + 1] = {entry[1], entry[2]}
 end
-local SOUND_ITEMS = {}
-for _, name in ipairs({'latch-up', 'latch-down', 'tick', 'blip', 'open', 'down', 'up', 'success'}) do
+local SOUND_ITEMS = {{'match', 'Match style'}}
+for _, name in ipairs({'power-down', 'power-up', 'relay', 'servo', 'shutter', 'iris', 'detent',
+	'latch-up', 'latch-down', 'tick', 'blip', 'open', 'down', 'up', 'success'}) do
 	SOUND_ITEMS[#SOUND_ITEMS + 1] = {name, (name:gsub('^%l', string.upper):gsub('%-', ' '))}
 end
 
@@ -1188,13 +1367,16 @@ local fadeRows = {
 	{'slider', 'Fade out over', 'appearance.fade.fadeOut', 0, 2, 0.05, nil, format = Seconds, since = '0.5.2'},
 	{'slider', 'Fade in over', 'appearance.fade.fadeIn', 0, 1, 0.05, 'The mouse brings a part back at once.', format = Seconds, since = '0.5.2'},
 	{'dropdown', 'Style', 'appearance.fade.style', items = STYLE_ITEMS, since = '0.5.2',
-		note = 'How parts change state, both ways. Retract moves only our own unprotected frames (and a unit frame\'s face); anything else clicks through detents instead. Reduce motion makes every style an instant change.'},
+		note = 'How parts change state, both ways: an eased fade, a dimmer clicking through detents, a screen powering down, a roll-top cover, a relay bank, an iris, phosphor afterglow, a shutter, a scan wipe, a retract, or lamps going out. Retract moves only our own unprotected frames (others click through detents). Reduce motion makes every style instant.'},
+	{'dropdown', 'Afterglow', 'appearance.fade.afterglow', items = {{'amber', 'Amber'}, {'key', 'Key color'}, {'green', 'Green'},
+		{'white', 'White'}}, since = '0.5.2', note = 'Phosphor decay\'s lingering glow.',
+		hidden = function() return DB().style ~= 'phosphor' end},
 	{'switch', 'Fade more when mounted', 'appearance.fade.mountedMore', 'Mounted or flying out of combat, parts go lower still.', since = '0.5.2'},
 	{'slider', 'Mounted opacity', 'appearance.fade.mountedAlpha', 0, 0.9, 0.05, nil, format = Percent,
 		hidden = function() return not DB().mountedMore end},
 	{'button', 'Preview', 'Fade', function() fade:Preview() end, 'Every chosen part dims in its style, holds three seconds, then wakes.', since = '0.5.2'},
 	{'header', 'Sound'},
-	{'switch', 'Sound', 'appearance.fade.sound', 'One sound as parts go dim and one as they wake, however many change together. Follows the Sounds master switch.', since = '0.5.2'},
+	{'switch', 'Sound', 'appearance.fade.sound', 'One sound as parts go dim and one as they wake, however many change together (Detent and Relay click as they go instead). Follows the Sounds master switch.', since = '0.5.2'},
 	{'dropdown', 'Going dim', 'appearance.fade.dimSound', items = SOUND_ITEMS, since = '0.5.2', disabled = function() return not DB().sound end},
 	{'dropdown', 'Waking', 'appearance.fade.wakeSound', items = SOUND_ITEMS, since = '0.5.2', disabled = function() return not DB().sound end},
 	{'segmented', 'Sound for', 'appearance.fade.soundScope', items = {{'console', 'Console only'}, {'all', 'Every part'}}, since = '0.5.2',

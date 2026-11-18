@@ -683,6 +683,174 @@
       "sha256": "0f99149737d8234666ea24527b98d2d9567ace751eb4118fec767862f6a9baa8",
       "milliseconds": 284,
       "peak": 0.043
+    },
+    {
+      "path": "Media/Hardware/Sounds/power-down-1.mp3",
+      "voice": "power-down",
+      "take": 1,
+      "sha256": "04b4d99d1ab303134d2514bc6f4b6d3a1abde27d564a1bb711ab83102c65d312",
+      "milliseconds": 250,
+      "peak": 0.091
+    },
+    {
+      "path": "Media/Hardware/Sounds/power-down-2.mp3",
+      "voice": "power-down",
+      "take": 2,
+      "sha256": "ba09f239a3c86532c018e05486666507cfe9ecea7e044c9523d3fe202ebfe5a7",
+      "milliseconds": 250,
+      "peak": 0.089
+    },
+    {
+      "path": "Media/Hardware/Sounds/power-down-3.mp3",
+      "voice": "power-down",
+      "take": 3,
+      "sha256": "1a52141a8e07d2f2ec92d1566750699f7f641c23f4762357ebf39b4c7322c2b9",
+      "milliseconds": 250,
+      "peak": 0.112
+    },
+    {
+      "path": "Media/Hardware/Sounds/power-up-1.mp3",
+      "voice": "power-up",
+      "take": 1,
+      "sha256": "c71993dbff0fdcf6355693c42f8e14c3f49f5199a903274e45c79b0a558965d3",
+      "milliseconds": 250,
+      "peak": 0.071
+    },
+    {
+      "path": "Media/Hardware/Sounds/power-up-2.mp3",
+      "voice": "power-up",
+      "take": 2,
+      "sha256": "d42e39f352d9937436cccc2eb4af0a6a4adbf8820914a82adbdb927d5d0619f9",
+      "milliseconds": 250,
+      "peak": 0.072
+    },
+    {
+      "path": "Media/Hardware/Sounds/power-up-3.mp3",
+      "voice": "power-up",
+      "take": 3,
+      "sha256": "b0f2556d98b306f75467e42ef3c4e2fd380fb801a4bc37fdd0a041735189fb56",
+      "milliseconds": 250,
+      "peak": 0.07
+    },
+    {
+      "path": "Media/Hardware/Sounds/relay-1.mp3",
+      "voice": "relay",
+      "take": 1,
+      "sha256": "8b6470e8409ecf66178565481dbc6033917ec872160b7ecea6077836ca26003e",
+      "milliseconds": 250,
+      "peak": 0.071
+    },
+    {
+      "path": "Media/Hardware/Sounds/relay-2.mp3",
+      "voice": "relay",
+      "take": 2,
+      "sha256": "0402fbd777907aaf1c5a88e5b5f48960c15cf1c2c17fc6fb25913deca077e42d",
+      "milliseconds": 250,
+      "peak": 0.058
+    },
+    {
+      "path": "Media/Hardware/Sounds/relay-3.mp3",
+      "voice": "relay",
+      "take": 3,
+      "sha256": "2f3279b07c1c2296560ed1557805a5b8131c6d8c4bcf6d379b674d9ebec92434",
+      "milliseconds": 250,
+      "peak": 0.049
+    },
+    {
+      "path": "Media/Hardware/Sounds/servo-1.mp3",
+      "voice": "servo",
+      "take": 1,
+      "sha256": "35981db399c915e329759032570fe0d214547b5674a0a4acfd5e10f5c201a66f",
+      "milliseconds": 250,
+      "peak": 0.037
+    },
+    {
+      "path": "Media/Hardware/Sounds/servo-2.mp3",
+      "voice": "servo",
+      "take": 2,
+      "sha256": "e9a77e07d3698f06a09220c24b06384c3477dde6088b8354b8f5a8c0f1ea2038",
+      "milliseconds": 250,
+      "peak": 0.037
+    },
+    {
+      "path": "Media/Hardware/Sounds/servo-3.mp3",
+      "voice": "servo",
+      "take": 3,
+      "sha256": "25240b8676ed178646cb47f3b25341ee96322ad6fc685a05c40b2c95bfece476",
+      "milliseconds": 250,
+      "peak": 0.042
+    },
+    {
+      "path": "Media/Hardware/Sounds/shutter-1.mp3",
+      "voice": "shutter",
+      "take": 1,
+      "sha256": "78e9cc492ba4d2cf98452dd6dbc725734172cd6a1f1be0e1850e4346708e31a4",
+      "milliseconds": 250,
+      "peak": 0.195
+    },
+    {
+      "path": "Media/Hardware/Sounds/shutter-2.mp3",
+      "voice": "shutter",
+      "take": 2,
+      "sha256": "820250703d734339c5a60daa873d804c4b21151bbd015f2953dbc55e28a9094f",
+      "milliseconds": 250,
+      "peak": 0.205
+    },
+    {
+      "path": "Media/Hardware/Sounds/shutter-3.mp3",
+      "voice": "shutter",
+      "take": 3,
+      "sha256": "1b40fdab33d685c88a9770fdc5d5a24c111ba640fb889aeff2213ff2274f4bd5",
+      "milliseconds": 250,
+      "peak": 0.211
+    },
+    {
+      "path": "Media/Hardware/Sounds/iris-1.mp3",
+      "voice": "iris",
+      "take": 1,
+      "sha256": "4304619acc849db68bd379c651dc99fd5e41ff72b0a0ca30772fd924ad32e93b",
+      "milliseconds": 250,
+      "peak": 0.065
+    },
+    {
+      "path": "Media/Hardware/Sounds/iris-2.mp3",
+      "voice": "iris",
+      "take": 2,
+      "sha256": "1137027a938c04a039237656c0dfd065586de964dade8cf32dbab55e2492013b",
+      "milliseconds": 250,
+      "peak": 0.077
+    },
+    {
+      "path": "Media/Hardware/Sounds/iris-3.mp3",
+      "voice": "iris",
+      "take": 3,
+      "sha256": "57dc52dd9e5311b421cffbb87e31f804697c7b9ce26a531ebabb39d99b0badac",
+      "milliseconds": 250,
+      "peak": 0.062
+    },
+    {
+      "path": "Media/Hardware/Sounds/detent-1.mp3",
+      "voice": "detent",
+      "take": 1,
+      "sha256": "b4def8846fbd0a978e74a69aa6fb5ff640787597f4832e4c469eaef74a6ba5a0",
+      "milliseconds": 250,
+      "peak": 0.113
+    },
+    {
+      "path": "Media/Hardware/Sounds/detent-2.mp3",
+      "voice": "detent",
+      "take": 2,
+      "sha256": "c2408b77e7b2d92224d9e718fd8e87ada716188264872bde89429ae299a40c6f",
+      "milliseconds": 250,
+      "peak": 0.109
+    },
+    {
+      "path": "Media/Hardware/Sounds/detent-3.mp3",
+      "voice": "detent",
+      "take": 3,
+      "sha256": "159741cb006aac3ed9d9ef9750a9adc58efe9610a6eaa5d0e1e5ef8077cb8b20",
+      "milliseconds": 250,
+      "peak": 0.104
     }
   ],
   "soundTakes": 3,

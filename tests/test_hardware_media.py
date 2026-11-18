@@ -152,7 +152,9 @@ class HardwareMedia(unittest.TestCase):
         theme = lua_sources()['Theme.lua']
         declared = re.findall(r"'([\w-]+)'", re.search(r'Kit\.sounds = \{(.*?)\}', theme, re.S)[1])
         self.assertEqual(sorted(declared), voices)
-        self.assertEqual(len(voices), 15)  # every voice in SPEC-01's sound.ts
+        # Every voice in SPEC-01's sound.ts, and this addon's seven mechanism voices.
+        self.assertEqual(len(voices), 22)
+        self.assertLessEqual({'power-down', 'power-up', 'relay', 'servo', 'shutter', 'iris', 'detent'}, set(voices))
         takes = int(re.search(r'Kit\.soundTakes = (\d+)', theme)[1])
         self.assertEqual(takes, FIXTURE['soundTakes'])
         self.assertEqual({(r['voice'], r['take']) for r in records}, {(v, t) for v in voices for t in range(1, takes + 1)})

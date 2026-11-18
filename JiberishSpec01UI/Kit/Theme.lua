@@ -421,7 +421,9 @@ function Kit:RefreshNow() RefreshNow() end
 -- The fifteen SPEC-01 voices. Each has several recorded takes, because the
 -- original varies pitch and level on every press; one is picked at random.
 Kit.sounds = {'down', 'down-primary', 'up', 'latch-down', 'latch-up', 'tick', 'blip', 'type', 'type-space',
-	'type-big', 'type-up', 'open', 'success', 'warning', 'error'}
+	'type-big', 'type-up', 'open', 'success', 'warning', 'error',
+	-- This addon's own mechanisms, for the fade styles (tools/build-hardware-sounds.py).
+	'power-down', 'power-up', 'relay', 'servo', 'shutter', 'iris', 'detent'}
 Kit.soundTakes = 3
 -- The same voice plays at most once per 0.1 s (a window and the game's own
 -- click for it are heard once), and nothing plays closer than 20 ms apart.

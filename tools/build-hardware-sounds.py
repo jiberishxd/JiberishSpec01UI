@@ -14,7 +14,14 @@ The standard library writes 16-bit WAV; ffmpeg encodes MP3 with LAME. (ffmpeg's
 built-in Vorbis encoder made files WoW would not play.) Each file is padded with
 silence to MIN_SECONDS, because the client is unreliable with very short streams.
 
-    python3 tools/build-hardware-sounds.py [--ffmpeg /path/to/ffmpeg]
+    python3 tools/build-hardware-sounds.py [--ffmpeg /path/to/ffmpeg] [--voices relay,servo]
+
+The second set, MACHINE_VOICES, is this addon's own (not from SPEC-01): the
+mechanisms the fade styles play (power, relays, a servo, a shutter, an iris,
+a detent). Built in the same style and at levels no louder than the page's
+voices, each from its own seed, so one can be rebuilt without touching any
+other file. `--voices` renders only the named voices and keeps every other
+file and record as it is.
 """
 import argparse
 import hashlib
@@ -130,6 +137,93 @@ def voices(rng):
     }
 
 
+def envelope(t, duration, attack, release):
+    """A soft envelope: raised-cosine attack, held, raised-cosine release."""
+    if t < 0 or t >= duration:
+        return 0.0
+    if t < attack:
+        return 0.5 - 0.5 * math.cos(math.pi * t / attack)
+    if t > duration - release:
+        return 0.5 + 0.5 * math.cos(math.pi * (t - (duration - release)) / release)
+    return 1.0
+
+
+def glide(rng, at, f0, f1, level, duration, attack=0.012, release=0.06, harmonics=(1.0,), curve=1.0, wobble=0.0):
+    """A tone gliding from f0 to f1 (exponentially, shaped by curve) with a soft envelope."""
+    vary = lambda amount: 1 + rng.uniform(-1, 1) * amount
+    pitch = vary(0.035)
+    f0, f1, peak = f0 * pitch, f1 * pitch, level * vary(0.1)
+    count = int(duration * RATE)
+    total = sum(harmonics)
+    phase, out = 0.0, []
+    for i in range(count):
+        t = i / RATE
+        progress = (t / duration) ** curve
+        freq = f0 * (f1 / f0) ** progress
+        if wobble:
+            freq *= 1 + wobble * math.sin(2 * math.pi * 31 * t)
+        phase += freq / RATE
+        value = sum(h * math.sin(2 * math.pi * phase * (k + 1)) for k, h in enumerate(harmonics)) / total
+        out.append(value * peak * envelope(t, duration, attack, release))
+    return at, out
+
+
+def sweep(rng, at, f0, f1, q, level, duration, attack=0.01, release=0.03):
+    """Band-passed noise whose centre slides from f0 to f1: a metal edge sliding."""
+    vary = lambda amount: 1 + rng.uniform(-1, 1) * amount
+    pitch, peak = vary(0.05), level * vary(0.12)
+    count = int(duration * RATE)
+    out, x1, x2, y1, y2 = [], 0.0, 0.0, 0.0, 0.0
+    coefficients = None
+    for i in range(count):
+        if i % 32 == 0:
+            freq = f0 * pitch * (f1 / f0) ** (i / count)
+            w = 2 * math.pi * freq / RATE
+            alpha = math.sin(w) / (2 * q)
+            a0 = 1 + alpha
+            coefficients = (alpha / a0, -alpha / a0, -2 * math.cos(w) / a0, (1 - alpha) / a0)
+        b0, b2, a1, a2 = coefficients
+        x = rng.uniform(-1, 1)
+        y = b0 * x + b2 * x2 - a1 * y1 - a2 * y2
+        x2, x1, y2, y1 = x1, x, y1, y
+        out.append(y * peak * envelope(i / RATE, duration, attack, release))
+    return at, out
+
+
+def machine_voices(rng):
+    """The fade styles' mechanisms."""
+    b = lambda at=0.0, **kw: burst(rng, at, **kw)
+    t = lambda at=0.0, **kw: tone(rng, at, **kw)
+    g = lambda at=0.0, **kw: glide(rng, at, **kw)
+    return {
+        # A screen switching off: a soft tone sinking away, then the relay letting go.
+        'power-down': lambda: [g(f0=740, f1=180, level=0.055, duration=0.2, attack=0.01, release=0.08,
+                                 harmonics=(1.0, 0.25), curve=0.8),
+                               b(0.19, freq=2300, q=0.9, level=0.09, decay=0.012), t(0.19, freq=150, to=105, level=0.08, decay=0.03)],
+        # Switching on: a click, then the tone climbing as it warms.
+        'power-up': lambda: [b(freq=2600, q=0.9, level=0.08, decay=0.01), t(freq=170, to=120, level=0.06, decay=0.025),
+                             g(0.012, f0=210, f1=820, level=0.045, duration=0.19, attack=0.03, release=0.07,
+                               harmonics=(1.0, 0.2), curve=1.4)],
+        # A relay: the armature strikes, bounces once, and the contact rings briefly.
+        'relay': lambda: [b(freq=3400, q=1.4, level=0.15, decay=0.006), b(0.0065, freq=2700, q=1.2, level=0.06, decay=0.005),
+                          t(freq=1250, to=1100, level=0.018, decay=0.014)],
+        # A small servo: a geared whir that rises and settles, with a soft stop.
+        'servo': lambda: [g(f0=170, f1=235, level=0.05, duration=0.15, attack=0.02, release=0.05,
+                            harmonics=(1.0, 0.6, 0.35, 0.2), curve=0.6, wobble=0.04),
+                          b(0.005, freq=1500, q=2.5, level=0.025, decay=0.13),
+                          b(0.148, freq=2000, q=1, level=0.05, decay=0.008)],
+        # A shutter: the blades clack, and a second set follows.
+        'shutter': lambda: [b(freq=1900, q=0.9, level=0.2, decay=0.018), t(freq=200, to=125, level=0.17, decay=0.04),
+                            b(0.026, freq=2700, q=1, level=0.09, decay=0.011), t(0.026, freq=240, to=170, level=0.06, decay=0.025)],
+        # An iris: thin metal blades sliding over each other, ending in a light tap.
+        'iris': lambda: [sweep(rng, 0.0, f0=2800, f1=5600, q=3.5, level=0.12, duration=0.085, attack=0.012, release=0.03),
+                         b(0.083, freq=3600, q=1.3, level=0.06, decay=0.007)],
+        # A detent: a firm, damped click, softer than tick.
+        'detent': lambda: [b(kind='highpass', freq=2400, q=0.7, level=0.1, decay=0.007),
+                           t(freq=1700, to=1450, level=0.018, decay=0.012), t(freq=140, to=100, level=0.06, decay=0.022)],
+    }
+
+
 def mix(layers):
     length = max(int(at * RATE) + len(data) for at, data in layers) + int(0.004 * RATE)
     out = [0.0] * length
@@ -144,14 +238,30 @@ def mix(layers):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ffmpeg', default='ffmpeg')
+    parser.add_argument('--voices', default='', help='comma-separated voices to render; others are left as they are')
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
-    records = []
+    only = {name for name in args.voices.split(',') if name}
+    fixture = json.loads(FIXTURE.read_text()) if FIXTURE.exists() else {}
+    records = [r for r in fixture.get('sounds', []) if r['voice'] not in only] if only else []
     with tempfile.TemporaryDirectory(prefix='jiberish-hardware-sound-') as scratch:
         rng = random.Random(5201)
-        for old in list(OUT.glob('*.ogg')) + list(OUT.glob('*.mp3')):
-            old.unlink()
-        for voice, render in voices(rng).items():
+        if not only:
+            for old in list(OUT.glob('*.ogg')) + list(OUT.glob('*.mp3')):
+                old.unlink()
+        jobs = list(voices(rng).items())
+        # The machine voices each draw from their own seed, so they never shift another's takes.
+        for index, (voice, render) in enumerate(machine_voices(random.Random(0)).items()):
+            seeded = random.Random(7300 + index)
+            jobs.append((voice, lambda render=render, seeded=seeded, voice=voice:
+                         machine_voices(seeded)[voice]()))
+        for voice, render in jobs:
+            if only and voice not in only:
+                if voice in dict(voices(random.Random(0))):
+                    # Keep the page's voices' random stream exactly as a full build would.
+                    for _ in range(TAKES):
+                        render()
+                continue
             for take in range(1, TAKES + 1):
                 samples = mix(render())
                 name = f'{voice}-{take}'
@@ -169,7 +279,8 @@ def main():
                                 'sha256': hashlib.sha256(data).hexdigest(),
                                 'milliseconds': round(len(samples) * 1000 / RATE),
                                 'peak': round(max(abs(v) for v in samples), 3)})
-    fixture = json.loads(FIXTURE.read_text()) if FIXTURE.exists() else {}
+    order = [voice for voice, _ in jobs]
+    records.sort(key=lambda r: (order.index(r['voice']) if r['voice'] in order else len(order), r['take']))
     fixture['sounds'] = records
     fixture['soundTakes'] = TAKES
     FIXTURE.write_text(json.dumps(fixture, indent=2) + '\n')
