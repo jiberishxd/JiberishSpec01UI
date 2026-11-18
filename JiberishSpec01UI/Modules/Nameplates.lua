@@ -119,6 +119,7 @@ UI:RegisterDefaults('nameplates', {
 	expandMouseover = false, expandFocus = true,
 	housing = 'glass', -- 'glass' | 'none' (Full)
 	targetHeight = 5, levelInline = true,
+	levelColor = 'difficulty', -- 'difficulty' (enemy levels in the game's con colors: gray, green, yellow, orange, red) | 'plain'
 	-- Printed legends: LV before the level, HP before the health readout.
 	legends = true,
 })
@@ -676,7 +677,7 @@ local function Layout(plate)
 	plate.chip.legend:SetShown(legends)
 	Kit:Font(plate.chip.text, compact and max(6, nameSize - 1) or 7, nil, true, 'numbers')
 	plate.chipInk = inline and (compact and 'darkDim' or 'darkInk') or 'lcdInk'
-	Kit:Tint(plate.chip.text, plate.chipInk)
+	Kit:Tint(plate.chip.text, plate.levelRGB or plate.chipInk)
 	Kit:Tint(plate.chip.legend, inline and 'darkDim' or 'lcdDim')
 	plate.chip:ClearAllPoints()
 	plate.chip.text:ClearAllPoints()
@@ -896,6 +897,7 @@ local function UpdateName(plate)
 	local class = Plain(UnitClassification, unit)
 	plate.elite = class == 'elite' or class == 'rareelite' or class == 'worldboss'
 	local chip = plate.chip.text
+	plate.levelRGB = nil
 	Kit:Tint(chip, plate.chipInk or 'lcdInk')
 	local level = Plain(UnitLevel, unit)
 	if level == nil then
@@ -910,6 +912,14 @@ local function UpdateName(plate)
 	end
 	local mark = (class == 'elite' or class == 'rareelite') and '+' or (class == 'rare') and '*' or ''
 	chip:SetText(level..mark)
+	-- An enemy's level in the game's own difficulty colors, as the target frame shows it.
+	if not plate.friendly and DB().levelColor ~= 'plain' and GetCreatureDifficultyColor then
+		local ok, color = pcall(GetCreatureDifficultyColor, level)
+		if ok and type(color) == 'table' and not IsSecret(color.r) and color.r then
+			plate.levelRGB = {color.r, color.g, color.b}
+			Kit:Tint(chip, plate.levelRGB)
+		end
+	end
 end
 
 local function UpdateQuest(plate)
@@ -1745,6 +1755,7 @@ function module:Enable()
 	driver:RegisterEvent('DISPLAY_SIZE_CHANGED')
 	driver:RegisterEvent('QUEST_LOG_UPDATE')
 	pcall(driver.RegisterEvent, driver, 'PLAYER_SPECIALIZATION_CHANGED')
+	driver:RegisterEvent('PLAYER_LEVEL_UP')
 	local questQueued
 	driver:SetScript('OnEvent', function(_, event, unit)
 		if event == 'NAME_PLATE_UNIT_ADDED' then
@@ -1765,6 +1776,9 @@ function module:Enable()
 			end)
 		elseif event == 'PLAYER_SPECIALIZATION_CHANGED' then
 			for _, plate in pairs(byUnit) do UI:Safe(UpdateThreat, plate) end
+		elseif event == 'PLAYER_LEVEL_UP' then
+			-- Difficulty colors are relative to your level; read them again a moment later.
+			C_Timer.After(0.5, function() for _, plate in pairs(byUnit) do UI:Safe(UpdateName, plate) end end)
 		else
 			ApplySize()
 		end
@@ -1941,6 +1955,8 @@ UI:RegisterPage('nameplates', {title = 'Nameplates', order = 15,
 		{'segmented', 'Creatures', 'nameplates.npcColor', items = {{'reaction', 'Reaction'}, {'accent', 'Key color'}},
 			note = 'Red, yellow or green by how they feel about you, or the key color.'},
 		{'switch', 'Level chip', 'nameplates.level', 'The level on a small LCD; + elite, * rare, ?? boss.'},
+		{'segmented', 'Enemy level color', 'nameplates.levelColor', items = {{'difficulty', 'Difficulty'}, {'plain', 'Plain'}}, since = '0.5.2',
+			note = 'Difficulty: an enemy\'s level in the game\'s colors for how hard it is for you (gray, green, yellow, orange, red).'},
 	}},
 	{title = 'Quest units', rows = {
 		{'switch', 'Quest marker', 'nameplates.questMarker', 'A mark beside units your quests need.'},
