@@ -164,11 +164,11 @@ local function ClassColor(unit)
 	local ok, r, g, b = pcall(function()
 		if UnitIsPlayer(unit) then
 			local _, class = UnitClass(unit)
-			local color = class and (CUSTOM_CLASS_COLORS or RAID_CLASS_COLORS)[class]
+			local color = not IsSecret(class) and class and (CUSTOM_CLASS_COLORS or RAID_CLASS_COLORS)[class]
 			if color then return color.r, color.g, color.b end
 		else
 			local reaction = UnitReaction(unit, 'player')
-			local color = reaction and FACTION_BAR_COLORS and FACTION_BAR_COLORS[reaction]
+			local color = not IsSecret(reaction) and reaction and FACTION_BAR_COLORS and FACTION_BAR_COLORS[reaction]
 			if color then return color.r, color.g, color.b end
 		end
 	end)
@@ -193,7 +193,8 @@ end
 
 local function HealthColor(unit)
 	local mode = DB().healthColor
-	if mode == 'accent' then return Kit:RGB('lamp') end
+	-- A key color set to Class means each member's own class, not the player's.
+	if mode == 'accent' and Kit:DB().accent ~= 'class' then return Kit:RGB('lamp') end
 	if mode == 'custom' then return RGB(DB().customColor) end
 	if mode == 'reaction' then return ReactionColor(unit) end
 	if mode == 'gradient2' then return RGB(DB().healthEnd) end

@@ -392,7 +392,8 @@ function PaintHealth(frame)
 	if mode == 'custom' then
 		local r, g, b = RGB(Cfg(frame).healthCustom)
 		if r then return bar:SetStatusBarColor(r, g, b) end
-	elseif mode == 'accent' then
+	elseif mode == 'accent' and Kit:DB().accent ~= 'class' then
+		-- A key color set to Class means each unit's own class, not the player's.
 		return bar:SetStatusBarColor(Kit:RGB('lamp'))
 	elseif TOKEN_COLORS[mode] then
 		return bar:SetStatusBarColor(Kit:RGB(TOKEN_COLORS[mode]))
@@ -1076,7 +1077,8 @@ end
 local function RingColor(frame)
 	local mode = DB().avatarRing
 	if mode == 'class' then return ClassColor(frame.unit) end
-	if mode == 'key' then return Kit:RGB('lamp') end
+	if mode == 'key' and Kit:DB().accent ~= 'class' then return Kit:RGB('lamp') end
+	if mode == 'key' then return ClassColor(frame.unit) end
 	return ReactionColor(frame.unit)
 end
 
@@ -3844,7 +3846,7 @@ local function HealthColors(withDefault)
 	local items = {}
 	if withDefault then items[1] = {'default', 'Page default'} end
 	for _, item in ipairs({{'accent', 'Key color'}, {'ledGreen', 'Lamp green'}, {'ledBlue', 'Lamp blue'}, {'amber', 'Amber'},
-		{'screen', 'Screen amber'}, {'class', 'Class and reaction'}, {'reaction', 'Reaction'}, {'gradient', 'By health'},
+		{'screen', 'Screen amber'}, {'class', 'Class (creatures by reaction)'}, {'reaction', 'Reaction'}, {'gradient', 'By health'},
 		{'gradient2', 'Two-color gradient'}}) do
 		items[#items + 1] = item
 	end
