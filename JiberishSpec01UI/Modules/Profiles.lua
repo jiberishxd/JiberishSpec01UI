@@ -123,6 +123,8 @@ loader:SetScript('OnEvent', function(_, event, name)
 				-- The scale it was made at (in UI units the layout is the same on
 				-- any resolution); the setup's scale step can still change it.
 				if UI.DEFAULT_SCALE then db.uiScale, db.uiScaleLocked = UI.DEFAULT_SCALE, true end
+				-- The arrangement a new install starts with (UI.DEFAULT_LAYOUT), solved after login.
+				if type(db.layout) == 'table' and UI.DEFAULT_LAYOUT then db.layout.preset = UI.DEFAULT_LAYOUT end
 				UI.applyDefaultLayout = type(db.layout) == 'table' and db.layout.preset or nil
 			end
 		end
