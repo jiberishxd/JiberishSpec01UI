@@ -404,7 +404,7 @@ local function AreaItems() return Kit:FontChoices(true) end
 
 local fontRows = {
 	{'dropdown', 'Typeface', 'font', items = FontItems,
-		note = 'IBM Plex Mono is the reference\'s typeface and ships with the addon. Every LibSharedMedia font installed is listed too.'},
+		note = 'IBM Plex Mono is the reference\'s typeface; it and Audiowide ship with the addon. Every LibSharedMedia font installed is listed too.'},
 	{'slider', 'Text scale', 'appearance.textScale', 0.8, 1.3, 0.05, 'Every SPEC-01 label, readout and window text.', format = Percent},
 	{'segmented', 'Outline', 'appearance.textOutline', items = {{'none', 'None'}, {'outline', 'Thin'}, {'thick', 'Thick'}},
 		note = 'An outline helps text over the game world.'},
@@ -426,6 +426,7 @@ end
 local function WorldFontPath(choice)
 	if choice == '__default' then return Kit.fonts.bold end
 	if choice == '__numbers' then return [[Fonts\ARIALN.TTF]] end
+	if choice and Kit.bundledFonts and Kit.bundledFonts[choice] then return Kit.bundledFonts[choice] end
 	if choice and LibStub then
 		local LSM = LibStub('LibSharedMedia-3.0', true)
 		local path = LSM and LSM:Fetch('font', choice, true)

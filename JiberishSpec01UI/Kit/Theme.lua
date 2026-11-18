@@ -207,9 +207,16 @@ end
 -- The reference's typeface, IBM Plex Mono (SIL OFL 1.1, Media/Fonts/OFL.txt), ships
 -- with the addon. Another LibSharedMedia font can replace it in the hub.
 Kit.fonts = {regular = UI.MediaPath..[[Fonts\IBMPlexMono-Regular.ttf]], bold = UI.MediaPath..[[Fonts\IBMPlexMono-Bold.ttf]]}
+-- Audiowide (SIL OFL 1.1, Media/Fonts/OFL-Audiowide.txt) ships too, under the
+-- name other addons give it, so a profile naming it works with or without
+-- LibSharedMedia.
+Kit.bundledFonts = {['Audiowide-Regular'] = UI.MediaPath..[[Fonts\Audiowide-Regular.ttf]]}
 if LSM then
 	LSM:Register('font', 'IBM Plex Mono', Kit.fonts.regular)
 	LSM:Register('font', 'IBM Plex Mono Bold', Kit.fonts.bold)
+	for name, path in pairs(Kit.bundledFonts) do
+		if not LSM:IsValid('font', name) then LSM:Register('font', name, path) end
+	end
 end
 
 -- Font areas: each part of the interface may have its own typeface and size
@@ -292,6 +299,7 @@ end
 local function FacePath(name, bold)
 	if name == '__game' then return STANDARD_TEXT_FONT end
 	if name == '__numbers' then return [[Fonts\ARIALN.TTF]] end
+	if name and Kit.bundledFonts[name] then return Kit.bundledFonts[name] end
 	if name and name ~= '__default' and LSM then
 		local path = LSM:Fetch('font', name, true)
 		if path then return path end
@@ -322,9 +330,10 @@ function Kit:FontChoices(inherit)
 	items[#items + 1] = {'__default', 'IBM Plex Mono'}
 	items[#items + 1] = {'__game', 'Game font'}
 	items[#items + 1] = {'__numbers', 'Game numbers (narrow)'}
+	items[#items + 1] = {'Audiowide-Regular', 'Audiowide'}
 	if LSM then
 		for _, name in ipairs(LSM:List('font') or {}) do
-			if name ~= 'IBM Plex Mono' and name ~= 'IBM Plex Mono Bold' then items[#items + 1] = {name, name} end
+			if name ~= 'IBM Plex Mono' and name ~= 'IBM Plex Mono Bold' and not Kit.bundledFonts[name] then items[#items + 1] = {name, name} end
 		end
 	end
 	return items

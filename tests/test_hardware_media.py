@@ -225,9 +225,13 @@ class HardwareMedia(unittest.TestCase):
 
     def test_bundled_font_and_its_license(self):
         fonts = ADDON / 'Media/Fonts'
-        self.assertEqual({p.name for p in fonts.iterdir()}, {'IBMPlexMono-Regular.ttf', 'IBMPlexMono-Bold.ttf', 'OFL.txt'})
+        self.assertEqual({p.name for p in fonts.iterdir()},
+                         {'IBMPlexMono-Regular.ttf', 'IBMPlexMono-Bold.ttf', 'OFL.txt', 'Audiowide-Regular.ttf', 'OFL-Audiowide.txt'})
         self.assertIn('SIL Open Font License', (fonts / 'OFL.txt').read_text())
-        for name in ('IBMPlexMono-Regular.ttf', 'IBMPlexMono-Bold.ttf'):
+        audiowide = (fonts / 'OFL-Audiowide.txt').read_text()
+        self.assertIn('SIL OPEN FONT LICENSE Version 1.1', audiowide)
+        self.assertIn('Reserved Font Name "Audiowide"', audiowide)
+        for name in ('IBMPlexMono-Regular.ttf', 'IBMPlexMono-Bold.ttf', 'Audiowide-Regular.ttf'):
             self.assertEqual((fonts / name).read_bytes()[:4], b'\x00\x01\x00\x00')  # TrueType outline font
         theme = (HARDWARE / 'Theme.lua').read_text()
         self.assertIn('IBMPlexMono-Regular.ttf', theme)

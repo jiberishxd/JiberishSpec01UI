@@ -120,6 +120,9 @@ loader:SetScript('OnEvent', function(_, event, name)
 			if ok and type(data) == 'table' then
 				data.movers, data.hub = nil, nil
 				LoadInto(db, data)
+				-- The scale it was made at (in UI units the layout is the same on
+				-- any resolution); the setup's scale step can still change it.
+				if UI.DEFAULT_SCALE then db.uiScale, db.uiScaleLocked = UI.DEFAULT_SCALE, true end
 				UI.applyDefaultLayout = type(db.layout) == 'table' and db.layout.preset or nil
 			end
 		end
