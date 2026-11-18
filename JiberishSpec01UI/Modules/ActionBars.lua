@@ -119,9 +119,12 @@ UI:RegisterDefaults('actionbars', {
 	-- With no target, the console shows a dim plate where it appears ('plate') or nothing ('collapse').
 	targetPlate = 'plate',
 	-- The menu (micro buttons) and bags: two small devices of their own.
-	menuEnable = true, menuKeySize = 22, menuScale = 1, menuOrient = 'horizontal', menuColumns = 6, menuGlyph = 0.68,
-	menuHousing = true, menuFade = false, menuHide = {},
-	bagsEnable = true, bagsKeySize = 22, bagsScale = 1, bagsOrient = 'horizontal', bagsColumns = 0, bagsGlyph = 0.6,
+	-- Layout: 'line', 'column', 'grid' (Columns across, a short last line
+	-- centred), 'balanced' (the most even grid for the keys shown) or 'console'
+	-- (set into the console, along its header or bottom: menuEdge).
+	menuEnable = true, menuKeySize = 22, menuScale = 1, menuLayout = 'line', menuColumns = 6, menuSpacing = 3, menuGlyph = 0.68,
+	menuHousing = true, menuFade = false, menuHide = {}, menuEdge = 'bottom',
+	bagsEnable = true, bagsKeySize = 22, bagsScale = 1, bagsLayout = 'line', bagsColumns = 3, bagsSpacing = 3, bagsGlyph = 0.6,
 	bagsHousing = true, bagsFade = false, bagsHide = {},
 	bar1 = BarDefaults(5), bar2 = BarDefaults(5), bar3 = BarDefaults(5), bar4 = BarDefaults(5), bar5 = BarDefaults(5),
 	barPet = BarDefaults(4), barStance = BarDefaults(4),
@@ -1638,6 +1641,28 @@ local function LayoutConsoleNow()
 	local xpHeight = Deck.BottomHeight()
 	local bank = HW.On() and HW.BANK_H or 0
 	local rows = #console.bars
+	-- Menu and bag keys set into the console: a strip in the header (when it
+	-- fits beside the name and the readouts) or along the bottom, over the stats.
+	local stripKey = max(16, floor(KeySize() * 0.6))
+	local edge = Deck.MenuEdge and Deck.MenuEdge() or 'bottom'
+	if edge == 'header' then stripKey = min(stripKey, HEAD - 6) end
+	local stripW, stripH, stripCount = 0, 0, 0
+	if Deck.MenuStrip and console.menuStrip then stripW, stripH, stripCount = Deck.MenuStrip(stripKey) end
+	if edge == 'header' and stripCount > 0 then
+		local right = PAD + (db.readout ~= 'off' and console.lcd:GetWidth() or 0) + (console.pager and console.pager:GetWidth() + 10 or 0)
+		for _, panel in ipairs(console.panels or {}) do
+			if db[panel.def.field] ~= false then right = right + panel:GetWidth() + 6 end
+		end
+		local estimate = fixedW or (PAD * 2 + Banks(KeySize()) + sideWidth * 2)
+		if estimate - right - PAD - 160 < stripW + 12 then
+			-- No room in the header: the strip goes to the bottom, at the bottom's size.
+			edge = 'bottom'
+			stripKey = max(16, floor(KeySize() * 0.6))
+			stripW, stripH, stripCount = Deck.MenuStrip(stripKey)
+		end
+	end
+	console.menuStripKey, console.menuStripCount, console.menuStripEdge = stripKey, stripCount, edge
+	if edge == 'bottom' and stripCount > 0 then xpHeight = xpHeight + stripH + ROW_GAP end
 
 	-- The key size: the one asked for, made just small enough to fit a fixed
 	-- console (the console is never resized for the keys).
@@ -1752,15 +1777,34 @@ local function LayoutConsoleNow()
 	Deck.PlaceBottom(console, PAD)
 	if console.lcd then console.lcd:SetShown(DB().readout ~= 'off') end
 	-- Header panels, leftward from the page lamps (or the LCD) while they fit.
+	local strip = console.menuStrip
+	local headerStrip = strip and stripCount > 0 and edge == 'header'
 	if console.panels then
 		local anchor = console.pager or console.lcd
 		local used = PAD + (console.lcd:IsShown() and console.lcd:GetWidth() or 0) + (console.pager and console.pager:GetWidth() + 10 or 0) + 8
+		if headerStrip then used = used + stripW + 12 end
 		local last = Deck.PlacePanels(console, anchor, used)
+		-- The header strip sits left of the readouts; the name ends before it.
+		if headerStrip then
+			strip:ClearAllPoints()
+			strip:SetPoint('RIGHT', last, 'LEFT', -12, 0)
+			last = strip
+		end
 		console.title:SetPoint('RIGHT', last, 'LEFT', -8, 0)
 		if leave then
 			leave:ClearAllPoints()
 			leave:SetPoint('RIGHT', last, 'LEFT', -8, 0)
 		end
+	end
+	if strip then
+		strip:SetSize(max(stripW, 1), max(stripH, 1))
+		strip:SetShown(stripCount > 0)
+		if stripCount > 0 and edge == 'bottom' then
+			strip:ClearAllPoints()
+			strip:SetPoint('BOTTOM', console, 'BOTTOM', 0, PAD + Deck.BottomHeight())
+		end
+		-- Put the menu and bag keys into it (or back on their own devices).
+		if Deck.LayoutMenu then Deck.LayoutMenu() end
 	end
 	-- Pet and stance modules sit on the console's top edge, tucked under it.
 	if stanceModule then
@@ -1825,6 +1869,10 @@ local function BuildConsole()
 	console.castSlots = {Slot(console, ''), Slot(console, '')}
 	for _, slot in ipairs(console.castSlots) do slot:Hide() end
 	xp = BuildXP(console)
+	-- Where the menu and bag keys go when they are set into the console.
+	console.menuStrip = CreateFrame('Frame', nil, console)
+	console.menuStrip:SetFrameLevel(console:GetFrameLevel() + 4)
+	console.menuStrip:Hide()
 	Deck.BuildBottom(console)
 	Deck.BuildFn(console)
 	Deck.BuildPanels(console)
@@ -2287,31 +2335,79 @@ local function HookHover(button, device)
 	button:HookScript('OnLeave', function() Hover(device, false) end)
 end
 
--- Lay one device's keys out in a grid: `columns` across (0: all in one line),
--- or down for a vertical device.
-local function Lay(device, group, extra)
-	local size = Kit:Clamp(floor(tonumber(Opt(group, 'KeySize')) or 22), 16, 40)
-	local vertical = Opt(group, 'Orient') == 'vertical'
-	local columns = floor(tonumber(Opt(group, 'Columns')) or 0)
-	local shown = {}
-	local names = GROUPS[group]
-	local list = {}
-	for _, name in ipairs(names) do list[#list + 1] = name end
+-- A group's buttons, in order: the known names, then any other micro button
+-- this client adds to its micro menu, then `extra` (the key ring).
+local function Names(group, extra)
+	local list, seen = {}, {}
+	for _, name in ipairs(GROUPS[group]) do list[#list + 1] = name; seen[name] = true end
+	local micro = _G.MicroMenu
+	if group == 'menu' and type(micro) == 'table' and micro.GetChildren and not Forbidden(micro) then
+		for _, child in ipairs({micro:GetChildren()}) do
+			local name = child.GetName and child:GetName()
+			if name and not seen[name] and name:find('MicroButton$') and child.IsObjectType and child:IsObjectType('Button') then
+				list[#list + 1] = name
+				seen[name] = true
+			end
+		end
+	end
 	if extra then list[#list + 1] = extra end
-	for _, name in ipairs(list) do
+	return list
+end
+
+-- The layout a group uses: 'line', 'column', 'grid', 'balanced' or 'console'
+-- (inside the console; only while there is one).
+local function LayoutOf(group)
+	local layout = Opt(group, 'Layout') or 'line'
+	if layout == 'console' and not console then layout = 'line' end
+	return layout
+end
+Deck.MenuLayoutOf = LayoutOf
+
+-- Across and down for `count` keys. Balanced picks the most square grid whose
+-- lines are all full (wider than tall); with none (a prime count), the most
+-- square grid, its last line centred.
+local function Shape(group, count)
+	local layout = LayoutOf(group)
+	if count <= 0 then return 1, 1 end
+	if layout == 'column' then return 1, count end
+	if layout == 'grid' then
+		local columns = floor(tonumber(Opt(group, 'Columns')) or 0)
+		local across = columns > 0 and min(columns, count) or count
+		return across, math.ceil(count / across)
+	end
+	if layout == 'balanced' then
+		local best
+		for across = 2, count - 1 do
+			local lines = count / across
+			if lines == floor(lines) and across >= lines and across / lines <= 4 then
+				if not best or math.abs(across - lines) < math.abs(best - count / best) then best = across end
+			end
+		end
+		if not best then best = math.ceil(math.sqrt(count * 2)) end
+		best = min(best, count)
+		return best, math.ceil(count / best)
+	end
+	return count, 1
+end
+
+-- Bring a group's buttons onto `parent` at `size`; returns the ones to show.
+local function Collect(group, extra, parent, size, device)
+	local shown = {}
+	for _, name in ipairs(Names(group, extra)) do
 		local button = _G[name]
 		if button and not Forbidden(button) then
 			Guard(button)
-			if button:GetParent() ~= device then button:SetParent(device) end
+			if button:GetParent() ~= parent then button:SetParent(parent) end
 			button:SetSize(size, size)
 			DressMenuButton(button)
-			HookHover(button, device)
+			if device then HookHover(button, device) end
 			if group == 'bags' and name ~= 'KeyRingButton' then button:Show() end
 			if LeftOut(group, name) then
+				-- Left out: faded, no mouse, and no gap where it was.
 				button:SetAlpha(0)
 				button:EnableMouse(false)
 				button:ClearAllPoints()
-				button:SetPoint('CENTER', device, 'CENTER')
+				button:SetPoint('CENTER', parent, 'CENTER')
 			else
 				button:SetAlpha(1)
 				button:EnableMouse(true)
@@ -2319,23 +2415,56 @@ local function Lay(device, group, extra)
 			end
 		end
 	end
+	return shown
+end
+
+-- Keys in a grid from (x, y), `across` to a line; a short last line is centred.
+local function Place(shown, parent, x, y, size, gap, across, vertical)
 	local count = #shown
-	local line = (columns > 0) and min(columns, max(count, 1)) or max(count, 1)
-	local lines = math.ceil(count / line)
+	local lines = math.ceil(count / max(across, 1))
 	for index, button in ipairs(shown) do
-		local along, across = (index - 1) % line, floor((index - 1) / line)
-		local x, y
-		if vertical then x, y = across, along else x, y = along, across end
+		local line, place = floor((index - 1) / across), (index - 1) % across
+		local inLine = (line == lines - 1) and (count - line * across) or across
+		local shift = (across - inLine) * (size + gap) / 2
+		local px, py
+		if vertical then px, py = line * (size + gap), place * (size + gap) + shift
+		else px, py = place * (size + gap) + shift, line * (size + gap) end
 		button:ClearAllPoints()
-		button:SetPoint('TOPLEFT', device, 'TOPLEFT', MENU_PAD + x * (size + MENU_GAP), -MENU_PAD - y * (size + MENU_GAP))
+		button:SetPoint('TOPLEFT', parent, 'TOPLEFT', x + px, -(y + py))
 	end
-	local wide, tall = line, lines
-	if vertical then wide, tall = lines, line end
-	device:SetSize(MENU_PAD * 2 + max(wide, 1) * size + max(wide - 1, 0) * MENU_GAP,
-		MENU_PAD * 2 + max(tall, 1) * size + max(tall - 1, 0) * MENU_GAP)
+end
+
+local function GroupSpacing(group) return Kit:Clamp(floor(tonumber(Opt(group, 'Spacing')) or MENU_GAP), 0, 12) end
+
+-- Lay one group on its own device.
+local function Lay(device, group, extra)
+	local integrated = LayoutOf(group) == 'console'
+	local enabled = Opt(group, 'Enable') ~= false
+	if integrated then
+		device:Hide()
+		return
+	end
+	local size = Kit:Clamp(floor(tonumber(Opt(group, 'KeySize')) or 22), 16, 40)
+	local gap = GroupSpacing(group)
+	local shown = Collect(group, extra, device, size, device)
+	local layout = LayoutOf(group)
+	local across, lines = Shape(group, #shown)
+	local vertical = layout == 'column'
+	if vertical then across, lines = 1, max(#shown, 1) end
+	if vertical then
+		-- One column: the keys run down it.
+		for index, button in ipairs(shown) do
+			button:ClearAllPoints()
+			button:SetPoint('TOPLEFT', device, 'TOPLEFT', MENU_PAD, -MENU_PAD - (index - 1) * (size + gap))
+		end
+	else
+		Place(shown, device, MENU_PAD, MENU_PAD, size, gap, across, false)
+	end
+	device:SetSize(MENU_PAD * 2 + max(across, 1) * size + max(across - 1, 0) * gap,
+		MENU_PAD * 2 + max(lines, 1) * size + max(lines - 1, 0) * gap)
 	local housing = Opt(group, 'Housing') ~= false and DB().housing ~= false
 	if device.shell then device.shell:SetShown(housing) end
-	device:SetShown(Opt(group, 'Enable') ~= false)
+	device:SetShown(enabled)
 	-- Only a new scale re-places the device (its mover keeps the spot).
 	local scale = Kit:Clamp(tonumber(Opt(group, 'Scale')) or 1, 0.5, 1.5)
 	if device.baseScale ~= scale then
@@ -2345,18 +2474,85 @@ local function Lay(device, group, extra)
 	FadeDevice(device)
 end
 
+-- The console strip: the groups set to 'console', in one line, menu then bags.
+local STRIP_GROUP_GAP = 10
+local function Integrated()
+	local groups = {}
+	for _, group in ipairs({'menu', 'bags'}) do
+		if Opt(group, 'Enable') ~= false and LayoutOf(group) == 'console' then groups[#groups + 1] = group end
+	end
+	return groups
+end
+
+-- How many keys the strip will hold (for the console's layout, before placing).
+local function StripCount(group, extra)
+	local count = 0
+	for _, name in ipairs(Names(group, extra)) do
+		local button = _G[name]
+		if button and not Forbidden(button) and not LeftOut(group, name)
+			and ((group == 'bags' and name ~= 'KeyRingButton') or button:IsShown()) then count = count + 1 end
+	end
+	return count
+end
+
+-- The strip's width and height at `size` keys (0, 0 without one).
+function Deck.MenuStrip(size)
+	local width, total = 0, 0
+	for index, group in ipairs(Integrated()) do
+		local count = StripCount(group, group == 'bags' and 'KeyRingButton' or nil)
+		if count > 0 then
+			if total > 0 then width = width + STRIP_GROUP_GAP end
+			width = width + count * size + (count - 1) * GroupSpacing(group)
+			total = total + count
+		end
+	end
+	if total == 0 then return 0, 0, 0 end
+	return width, size, total
+end
+
+-- Edge of the console the strip runs along: 'header' or 'bottom'.
+function Deck.MenuEdge() return DB().menuEdge == 'header' and 'header' or 'bottom' end
+
+local function LayStrip()
+	local strip = console and console.menuStrip
+	if not strip then return 0 end
+	local size = console.menuStripKey or 18
+	local x, total = 0, 0
+	for _, group in ipairs(Integrated()) do
+		local shown = Collect(group, group == 'bags' and 'KeyRingButton' or nil, strip, size)
+		if #shown > 0 then
+			if total > 0 then x = x + STRIP_GROUP_GAP end
+			local gap = GroupSpacing(group)
+			for index, button in ipairs(shown) do
+				button:ClearAllPoints()
+				button:SetPoint('LEFT', strip, 'LEFT', x + (index - 1) * (size + gap), 0)
+			end
+			x = x + #shown * size + (#shown - 1) * gap
+			total = total + #shown
+		end
+	end
+	return total
+end
+
 function LayoutMenu()
 	if not menu or laying then return end
 	laying = true
+	local total
 	local ok, problem = pcall(function()
 		Lay(menu, 'menu')
 		if bagsDevice then Lay(bagsDevice, 'bags', 'KeyRingButton') end
+		total = LayStrip()
 	end)
 	laying = nil
 	if not ok then error(problem, 0) end
+	-- The strip holds more or fewer keys than the console made room for: lay it out again.
+	if console and console.menuStrip and not console.laying and total ~= (console.menuStripCount or 0) then
+		UI:Safe(LayoutConsole)
+	end
 	-- The game re-sets its micro button art as it updates them; fade it again.
 	RepaintMenu()
 end
+Deck.LayoutMenu = function() if menu then UI:Safe(LayoutMenu) end end
 
 local function QueueMenu() C_Timer.After(0, function() UI:Safe(LayoutMenu) end) end
 
@@ -3759,6 +3955,11 @@ function module:Enable()
 		db.statsStyle, db.barStyle = 'text', 'slim'
 		db.panelZone, db.panelGold, db.panelDurability, db.panelLatency = false, false, false, false
 	end
+	-- Once: the menu and bags move from the old grid to one line.
+	if not db.menuLine then
+		db.menuLine = true
+		db.menuLayout, db.bagsLayout = 'line', 'line'
+	end
 	if Docking() then BuildConsole() else BuildFree() end
 	if db.side then BuildSide() end
 	if db.stance then BuildStance() end
@@ -3845,9 +4046,15 @@ local function MenuRows(group, extra)
 			or 'The bag slots on a small device of their own.', since = '0.5.1'},
 		{'slider', 'Key size', path..'KeySize', 16, 40, 1, since = '0.5.1'},
 		{'slider', 'Scale', path..'Scale', 0.5, 1.5, 0.05, format = Percent, since = '0.5.1'},
-		{'segmented', 'Orientation', path..'Orient', items = {{'horizontal', 'Across'}, {'vertical', 'Down'}}, since = '0.5.1'},
-		{'slider', 'Keys per line', path..'Columns', 0, 12, 1, 'Before a new line starts. Auto keeps them in one line.',
-			format = function(v) return v == 0 and 'Auto' or tostring(v) end, since = '0.5.1'},
+		{'dropdown', 'Layout', path..'Layout', items = {{'line', 'One line'}, {'column', 'One column'}, {'grid', 'Grid'},
+			{'balanced', 'Balanced grid'}, {'console', 'In the console'}}, since = '0.5.1',
+			note = 'Grid: a set number across, a short last line centred. Balanced: the most even grid for the keys shown. In the console: a slim strip inside CX-1.'},
+		{'slider', 'Keys per line', path..'Columns', 1, 12, 1, 'Grid only: keys across before a new line starts.',
+			hidden = function() return DB()[group..'Layout'] ~= 'grid' end, since = '0.5.1'},
+		{'segmented', 'Console edge', 'actionbars.menuEdge', items = {{'bottom', 'Bottom'}, {'header', 'Header'}}, since = '0.5.1',
+			note = 'Where the strip runs in the console. The header is used while it fits beside the console\'s name and readouts.',
+			hidden = function() return DB()[group..'Layout'] ~= 'console' end},
+		{'slider', 'Spacing', path..'Spacing', 0, 12, 1, 'Space between keys.', since = '0.5.1'},
 		{'slider', 'Glyph size', path..'Glyph', 0.4, 0.9, 0.02, format = Percent, since = '0.5.1'},
 		{'switch', 'Housing', path..'Housing', 'The device housing round the keys.', since = '0.5.1'},
 		{'switch', 'Show on mouseover', path..'Fade', 'Faint until the mouse is over it.', since = '0.5.1'},
