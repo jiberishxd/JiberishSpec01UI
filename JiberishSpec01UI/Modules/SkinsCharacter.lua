@@ -8,7 +8,7 @@
 --                   Forever's three-weapon row), in LCD ink: quality is the edge
 --                   and the lamp, never the digits.
 --   rails           each slot column, the weapon row and the ammo slot sit on a
---                   machined plate with screws; plates and screen are laid out from
+--                   machined plate; plates and screen are laid out from
 --                   the slots' real positions so every gutter is the same
 --   model           a recessed display in a glass bezel, with a faint grid, a
 --                   vignette and corner marks; its camera keys are charcoal caps
@@ -411,7 +411,7 @@ do
 		return true
 	end
 
-	-- A machined plate: a raised dark panel with a screw in each corner.
+	-- A machined plate: a raised dark panel.
 	local rails = {}
 	local function Rail(column, host, level)
 		local rail = rails[column]
@@ -419,30 +419,10 @@ do
 			rail = Own(CreateFrame('Frame', nil, host))
 			rail:EnableMouse(false)
 			rail.shell = Own(Kit:Shell(rail, {surface = 'dark', radius = 8, shadow = false}))
-			rail.screws = {}
-			for index, point in ipairs({'TOPLEFT', 'TOPRIGHT', 'BOTTOMLEFT', 'BOTTOMRIGHT'}) do
-				local screw = Own(rail:CreateTexture(nil, 'ARTWORK'))
-				screw:SetTexture(Kit.media..'circle.tga')
-				Kit:Tint(screw, 'black', 0.55)
-				if screw.SetSnapToPixelGrid then
-					screw:SetSnapToPixelGrid(true)
-					screw:SetTexelSnappingBias(0)
-				end
-				screw.point = point
-				rail.screws[index] = screw
-			end
 			rails[column] = rail
 		end
 		rail:SetFrameLevel(max(level, 1))
 		Kit:Relevel(rail)
-		local size, inset = Px(rail, 3), Px(rail, 4)
-		for _, screw in ipairs(rail.screws) do
-			local sx = screw.point:find('LEFT') and 1 or -1
-			local sy = screw.point:find('TOP') and -1 or 1
-			screw:SetSize(size, size)
-			screw:ClearAllPoints()
-			screw:SetPoint(screw.point, rail, screw.point, sx * inset, sy * inset)
-		end
 		return rail
 	end
 

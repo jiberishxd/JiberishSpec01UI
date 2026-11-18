@@ -98,7 +98,7 @@ UI:RegisterDefaults('actionbars', {
 	-- The menu and bag keys: SPEC-01 glyphs or the game's art; bag slots show
 	-- the bag's own icon (a glyph only when empty) or always the glyph.
 	menuIcons = 'glyphs', bagIcons = 'glyphs',
-	-- The console's look: SPEC-01 hardware (keys in slots, printed banks, screws,
+	-- The console's look: SPEC-01 hardware (keys in slots, printed banks,
 	-- page LCD) or the earlier classic look.
 	look = 'hardware',
 	-- The console's size, apart from its keys: 0 is Auto (sized to its keys and
@@ -184,7 +184,7 @@ end
 --   * the lamp reads the key's state: lit while active, green when equipped,
 --     red out of range, blue short of power, dark when unusable;
 --   * banks of keys carry a printed legend with a hairline rule after it;
---   * modules have a screw in each corner and a model plate in the header;
+--   * modules have a model plate in the header;
 --   * the console carries a page LCD (with unlit ghost digits) and page lamps,
 --     and the meter along its base has a printed legend and an LCD percent.
 -- 'Classic' keeps the earlier look. Everything here is in one table, so the
@@ -350,34 +350,13 @@ function HW.MiniLegend(device, text)
 	Place()
 end
 
--- A screw in each corner of a module, as hardware.css draws them, and a
--- larger model plate in the header.
+-- A larger model plate in the header. (Modules carry no corner screws: the
+-- user asked for none anywhere.)
 function HW.Decorate(device, radius)
 	if not HW.On() then return end
-	local dark = Surface() == 'dark'
 	local inset = max(6, floor((radius or 12) * 0.5 + 0.5))
-	device.screws = device.screws or {}
-	for index, point in ipairs({'TOPLEFT', 'TOPRIGHT', 'BOTTOMLEFT', 'BOTTOMRIGHT'}) do
-		local screw = device.screws[index]
-		if not screw then
-			screw = Kit:Texture(device, 'circle', 'BORDER', 1)
-			screw.slot = device:CreateTexture(nil, 'BORDER', nil, 2)
-			screw.slot:SetColorTexture(0, 0, 0, 1)
-			screw.slot:SetPoint('CENTER', screw, 'CENTER')
-			screw.slot:SetRotation(math.rad(index % 2 == 0 and 45 or -45))
-			device.screws[index] = screw
-		end
-		screw:SetSize(5, 5)
-		screw:ClearAllPoints()
-		local sx = point:find('LEFT') and inset or -inset
-		local sy = point:find('TOP') and -inset or inset
-		screw:SetPoint('CENTER', device, point, sx, sy)
-		if dark then screw:SetVertexColor(0.24, 0.24, 0.23, 1) else screw:SetVertexColor(0.725, 0.725, 0.70, 1) end
-		screw.slot:SetSize(4, 1)
-		screw.slot:SetAlpha(dark and 0.6 or 0.28)
-	end
 	HW.ShowDecor(device, DB().housing ~= false)
-	-- The plate: the lamp moves clear of the corner screw and the model prints larger.
+	-- The plate: the lamp sits in from the corner and the model prints larger.
 	if device.lamp and device.model then
 		device.lamp:ClearAllPoints()
 		device.lamp:SetPoint('TOPLEFT', inset + 9, -9)
@@ -385,10 +364,11 @@ function HW.Decorate(device, radius)
 	end
 end
 
-function HW.ShowDecor(device, shown)
+function HW.ShowDecor(device, shown) -- luacheck: ignore shown
+	-- Screws from earlier builds stay hidden.
 	for _, screw in ipairs(device and device.screws or {}) do
-		screw:SetShown(shown)
-		screw.slot:SetShown(shown)
+		screw:Hide()
+		if screw.slot then screw.slot:Hide() end
 	end
 end
 
@@ -4338,7 +4318,7 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 		{'segmented', 'Keys', 'style.actionbars', items = {{'keys', 'Keys'}, {'caps', 'Caps'}, {'blizzard', 'Blizzard'}}, reload = true,
 			note = 'Keys: the reference\'s light keys. Caps: its charcoal keycaps. Blizzard: the game\'s own bars.'},
 		{'segmented', 'Console look', 'actionbars.look', items = {{'hardware', 'Hardware'}, {'classic', 'Classic'}}, reload = true,
-			since = '0.5.1', note = 'Hardware: keys set in slots in the housing, legends printed on the caps, printed banks, corner screws, a page LCD and a meter with its own LCD, as on SPEC-01\'s devices. Classic: the earlier look.'},
+			since = '0.5.1', note = 'Hardware: keys set in slots in the housing, legends printed on the caps, printed banks, a page LCD and a meter with its own LCD, as on SPEC-01\'s devices. Classic: the earlier look.'},
 		{'segmented', 'Layout', 'actionbars.layout', items = {{'console', 'Console'}, {'free', 'Free'}}, reload = true,
 			note = 'Console: one device with the player and target docked beside the keys. Free: every bar on its own.'},
 		{'switch', 'Dock unit frames', 'actionbars.dock', 'Player and target frames and cast bars inside the console.', reload = true},
