@@ -129,6 +129,7 @@ end
 
 -- 56 LCD --------------------------------------------------------------------------
 local LCD_SIZES = {sm = {14, 7, 7}, md = {24, 10, 8}, lg = {40, 14, 8}}
+local fitted = setmetatable({}, {__mode = 'k'}) -- fixed-width readouts, refit when the typeface changes
 -- opts: tag, text, ghost (unlit segments, e.g. '888.8'), size ('sm' | 'md' | 'lg'), width
 function Kit:LCD(parent, opts)
 	opts = opts or {}
@@ -145,17 +146,54 @@ function Kit:LCD(parent, opts)
 	lcd.ghost:SetPoint('TOPRIGHT', -size[2], -top)
 	lcd.digits = self:Text(lcd, '', size[1], 'lcdInk')
 	lcd.digits:SetPoint('TOPRIGHT', -size[2], -top)
+	-- A hidden copy at the full size measures what the readout needs.
+	lcd.measure = self:Text(lcd, '', size[1], 'lcdInk')
+	lcd.measure:Hide()
+	-- A fixed-width readout shrinks its digits (and ghost) to fit the glass, so
+	-- a wide typeface (Audiowide) never spills past the panel; kept centred in
+	-- the digit band. Measured from the full text, not a print-in frame.
+	function lcd:Fit()
+		local text = self.text or ''
+		if not opts.width or (issecretvalue and issecretvalue(text)) then return end
+		Kit:Font(self.measure, size[1])
+		self.measure:SetText(text)
+		local wide = self.measure:GetStringWidth() or 0
+		self.measure:SetText(opts.ghost or '')
+		wide = max(wide, self.measure:GetStringWidth() or 0)
+		local room = (self:GetWidth() or 0) - size[2] * 2
+		local fitted = size[1]
+		if room > 0 and wide > room then fitted = max(6, floor(size[1] * room / wide)) end
+		if fitted ~= self.fitted then
+			self.fitted = fitted
+			Kit:Font(self.digits, fitted)
+			Kit:Font(self.ghost, fitted)
+			local drop = floor((size[1] - fitted) / 2 + 0.5)
+			self.ghost:SetPoint('TOPRIGHT', -size[2], -top - drop)
+			self.digits:SetPoint('TOPRIGHT', -size[2], -top - drop)
+		end
+	end
 	function lcd:SetText(text)
+		self.text = text or ''
 		-- LCD print-in (an extra) prints a changed readout in; otherwise just sets it.
 		if Kit.PrintText then Kit:PrintText(self.digits, text or '') else self.digits:SetText(text or '') end
 		if not opts.width then
 			self:SetWidth(max(self.digits:GetStringWidth(), self.ghost:GetStringWidth(), self.tag and self.tag:GetStringWidth() or 0) + size[2] * 2)
+		else
+			self:Fit()
 		end
 	end
 	lcd:SetSize(opts.width or 80, top + size[1] + size[2] - 2)
 	lcd:SetText(opts.text)
+	if opts.width then
+		fitted[lcd] = true
+		lcd:HookScript('OnSizeChanged', function(self) self.fitted = nil; self:Fit() end)
+	end
 	return lcd
 end
+-- A typeface change measures every fixed-width readout again.
+Kit:OnRefresh(function()
+	for lcd in pairs(fitted) do lcd.fitted = nil; lcd:Fit() end
+end)
 
 -- 34 Badge ---------------------------------------------------------------------------
 function Kit:Badge(parent, opts)
