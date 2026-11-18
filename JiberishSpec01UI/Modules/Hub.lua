@@ -116,6 +116,19 @@ local NOTE_INDEX = {switch = 4, slider = 7, button = 5, color = 4, input = 4}
 local CARD_ROWS = 6 -- settings shown per card before "More options" (Advanced shows all)
 
 local function HubDB() return UI.db.hub end
+
+-- A lamp at a whole number of physical pixels, snapped to the pixel grid, so it
+-- reads as a full round LED at any scale.
+local function Lamp(parent, px, on)
+	local led = Kit:Led(parent, UI.Pixel.Px(parent, px), on)
+	for _, texture in ipairs({led, led.glow}) do
+		if texture and texture.SetSnapToPixelGrid then
+			texture:SetSnapToPixelGrid(true)
+			texture:SetTexelSnappingBias(0)
+		end
+	end
+	return led
+end
 local function Advanced() return HubDB().advanced and true or false end
 
 local function NoteOf(row)
@@ -285,10 +298,10 @@ local function DrawerRow(parent)
 	item.highlight:SetColorTexture(1, 1, 1, 1)
 	Kit:Tint(item.highlight, 'lamp', 0.18)
 	item.highlight:Hide()
-	item.lamp = Kit:Led(item, 5, false)
-	item.lamp:SetPoint('LEFT', 8, 0)
 	item.label = Kit:Label(item, '', 'ink', 9)
 	item.label:SetPoint('LEFT', 20, 0)
+	item.lamp = Lamp(item, 6, false)
+	item.lamp:SetPoint('CENTER', item.label, 'LEFT', -9, 0)
 	item.label:SetPoint('RIGHT', -8, 0)
 	item.label:SetJustifyH('LEFT')
 	item.label:SetWordWrap(false)
@@ -483,14 +496,13 @@ local function BuildRow(card, row, y, width, page)
 	local labelWidth = stacked and width or (width - controlWidth - 14)
 	local noteText = NoteOf(row)
 	-- The label column: a NEW lamp, the label (one line), the info mark.
-	local left = 0
-	if ShowsNew(page, row) then
-		local lamp = Kit:Led(card.body, 4, true)
-		lamp:SetPoint('TOPLEFT', 0, -y - 4)
-		left = 9
-	end
+	local left = ShowsNew(page, row) and 10 or 0
 	local label = Kit:Label(card.body, row[2] or '', 'ink', 9)
 	label:SetPoint('TOPLEFT', left, -y)
+	if left > 0 then
+		local lamp = Lamp(card.body, 5, true)
+		lamp:SetPoint('CENTER', label, 'LEFT', -6, 0)
+	end
 	label:SetJustifyH('LEFT')
 	label:SetWordWrap(false)
 	local infoRoom = noteText and 14 or 0
@@ -783,21 +795,28 @@ local function BuildCards(content, page)
 	for index, spec in ipairs(page.cards) do
 		local card = Kit.CardShell(content, index, spec.title, width, 200)
 		card.span, card.controls, card.index = span, {}, index
-		-- Rows past the card's edge while it eases smaller are cut off, not drawn over.
-		card.body:SetClipsChildren(true)
+		-- Rows past the card's edge while it eases smaller are cut off, not drawn
+		-- over; the clip sits a little outside the body so lamps and glows near
+		-- its edges stay whole.
+		card.clip = CreateFrame('Frame', nil, card)
+		card.clip:SetPoint('TOPLEFT', card, 'TOPLEFT', 2, -24)
+		card.clip:SetPoint('BOTTOMRIGHT', card, 'BOTTOMRIGHT', -2, 2)
+		card.clip:SetClipsChildren(true)
+		card.body:SetParent(card.clip)
 		-- Printed model code (UF-01), and a lamp lit while the page's module runs.
 		card.number:SetText(format('%s-%02d', PageCode(page), index))
-		card.lamp = Kit:Led(card, 5, PageRunning(page))
-		card.lamp:SetPoint('TOPRIGHT', -28, -12)
 		-- Preview cards keep their notes whole: they reserve room for a live sample.
 		card.preview = type(spec.title) == 'string' and strupper(spec.title) == 'PREVIEW'
 		-- The header folds the card; a chevron shows which way.
 		local fold = CreateFrame('Button', nil, card)
 		fold:SetPoint('TOPLEFT', 4, -4)
 		fold:SetPoint('TOPRIGHT', -4, -4)
-		fold:SetHeight(20)
-		card.chevron = Kit:Icon(card, 'chevron-down', 9, 'dim')
-		card.chevron:SetPoint('TOPRIGHT', -12, -10)
+		-- As tall as twice the title's middle, so the chevron and lamp centre on it.
+		fold:SetHeight(23)
+		card.chevron = Kit:Icon(fold, 'chevron-down', 9, 'dim')
+		card.chevron:SetPoint('RIGHT', fold, 'RIGHT', -8, 0)
+		card.lamp = Lamp(fold, 6, PageRunning(page))
+		card.lamp:SetPoint('RIGHT', card.chevron, 'LEFT', -9, 0)
 		card.rule:SetWidth(max(width - 50 - card.number:GetStringWidth() - card.title:GetStringWidth() - 34, 1))
 		fold:SetScript('OnClick', function()
 			local collapsed = CardState(page, index)
@@ -837,7 +856,7 @@ local function BuildCards(content, page)
 end
 
 -- Window ------------------------------------------------------------------------
-local Search, ClearSearch, GroupOf, BuildNav, LayoutNav, CascadeCards, MarkNav, LayoutHeader
+local Search, ClearSearch, GroupOf, BuildNav, LayoutNav, CascadeCards, MarkNav, LayoutHeader, SearchField
 
 -- Cards deal in one after another on the detent curve: each rises 8 px and fades in.
 function CascadeCards(cards)
@@ -996,7 +1015,7 @@ local function ResultRow(parent)
 	row.back:SetAllPoints()
 	Kit:Tint(row.back, 'track')
 	row.back:SetAlpha(0)
-	row.led = Kit:Led(row, 5, false)
+	row.led = Lamp(row, 6, false)
 	row.led:SetPoint('TOPLEFT', 10, -10)
 	row.where = Kit:Label(row, '', 'dim', 8)
 	row.where:SetPoint('TOPLEFT', 22, -8)
@@ -1127,19 +1146,21 @@ local NAV_TOP, NAV_ROW, NAV_HEAD = 128, 20, 22
 local function NavEntry(key, page)
 	local entry = CreateFrame('Button', nil, hub)
 	entry:SetSize(SIDEBAR - 20, NAV_ROW - 2)
-	entry.led = Kit:Led(entry, 5, false)
-	entry.led:SetPoint('LEFT', 8, 0)
+	-- Above the sidebar's lit plate.
+	entry:SetFrameLevel(hub:GetFrameLevel() + 4)
 	entry.label = Kit:Label(entry, page.title, 'dim', 9)
-	entry.label:SetPoint('LEFT', 20, 0)
-	entry.label:SetPoint('RIGHT', -14, 0)
+	entry.label:SetPoint('LEFT', 22, 0)
+	entry.label:SetPoint('RIGHT', -16, 0)
 	entry.label:SetJustifyH('LEFT')
 	entry.label:SetWordWrap(false)
-	entry.status = Kit:Led(entry, 4, false)
-	entry.status:SetPoint('RIGHT', -2, 0)
+	entry.led = Lamp(entry, 6, false)
+	entry.led:SetPoint('CENTER', entry.label, 'LEFT', -10, 0)
+	entry.status = Lamp(entry, 5, false)
+	entry.status:SetPoint('RIGHT', -4, 0)
 	entry.status:Hide()
 	if PageIsNew(page) and not UI.db.hub.seen[key] then
-		entry.new = Kit:Led(entry, 3, true)
-		entry.new:SetPoint('RIGHT', -8, 0)
+		entry.new = Lamp(entry, 4, true)
+		entry.new:SetPoint('RIGHT', -10, 0)
 	end
 	entry:SetScript('OnEnter', function(self) Kit:Tint(self.label, 'ink') end)
 	entry:SetScript('OnLeave', function(self)
@@ -1158,10 +1179,11 @@ local function NavHeader(group)
 	local head = CreateFrame('Button', nil, hub)
 	head:SetSize(SIDEBAR - 20, NAV_HEAD)
 	head.group = group
-	head.lamp = Kit:Led(head, 4, true)
-	head.lamp:SetPoint('LEFT', 2, 0)
+	head:SetFrameLevel(hub:GetFrameLevel() + 4)
 	head.label = Kit:Label(head, group[2], 'dim', 8, true)
-	head.label:SetPoint('LEFT', 10, 0)
+	head.label:SetPoint('LEFT', 12, 0)
+	head.lamp = Lamp(head, 5, true)
+	head.lamp:SetPoint('CENTER', head.label, 'LEFT', -7, 0)
 	head.chevron = Kit:Icon(head, 'chevron-right', 8, 'dim')
 	head.chevron:SetPoint('RIGHT', -2, 0)
 	head:SetScript('OnEnter', function(self) Kit:Tint(self.label, 'ink') end)
@@ -1317,11 +1339,51 @@ function LayoutHeader()
 	if hub.reload:IsShown() and not reloadOnTop then Put(hub.reload, ROW2_Y + 1, GAP_OUT) end
 end
 
+-- The sidebar's search: a black screen field drawn from code (a crisp 1 px
+-- edge, no offset shadow), as tall as a sidebar row and a half, with the
+-- reference's block caret. Keeps TextField's GetValue / SetValue / .edit.
+function SearchField(parent, width, onChange)
+	local field = CreateFrame('Frame', nil, parent)
+	field:SetSize(width, 26)
+	field.shell = Kit:Shell(field, {surface = 'screen', radius = 4, shadow = false})
+	field.glass = field
+	local edit = CreateFrame('EditBox', nil, field)
+	edit:SetPoint('TOPLEFT', 9, 0)
+	edit:SetPoint('BOTTOMRIGHT', -24, 0)
+	edit:SetAutoFocus(false)
+	edit:SetFont(Kit:FontPath(false), 10, '')
+	edit:SetTextColor(Kit:RGB('darkInk'))
+	edit:SetJustifyV('MIDDLE')
+	field.edit = edit
+	field.placeholder = Kit:Label(field, 'Search', 'darkDim', 9)
+	field.placeholder:SetPoint('LEFT', 10, 0)
+	field.icon = Kit:Icon(field, 'search', 10, 'darkDim')
+	field.icon:SetPoint('RIGHT', -9, 0)
+	edit:SetScript('OnTextChanged', function(self, user)
+		field.placeholder:SetShown(self:GetText() == '')
+		if user and onChange then onChange(self:GetText()) end
+	end)
+	edit:SetScript('OnEditFocusGained', function() Kit:Tint(field.icon, 'lamp') end)
+	edit:SetScript('OnEditFocusLost', function() Kit:Tint(field.icon, 'darkDim') end)
+	edit:SetScript('OnEnterPressed', function(self) self:ClearFocus() end)
+	field:EnableMouse(true)
+	field:SetScript('OnMouseDown', function() edit:SetFocus() end)
+	function field:GetValue() return edit:GetText() end
+	function field:SetValue(text)
+		edit:SetText(text or '')
+		field.placeholder:SetShown((text or '') == '')
+	end
+	if Kit.Caret then Kit:Caret(edit) end
+	return field
+end
+
 local function Build()
 	local width = Kit.PAD * 2 + SIDEBAR + CONTENT_COLUMNS * Kit.COLUMN + (CONTENT_COLUMNS - 1) * Kit.GAP + 14
 	hub = Kit:Panel(UIParent, {radius = 10, fill = 'page', border = 'hair', name = 'JiberishSpec01Hub'})
 	hub:SetSize(width, 712)
 	hub:SetPoint('CENTER')
+	-- The scale first: lamps and hairlines below are measured in physical pixels.
+	hub:SetScale(UI.db.scale or 1)
 	-- Menus, pop-ups and dialogs opened from here draw above it (same strata, higher levels).
 	hub:SetFrameStrata('FULLSCREEN_DIALOG')
 	hub:SetFrameLevel(10)
@@ -1347,10 +1409,18 @@ local function Build()
 		end
 	end
 	-- The sidebar's lit plate behind the current page's entry.
-	hub.navMarker = Kit:Texture(hub, 'round-3', 'BORDER')
+	-- A pressed key (the reference's baked key-down, readable on Paper and
+	-- Graphite) with a lit bar along its left edge, on a frame above the
+	-- housing and below the entries.
+	hub.navMarker = CreateFrame('Frame', nil, hub)
 	hub.navMarker:SetSize(SIDEBAR - 16, NAV_ROW)
-	if hub.navMarker.kitScale then hub.navMarker:SetSize((SIDEBAR - 16) / hub.navMarker.kitScale, NAV_ROW / hub.navMarker.kitScale) end
-	Kit:Tint(hub.navMarker, 'track')
+	hub.navMarker:SetFrameLevel(hub:GetFrameLevel() + 2)
+	hub.navMarker.skin = Kit:Skin(hub.navMarker, 'key-down', 'BACKGROUND', 0)
+	hub.navMarker.skin.kitMaxCorner = 6
+	Kit:FitSprite(hub.navMarker.skin, SIDEBAR - 16, NAV_ROW)
+	hub.navMarker.bar = Kit:Solid(hub.navMarker, 'lamp', 'OVERLAY')
+	hub.navMarker.bar:SetSize(UI.Pixel.Px(hub, 2), NAV_ROW - 8)
+	hub.navMarker.bar:SetPoint('LEFT', 3, 0)
 	hub.navMarker:Hide()
 	tinsert(UISpecialFrames, 'JiberishSpec01Hub')
 
@@ -1509,21 +1579,19 @@ local function Build()
 	divider:SetWidth(1)
 	divider:SetPoint('TOPLEFT', Kit.PAD + SIDEBAR - 8, -92)
 	divider:SetPoint('BOTTOMLEFT', Kit.PAD + SIDEBAR - 8, 18)
-	hub.search = Kit:TextField(hub, {width = SIDEBAR - 20, placeholder = 'Search', onChange = function(text)
+	hub.search = SearchField(hub, SIDEBAR - 20, function(text)
 		if hub.searchTimer then hub.searchTimer:Cancel() end
 		hub.searchTimer = C_Timer.NewTimer(0.12, function()
 			hub.searchTimer = nil
 			UI:Safe(Search, text)
 		end)
-	end})
-	hub.search:SetPoint('TOPLEFT', Kit.PAD + 2, -90)
+	end)
+	hub.search:SetPoint('TOPLEFT', Kit.PAD + 2, -92)
 	hub.search.edit:SetScript('OnEscapePressed', function(self)
 		self:ClearFocus()
 		ClearSearch()
 		SelectPage(UI.db.hub.page)
 	end)
-	hub.search.icon = Kit:Icon(hub.search.glass, 'search', 10, 'darkDim')
-	hub.search.icon:SetPoint('RIGHT', -9, 0)
 	BuildNav()
 
 	hub:SetScale(UI.db.scale or 1)

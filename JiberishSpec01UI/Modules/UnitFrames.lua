@@ -3014,8 +3014,27 @@ local function ApplyColors(frame)
 	end
 end
 
+-- The header lamp at a whole number of physical pixels, snapped to the pixel
+-- grid: at a fractional scale a 5-unit circle lands between pixels and draws
+-- as a crescent. Measured at layout time, when the frame's scale has settled.
+local function FitLamp(frame)
+	local lamp = frame.lamp
+	if not lamp then return end
+	local px = UI.Pixel.Px(frame.face, 1)
+	local size = max(3, floor((frame.lampUnits or 5) / px + 0.5)) * px
+	lamp:SetSize(size, size)
+	if lamp.glow then Kit:FitSprite(lamp.glow, size, size) end
+	for _, texture in ipairs({lamp, lamp.glow}) do
+		if texture.SetSnapToPixelGrid then
+			texture:SetSnapToPixelGrid(true)
+			texture:SetTexelSnappingBias(0)
+		end
+	end
+end
+
 local function Layout(frame)
 	local cfg = Cfg(frame)
+	FitLamp(frame)
 	Resize(frame, cfg)
 	local shape = ShapeOf(frame)
 	frame.shapeName = shape
@@ -3107,6 +3126,7 @@ local function Build(layout)
 	local large = size == 'large'
 	frame.headerRow = CreateFrame('Frame', nil, face)
 	frame.lamp = Kit:Led(face, large and 5 or 4, false)
+	frame.lampUnits = large and 5 or 4
 	frame.code = Kit:Label(face, layout.model, ink[1], 'tiny', true)
 	frame.nameText = Kit:Label(face, '', ink[1], large and 'small' or (size == 'small' and 'tiny' or 'label'), true)
 	frame.nameText:SetJustifyH('LEFT')
@@ -3684,6 +3704,7 @@ end
 UI.Pixel.OnChange(function()
 	for _, frame in pairs(frames) do
 		if frame.model and frame.portraitMode == 'model' then RefreshModel(frame) end
+		FitLamp(frame)
 	end
 end)
 
