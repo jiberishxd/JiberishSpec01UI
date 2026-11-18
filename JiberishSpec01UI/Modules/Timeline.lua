@@ -13,8 +13,12 @@
 -- length, a cooldown's active flag, whether a duration is zero) only reaches
 -- SetAlphaFromBoolean on nested frames; nothing is compared.
 --
--- Lanes: where times are plain, each key's spot is known, and keys take the
--- nearest free lane (re-checked four times a second, eased when they change).
+-- Crowding: where times are plain, each key's spot is known. By default keys
+-- that would overlap spread out along the line, in time order, each joined to
+-- its own point by an angled leader, so leaders never cross and nothing sits on
+-- top of anything; a second row (lane) is used only once a row is full. The
+-- older mode stacks them straight up in lanes instead. Re-checked four times a
+-- second, eased when they change.
 -- A time made secret by a fight keeps an estimate from its last plain reading
 -- (the clock runs the same either way); a key with no estimate at all takes
 -- lanes in turn.
@@ -68,6 +72,7 @@ UI:RegisterDefaults('timeline', {
 	iconSize = 24,
 	lanes = 3, -- how many keys may stack at one spot
 	stack = 'up', -- 'up' | 'down' | 'both'
+	crowd = 'spread', -- 'spread' (along the line, angled leaders) | 'lanes' (stacked straight up)
 	chip = 'lcd', -- 'lcd' | 'plain': the time under a key
 	stems = true, -- a hairline from each key to its point on the line
 	counts = true, -- stack counts on keys
@@ -101,6 +106,8 @@ local IMMEDIATE = INTERPOLATION and INTERPOLATION.Immediate
 local WHITE = [[Interface\Buttons\WHITE8X8]]
 local MARKS = {0, 5, 10, 30, 60, 120, 300, 600}
 local CHIP_H, GAP, STEM_BASE, LABEL_BAND = 10, 3, 6, 11
+-- Spread keys sit a little further out, so their leaders have room to angle.
+local LEAD_BASE = 12
 
 local holder, lane, clip, line, caps, ticks, minors
 local entries, active = {}, 0
@@ -170,8 +177,10 @@ local function Metrics()
 	m.downLanes = m.lanes - m.upLanes
 	-- Scale labels sit on the side the keys don't use ('both': below).
 	m.labelsUp = m.stack == 'down'
-	m.baseUp = STEM_BASE + ((db.labels and m.labelsUp) and LABEL_BAND or 0)
-	m.baseDown = STEM_BASE + ((db.labels and not m.labelsUp) and LABEL_BAND or 0)
+	m.spread = db.crowd ~= 'lanes'
+	local base = m.spread and LEAD_BASE or STEM_BASE
+	m.baseUp = base + ((db.labels and m.labelsUp) and LABEL_BAND or 0)
+	m.baseDown = base + ((db.labels and not m.labelsUp) and LABEL_BAND or 0)
 	return m
 end
 
@@ -187,8 +196,9 @@ end
 
 -- Place a cell: s is the signed distance of the cell's near edge from the line
 -- (positive above, or right when vertical), a its offset along the line away
--- from zero. The stem joins the line to the cell's near edge.
-local function PlaceCell(key, anchor, s, a, m, stem)
+-- from zero. A cell right over its point gets a straight stem; one spread
+-- aside gets an angled leader from its near edge to the point.
+local function PlaceCell(key, anchor, s, a, m, stem, leader)
 	local x, y
 	if m.vertical then
 		y = a * m.alongSign + m.chipH / 2
@@ -201,7 +211,20 @@ local function PlaceCell(key, anchor, s, a, m, stem)
 	key:SetPoint('CENTER', anchor, 'CENTER', x, y)
 	if not stem then return end
 	local length = abs(s)
-	local show = DB().stems and abs(a) < 0.5 and length > 1
+	local wanted = DB().stems and length > 1
+	local straight = abs(a) < 0.5 or not leader
+	if leader then
+		local angled = wanted and not straight
+		leader:SetShown(angled and true or false)
+		if angled then
+			local along = a * m.alongSign
+			leader:SetThickness(m.px * 1.2)
+			if m.vertical then leader:SetStartPoint('CENTER', anchor, s, along)
+			else leader:SetStartPoint('CENTER', anchor, along, s) end
+			leader:SetEndPoint('CENTER', anchor, 0, 0)
+		end
+	end
+	local show = wanted and straight
 	stem:SetShown(show and true or false)
 	if not show then return end
 	stem:ClearAllPoints()
@@ -319,6 +342,11 @@ local function NewEntry(index)
 	entry.key = MakeKey(entry.motion, level)
 	-- The stem and the lit tick where it meets the line hide with the key.
 	entry.stem = Kit:Solid(entry.key, 'white', 'BACKGROUND', -4, 0.55)
+	if entry.key.CreateLine then
+		entry.leader = entry.key:CreateLine(nil, 'BACKGROUND', nil, -4)
+		entry.leader:SetColorTexture(1, 1, 1, 0.55)
+		entry.leader:Hide()
+	end
 	entry.tick = Kit:Solid(entry.key, 'lamp', 'OVERLAY', 4)
 	entry.bar:Hide()
 	entries[index] = entry
@@ -343,12 +371,45 @@ local function LayoutEntry(entry)
 	entry.tick:ClearAllPoints()
 	entry.tick:SetSize(3 * m.px, 3 * m.px)
 	entry.tick:SetPoint('CENTER', entry.point, 'CENTER', 0, 0)
-	if entry.sNow then PlaceCell(entry.key, entry.point, entry.sNow, 0, m, entry.stem) end
+	if entry.sNow then PlaceCell(entry.key, entry.point, entry.sNow, entry.aNow or 0, m, entry.stem, entry.leader) end
 end
 
 -- Lanes -------------------------------------------------------------------------------
+local Spread
 local prevLane = {} -- identity -> the lane it had, so keys keep their lane when they can
 local laneNow = {} -- identity -> where its key is now, carried across rebuilds
+
+-- Spread one row of keys (sorted by their spot) so none overlap: each starts
+-- over its own spot; a key that would overlap the one before merges with it
+-- into a cluster laid side by side, centred on the cluster's spots and kept
+-- within [lo, hi]. Clusters keep merging until none overlap. Order is kept, so
+-- the leaders fan out without crossing. Sets each key's offset from its spot.
+local function Settle(cluster, step, lo, hi)
+	local span = (cluster.n - 1) * step
+	local first = cluster.sum / cluster.n - span / 2
+	if first + span > hi then first = hi - span end
+	if first < lo then first = lo end
+	cluster.first = first
+end
+
+function Spread(row, step, lo, hi)
+	local clusters = {}
+	for _, entry in ipairs(row) do
+		clusters[#clusters + 1] = {n = 1, sum = entry.pos, members = {entry}}
+		while true do
+			local count = #clusters
+			local current, previous = clusters[count], clusters[count - 1]
+			Settle(current, step, lo, hi)
+			if not previous or previous.first + previous.n * step <= current.first then break end
+			previous.n, previous.sum = previous.n + current.n, previous.sum + current.sum
+			for _, member in ipairs(current.members) do previous.members[#previous.members + 1] = member end
+			clusters[count] = nil
+		end
+	end
+	for _, cluster in ipairs(clusters) do
+		for j, entry in ipairs(cluster.members) do entry.aGoal = cluster.first + (j - 1) * step - entry.pos end
+	end
+end
 
 -- Work out every visible key's lane. Cheap: a dozen entries, a few lanes.
 -- Keys still beyond the line take no room; they keep the lane they had.
@@ -379,9 +440,23 @@ local function Arrange()
 			unknown[#unknown + 1] = entry
 		end
 	end
-	-- Keys on the line, nearest zero first: the lane they had if it is still
-	-- free, else the lowest free one, else the least crowded.
 	table.sort(known, function(a, b) return a.pos < b.pos end)
+	for index = 1, active do entries[index].aGoal = 0 end
+	if m.spread and #known > 0 then
+		-- Spread: as few rows as fit, each key in time order; every row-th key
+		-- goes to a row so each row stays sorted and its leaders can't cross.
+		local capacity = max(1, floor(length / m.step) + 1)
+		local rows = min(lanes, ceil(#known / capacity))
+		for r = 1, rows do
+			local row = {}
+			for i = r, #known, rows do row[#row + 1] = known[i] end
+			Spread(row, m.step, 0, length)
+			for _, entry in ipairs(row) do entry.lane = r end
+		end
+		known = {}
+	end
+	-- Lanes: keys on the line, nearest zero first: the lane they had if it is
+	-- still free, else the lowest free one, else the least crowded.
 	for _, entry in ipairs(known) do
 		local lo, hi = entry.pos - half, entry.pos + half
 		local choice
@@ -404,11 +479,13 @@ local function Arrange()
 		local entry = entries[index]
 		entry.sGoal = LaneStart(m, entry.lane or 1)
 		if entry.identity then prevLane[entry.identity] = entry.lane end
+		if entry.aNow == nil then entry.aNow = entry.aGoal or 0 end
 		if entry.sNow == nil then
 			-- New: slide in from a little further out.
 			local fresh = entry.fresh and not Reduced()
 			entry.sNow = entry.sGoal + (fresh and (entry.sGoal >= 0 and 8 or -8) or 0)
-			PlaceCell(entry.key, entry.point, entry.sNow, 0, m, entry.stem)
+			entry.aNow = entry.aGoal or 0
+			PlaceCell(entry.key, entry.point, entry.sNow, entry.aNow, m, entry.stem, entry.leader)
 		end
 	end
 end
@@ -417,16 +494,19 @@ end
 local function Ease(entry, elapsed)
 	if not (entry.sGoal and entry.sNow) then return end
 	local ds = entry.sGoal - entry.sNow
-	if abs(ds) < 0.05 then
-		if ds ~= 0 then
-			entry.sNow = entry.sGoal
-			PlaceCell(entry.key, entry.point, entry.sNow, 0, metrics, entry.stem)
+	local da = (entry.aGoal or 0) - (entry.aNow or 0)
+	if abs(ds) < 0.05 and abs(da) < 0.05 then
+		if ds ~= 0 or da ~= 0 then
+			entry.sNow, entry.aNow = entry.sGoal, entry.aGoal or 0
+			PlaceCell(entry.key, entry.point, entry.sNow, entry.aNow, metrics, entry.stem, entry.leader)
 			if entry.identity then laneNow[entry.identity] = entry.sNow end
 		end
 		return
 	end
-	entry.sNow = entry.sNow + ds * (Reduced() and 1 or min(1, elapsed * 12))
-	PlaceCell(entry.key, entry.point, entry.sNow, 0, metrics, entry.stem)
+	local rate = Reduced() and 1 or min(1, elapsed * 12)
+	entry.sNow = entry.sNow + ds * rate
+	entry.aNow = (entry.aNow or 0) + da * rate
+	PlaceCell(entry.key, entry.point, entry.sNow, entry.aNow, metrics, entry.stem, entry.leader)
 	if entry.identity then laneNow[entry.identity] = entry.sNow end
 end
 
@@ -608,6 +688,25 @@ local function KnownLasting(id, spellID)
 	return false
 end
 
+-- When each timed aura runs out, by aura and by spell, from its last plain
+-- reading. A fight can make an aura's times secret; where the client has no
+-- duration object to hand on instead, this keeps the key on the line (a seal
+-- stays put when you judge or use anything else) rather than dropping it.
+local auraEnds, auraEndsCount = {}, 0
+local function RememberEnd(id, spellID, expires, length)
+	if auraEndsCount > 400 then wipe(auraEnds); auraEndsCount = 0 end
+	auraEndsCount = auraEndsCount + 1
+	local record = {expires, length}
+	if not IsSecret(id) and id ~= nil then auraEnds[id] = record end
+	if not IsSecret(spellID) and spellID ~= nil then auraEnds['s'..spellID] = record end
+end
+local function KnownEnd(id, spellID)
+	local record = (not IsSecret(id) and id ~= nil and auraEnds[id])
+		or (not IsSecret(spellID) and spellID ~= nil and auraEnds['s'..spellID]) or nil
+	if record and record[1] > GetTime() then return record[1], record[2] end
+	return nil
+end
+
 -- One aura as an item, or nil. Only timed auras are kept: one that lasts until
 -- cancelled (a seal, an aura, a form), or that the game won't time, never
 -- shows. A timed one longer than the line is kept too, but rides beyond the
@@ -649,9 +748,18 @@ local function AuraItem(data, harmful)
 		end
 	end
 	local expires = data.expirationTime
+	local plainEnd = plainLength and not IsSecret(expires) and type(expires) == 'number' and expires > 0
+	if plainEnd then RememberEnd(id, spellID, expires, length) end
 	if not item.duration then
-		if IsSecret(expires) or not plainLength or not expires or expires <= 0 then return nil end
-		item.expires, item.length = expires, length
+		if plainEnd then
+			item.expires, item.length = expires, length
+		else
+			local knownEnd, knownLength = KnownEnd(id, spellID)
+			if not knownEnd then return nil end
+			item.expires, item.length = knownEnd, knownLength
+			item.later = (knownEnd - GetTime()) > max(DB().maxTime or 60, 1)
+			return item
+		end
 	end
 	-- Whether it is on the line now, where that can be read: soon, later or unknown.
 	if plainLength and not IsSecret(expires) and type(expires) == 'number' and expires > 0 then
@@ -786,6 +894,8 @@ local function Clear(entry)
 	entry.bar:Hide()
 	entry.duration, entry.expires, entry.identity, entry.last, entry.popped = nil, nil, nil, nil, nil
 	entry.estimate, entry.pulsing, entry.beyond, entry.lane, entry.sGoal, entry.sNow = nil, nil, nil, nil, nil, nil
+	entry.aGoal, entry.aNow = nil, nil
+	if entry.leader then entry.leader:Hide() end
 end
 
 -- Every field an entry had is reset here, so a reused entry carries nothing
@@ -793,7 +903,7 @@ end
 local function Assign(entry, item, seen)
 	entry.duration, entry.expires, entry.popped, entry.last = item.duration, item.expires, nil, nil
 	entry.identity, entry.estimate, entry.pulsing, entry.beyond = item.identity, nil, nil, nil
-	entry.lane, entry.sGoal = nil, nil
+	entry.lane, entry.sGoal, entry.aGoal, entry.aNow = nil, nil, nil, nil
 	-- Where its key is: carried over for an aura seen before, else it slides in.
 	local id = item.identity
 	entry.sNow = id and laneNow[id] or nil
@@ -1111,11 +1221,13 @@ UI:RegisterPage('timeline', {title = 'Aura timeline', order = 12.5, cards = {
 		{'slider', 'Shortest cooldown', 'timeline.minCooldown', 0, 30, 1, 'Shorter ones are left out when the game tells their length.',
 			format = Seconds, hidden = function() return not DB().cooldowns end},
 		{'input', 'Hidden spells', 'timeline.blacklist', 'Spell IDs to leave off, separated by commas.'},
-		{'note', 'The line is linear: a key\'s distance from zero is its time left. Only what is on the line shows: a longer timer slides on once its time left drops below the line\'s length, and auras that last until cancelled (a seal, an aura) never show. Keys that would overlap stack into lanes. The game moves the keys itself, so this keeps working when it hides exact times in combat.'},
+		{'note', 'The line is linear: a key\'s distance from zero is its time left. Only what is on the line shows: a longer timer slides on once its time left drops below the line\'s length, and auras that last until cancelled (a seal, an aura) never show. Keys that would overlap spread out along the line with angled leaders (or stack in lanes). The game moves the keys itself, so this keeps working when it hides exact times in combat.'},
 	}},
 	{title = 'Keys', rows = {
 		{'slider', 'Key size', 'timeline.iconSize', 16, 40, 1, nil, format = Whole},
-		{'slider', 'Lanes', 'timeline.lanes', 1, 6, 1, 'How many keys may stack at one spot.', format = Whole, since = '0.5.1'},
+		{'segmented', 'Crowding', 'timeline.crowd', items = {{'spread', 'Spread out'}, {'lanes', 'Stack in lanes'}}, since = '0.5.2',
+			note = 'Spread out: keys that would overlap sit side by side along the line, each joined to its point by an angled leader. Stack in lanes: they stack straight up over their points.'},
+		{'slider', 'Lanes', 'timeline.lanes', 1, 6, 1, 'How many rows of keys (spread out: extra rows only once a row is full).', format = Whole, since = '0.5.1'},
 		{'segmented', 'Stack', 'timeline.stack', items = {{'up', 'Up'}, {'down', 'Down'}, {'both', 'Both'}},
 			note = 'Which side of the line the keys stack on.', since = '0.5.1'},
 		{'switch', 'Time under keys', 'timeline.timeText'},
