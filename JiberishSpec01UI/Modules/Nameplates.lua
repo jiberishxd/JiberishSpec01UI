@@ -618,6 +618,17 @@ local function State(plate)
 end
 module.State = State
 
+-- An inline level with its LV legend: the number follows the legend and the
+-- chip is exactly as wide as both, so the name sits right after it. A secret
+-- level's width can't be read; the chip keeps the width it has.
+local function FitChip(plate)
+	if not plate.chipFits then return end
+	local legend = plate.chip.legend:IsShown() and plate.chip.legend:GetStringWidth() or 0
+	local text = plate.chip.text:GetStringWidth()
+	if IsSecret(legend) or IsSecret(text) then return end
+	plate.chip:SetWidth(math.max(8, math.ceil((legend > 0 and legend + 3 or 0) + (text or 0))))
+end
+
 local function Layout(plate)
 	local db = DB()
 	local nameOnly = plate.nameOnly
@@ -689,8 +700,11 @@ local function Layout(plate)
 	else
 		plate.chip:SetSize(legends and 30 or 20, 11)
 		plate.chip:SetPoint('TOPLEFT', plate, 'TOPLEFT', 12, -4)
-		if legends then
-			plate.chip.text:SetPoint('RIGHT', plate.chip, 'RIGHT', inline and 0 or -3, 0)
+		if legends and inline then
+			plate.chip.text:SetPoint('LEFT', plate.chip.legend, 'RIGHT', 3, 0)
+			plate.chip.text:SetJustifyH('LEFT')
+		elseif legends then
+			plate.chip.text:SetPoint('RIGHT', plate.chip, 'RIGHT', -3, 0)
 			plate.chip.text:SetJustifyH('RIGHT')
 		else
 			plate.chip.text:SetPoint('CENTER', 0.5, 0)
@@ -699,6 +713,8 @@ local function Layout(plate)
 	end
 	plate.chip.legend:ClearAllPoints()
 	plate.chip.legend:SetPoint('LEFT', plate.chip, 'LEFT', inline and 0 or 3, 0)
+	plate.chipFits = (not compact and legends and inline) and true or false
+	FitChip(plate)
 	-- Lamps: the target lamp in Full; threat as a tiny dot in Compact.
 	plate.lamp:ClearAllPoints()
 	plate.lamp:SetPoint('TOPLEFT', plate, 'TOPLEFT', 5, -7)
@@ -908,10 +924,12 @@ local function UpdateName(plate)
 	if level <= 0 or class == 'worldboss' then
 		chip:SetText('??')
 		Kit:Tint(chip, 'red')
+		FitChip(plate)
 		return
 	end
 	local mark = (class == 'elite' or class == 'rareelite') and '+' or (class == 'rare') and '*' or ''
 	chip:SetText(level..mark)
+	FitChip(plate)
 	-- An enemy's level in the game's own difficulty colors, as the target frame shows it.
 	if not plate.friendly and DB().levelColor ~= 'plain' and GetCreatureDifficultyColor then
 		local ok, color = pcall(GetCreatureDifficultyColor, level)
@@ -1820,6 +1838,7 @@ local function FillSample(plate)
 	Kit:Tint(plate.name, 'darkInk')
 	Kit:Tint(plate.chip.text, plate.chipInk or 'lcdInk')
 	plate.chip.text:SetText('80+')
+	FitChip(plate)
 	plate.health:SetMinMaxValues(0, 1)
 	plate.health:SetValue(0.62, IMMEDIATE)
 	local r, g, b
