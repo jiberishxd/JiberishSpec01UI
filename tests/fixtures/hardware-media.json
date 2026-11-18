@@ -287,6 +287,15 @@
       ],
       "sha256": "3bd3cb1ee669088b2ee0cee86ff1ecf2d457b663c82a46d0777996656a35b266",
       "bgraSha256": "1bc29abba21175b765ec98bec636323d78374cee1858d8c7950dbb9f24c7130d"
+    },
+    {
+      "path": "Media/Hardware/icons-nav.tga",
+      "size": [
+        512,
+        256
+      ],
+      "sha256": "988b62a14d0c380a527b715b4e25e0c0f4e0f26d80944999f84b279c02967309",
+      "bgraSha256": "8859304c228fd47c8529e2d9446ac3477e301cc9719ec4974db62e7d2c8e5b20"
     }
   ],
   "icons": [
@@ -2541,5 +2550,32 @@
       "sha256": "6de877220230d8644ac1d8e8436fcbbadfc8f89aa60d7026c187fae5d554d349",
       "bgraSha256": "46e0f068cd68b4636b93b8005f49e6d5a6d1cbfb1a05212c4df14f2d3aa8c7a8"
     }
+  ],
+  "navIcons": [
+    "waypoint",
+    "quest",
+    "turnin",
+    "giver",
+    "world",
+    "rare",
+    "treasure",
+    "event",
+    "dungeon",
+    "taxi",
+    "portal",
+    "inn",
+    "bank",
+    "mail",
+    "repair",
+    "auction",
+    "vendor",
+    "trainer",
+    "profession",
+    "stable",
+    "barber",
+    "transmog",
+    "guildbank",
+    "poi",
+    "link"
   ]
 }

@@ -8,8 +8,10 @@
 -- is beyond it. Toggled with /spec map, a key binding or the hub; it never
 -- takes the mouse, and it is placed with the other frames (/spec move).
 --
--- The art: the zone map's detail layer (C_Map.GetMapArtLayers and
--- GetMapArtLayerTextures), its 256-texel tiles laid out as the world map lays
+-- The art: the drawn map's detail layer (C_Map.GetMapArtLayers and
+-- GetMapArtLayerTextures; in a building, cave or city level with no art of its
+-- own, the city or zone around it, chosen in Navigation.lua), its 256-texel
+-- tiles laid out as the world map lays
 -- them, scaled from the map's size in yards. Only the tiles under the window
 -- exist; north-up, they sit on one canvas frame that one anchor moves as you
 -- walk. Turning with you, each of those few tiles (a handful at this zoom) is
@@ -308,7 +310,7 @@ local function RebuildTiles(here)
 	local info = layers[index]
 	local textures = Nav.Plain(C_Map.GetMapArtLayerTextures, mapID, index)
 	if type(textures) ~= 'table' or #textures == 0 then return end
-	local grid = {mapID = mapID, layer = index, textures = textures,
+	local grid = {mapID = mapID, artID = here.artID, layer = index, textures = textures,
 		cols = ceil(info.layerWidth / info.tileWidth), rows = ceil(info.layerHeight / info.tileHeight)}
 	-- A tile's size in UI units: its texels, at the map's yards per texel, at the zoom.
 	grid.tw = info.tileWidth * (here.worldW / info.layerWidth) * m.k
@@ -580,7 +582,9 @@ local function Step(_, elapsed)
 	local now = GetTime()
 	local here = Nav:Sense(now)
 	Nav:Tick(now)
-	if m.rebuild or (m.grid and m.grid.mapID ~= here.mapID) or (not m.grid and here.mapID and m.lastTry ~= here.mapID) then
+	-- Walking between a city's buildings keeps the same drawn map: tiles stay.
+	local moved = m.grid and (m.grid.mapID ~= here.mapID or m.grid.artID ~= here.artID)
+	if m.rebuild or moved or (not m.grid and here.mapID and m.lastTry ~= here.mapID) then
 		m.lastTry = here.mapID
 		RebuildTiles(here)
 	end
@@ -645,7 +649,7 @@ local function Setup()
 		preview = on and true or false
 		Show(false)
 	end
-	Nav:OnChange(function(what) if what == 'map' then m.rebuild = true end end)
+	Nav:OnChange(function(what) if what == 'map' and not m.grid then m.rebuild = true end end)
 	local events = CreateFrame('Frame')
 	events:RegisterEvent('PLAYER_REGEN_DISABLED')
 	events:RegisterEvent('PLAYER_REGEN_ENABLED')

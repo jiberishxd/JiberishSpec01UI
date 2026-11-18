@@ -38,7 +38,7 @@ def lua_sources():
 class HardwareMedia(unittest.TestCase):
     def test_textures_match_manifest_and_are_lossless_rle(self):
         records = FIXTURE['textures']
-        self.assertEqual(len(records), 32)
+        self.assertEqual(len(records), 33)  # 32 + the navigation glyphs (icons-nav)
         on_disk = {p.name for p in (ADDON / 'Media/Hardware').glob('*.tga')}
         self.assertEqual(on_disk, {Path(r['path']).name for r in records})
         for record in records:
@@ -145,6 +145,16 @@ class HardwareMedia(unittest.TestCase):
         self.assertLessEqual(len(names), 32)  # an 8 x 4 atlas
         glyphs = re.search(r"local GLYPH_OF = \{(.*?)\n\}", source, re.S)[1]
         self.assertLessEqual(set(re.findall(r"= '([\w-]+)'", glyphs)), set(names))
+
+    def test_nav_glyph_atlas_order_matches_the_lua_lookup(self):
+        source = (ADDON / 'Modules/Navigation.lua').read_text()
+        block = re.search(r"local NAV_ICONS = \{(.*?)\}", source, re.S)[1]
+        names = re.findall(r"'([\w-]+)'", block)
+        self.assertEqual(names, FIXTURE['navIcons'])
+        self.assertLessEqual(len(names), 32)  # an 8 x 4 atlas
+        kinds = re.search(r"local KINDS = \{(.*?)\n\}", source, re.S)[1]
+        self.assertLessEqual(set(re.findall(r"icon = '([\w-]+)'", kinds)), set(names))
+        self.assertIn("'icons-nav.tga'", source)
 
     def test_sounds_match_manifest_and_the_lua_list(self):
         records = FIXTURE['sounds']

@@ -35,6 +35,7 @@ UI:RegisterDefaults('compass', {
 	motion = true, speedUnit = 'yards', -- 'yards' | 'percent'
 	pois = true, range = 400, maxPois = 8, keySize = 16, distances = true, pinTarget = true,
 	icons = 'glyph', -- 'glyph' | 'game'
+	nearest = 'alt', -- 'alt' | 'shift' | 'ctrl' | 'always' | 'off': the nearest repair, inn and mailbox
 })
 -- defaults:end
 
@@ -451,6 +452,19 @@ end
 
 local row, seen = {}, {}
 
+-- The nearest repair, inn and mailbox: while a key is held (or always), read
+-- out in place of the zone name and kept on the tape, at its ends if behind you.
+local NEAREST = {'repair', 'inn', 'mail'}
+local nearest, combined, inList = {}, {}, {}
+local function Holding()
+	local key = DB().nearest
+	if key == 'always' then return true end
+	if key == 'alt' then return IsAltKeyDown() and true or false end
+	if key == 'shift' then return IsShiftKeyDown() and true or false end
+	if key == 'ctrl' then return IsControlKeyDown() and true or false end
+	return false
+end
+
 -- The demo points shown while placing frames: a few kinds around you.
 local DEMO = {{'quest', 32, 140}, {'giver', 40, 210}, {'taxi', -64, 380}, {'turnin', -12, 95}, {'rare', 118, 260},
 	{'inn', 75, 330}, {'waypoint', 170, 520, true}}
@@ -476,14 +490,31 @@ local function Points(here, heading)
 		list = nearList
 		wipe(list)
 	end
+	-- The nearest services first while held, then the rest.
+	wipe(combined)
+	wipe(inList)
+	if m.holding and not preview and heading and here.wx then
+		for index, kind in ipairs(NEAREST) do
+			local entry = Nav:Nearest(kind, nearest[index])
+			if entry then
+				nearest[index] = entry
+				entry.pinOK = true
+				combined[#combined + 1] = entry
+				inList[entry.poi.uid] = true
+			end
+		end
+	end
+	for _, entry in ipairs(list) do
+		if not inList[entry.poi.uid] then combined[#combined + 1] = entry end
+	end
 	local limit = floor(Clamp(db.maxPois, 2, 16, 8) + 0.5)
 	local lo, hi = m.key / 2 + 1, m.tapeW - m.key / 2 - 1
-	for _, entry in ipairs(list) do
+	for _, entry in ipairs(combined) do
 		if #row >= limit then break end
 		local rel = Nav.Relative(entry.bearing, heading)
 		local pinned
 		if abs(rel) > m.halfFov - 1 then
-			if entry.poi.super and db.pinTarget then pinned = rel < 0 and -1 or 1 end
+			if (entry.poi.super and db.pinTarget) or entry.pinOK then pinned = rel < 0 and -1 or 1 end
 		end
 		if pinned or abs(rel) <= m.halfFov - 1 then
 			entry.pinned = pinned
@@ -549,6 +580,8 @@ local function DrawPoints(here, heading, elapsed)
 		end
 		if db.distances then
 			local text = Nav.Yards(entry.distance)
+			-- Learned from a nearby title only: within ten yards of here.
+			if poi.approx then text = '~'..text end
 			if entry.pinned then text = entry.pinned < 0 and '<'..text or text..'>' end
 			if slot.text ~= text then slot.text = text; slot.chip.text:SetText(text) end
 		end
@@ -568,9 +601,30 @@ local function DrawPoints(here, heading, elapsed)
 	end
 end
 
+-- While held: the nearest repair, inn and mailbox, each a glyph with its
+-- distance and direction ("120NE"), or -- where none is known yet.
+local function NearestText()
+	local r, g, b = Kit:RGB(Ink())
+	local dr, dg, db = Kit:RGB(Dim())
+	local parts = {}
+	for index, kind in ipairs(NEAREST) do
+		local entry = Nav:Nearest(kind, nearest[index])
+		if entry then nearest[index] = entry end
+		local text = entry and format('%s%s%s', entry.poi.approx and '~' or '', Nav.Yards(entry.distance), Nav.Point(entry.bearing))
+			or format('|cff%02x%02x%02x--|r', floor(dr * 255 + 0.5), floor(dg * 255 + 0.5), floor(db * 255 + 0.5))
+		parts[#parts + 1] = Nav.InlineIcon(kind, 11, r, g, b)..' '..text
+	end
+	return table.concat(parts, '  ')
+end
+
 -- The header: zone and PvP lamp on events, the readouts every update.
 local function DrawZone()
 	m.zoneDirty = nil
+	if m.holding then
+		local text = NearestText()
+		if holder.zone.shownText ~= text then holder.zone.shownText = text; holder.zone:SetText(text) end
+		return
+	end
 	local zone, sub, pvp
 	if preview then zone, sub, pvp = 'Elwynn Forest', 'Goldshire', 'friendly'
 	else zone, sub, pvp = Nav:Zone() end
@@ -579,6 +633,7 @@ local function DrawZone()
 		local r, g, b = Kit:RGB(Dim())
 		text = format('%s  |cff%02x%02x%02x%s|r', text, floor(r * 255 + 0.5), floor(g * 255 + 0.5), floor(b * 255 + 0.5), strupper(sub))
 	end
+	holder.zone.shownText = text
 	holder.zone:SetText(text)
 	local token = pvp and PVP[pvp]
 	Kit:SetLed(holder.pvp, token and true or false, token)
@@ -590,7 +645,9 @@ local function Readouts(here, heading)
 		SetChip(holder.headingChip, heading and format('%03d° %s', floor(heading + 0.5) % 360, Nav.Point(heading)) or '---')
 	end
 	if db.coords then
-		SetChip(holder.coords, here.x and format('%.1f  %.1f', here.x * 100, here.y * 100) or '--.-  --.-')
+		-- On the city or zone map (the one the world map shows), even inside a building.
+		local x, y = here.zx or here.x, here.zy or here.y
+		SetChip(holder.coords, x and format('%.1f  %.1f', x * 100, y * 100) or '--.-  --.-')
 	end
 	if db.motion then
 		local speed = here.speed
@@ -627,7 +684,9 @@ local function Step(_, elapsed)
 	end
 	local heading = here.heading
 	local signal = heading ~= nil
-	if m.zoneDirty then DrawZone() end
+	local holding = DB().location and Holding() and not preview
+	if holding ~= m.holding then m.holding, m.zoneDirty = holding, true end
+	if m.zoneDirty or holding then DrawZone() end
 	DrawTicks(heading or 0, signal)
 	DrawLabels(heading or 0, signal)
 	holder.signal:SetShown(not signal)

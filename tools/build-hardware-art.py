@@ -345,6 +345,123 @@ def menu_icons(cell=64, columns=8, rows=4):
     return raster(cell * columns, cell * rows, alpha)
 
 
+def nav_icon_shapes(name):
+    """The navigation glyphs (compass and overlay map keys), in the menu glyphs'
+    16-unit cell, stroke weight and corner language."""
+    W = 1.6
+
+    def lines(*points, width=W):
+        return lambda x, y: min(segment(x, y, *points[i], *points[i + 1])
+                                for i in range(len(points) - 1)) - width / 2
+
+    def dot(cx, cy, radius):
+        return lambda x, y: math.hypot(x - cx, y - cy) - radius
+
+    def circle(cx, cy, radius, width=W):
+        return lambda x, y: abs(math.hypot(x - cx, y - cy) - radius) - width / 2
+
+    def fill(*points):
+        return lambda x, y: polygon(x, y, points)
+
+    def box(x0, y0, x1, y1, radius=1, width=None):
+        if width is None:
+            return lambda x, y: rrect(x, y, x0, y0, x1, y1, radius)
+        return lambda x, y: abs(rrect(x, y, x0, y0, x1, y1, radius)) - width / 2
+
+    def bar(cx, cy, length, thick, angle):
+        # A filled rectangle `length` long and `thick` wide, turned `angle` degrees.
+        ux, uy = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+        vx, vy = -uy, ux
+        a, b = length / 2, thick / 2
+        return fill((cx - ux * a - vx * b, cy - uy * a - vy * b), (cx + ux * a - vx * b, cy + uy * a - vy * b),
+                    (cx + ux * a + vx * b, cy + uy * a + vy * b), (cx - ux * a + vx * b, cy - uy * a + vy * b))
+
+    def star(cx, cy, outer, inner, points=5, turn=-90):
+        corners = []
+        for i in range(points * 2):
+            r = outer if i % 2 == 0 else inner
+            a = math.radians(turn + i * 180 / points)
+            corners.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+        return fill(*corners)
+
+    rays = [lines((8 + 3.6 * math.cos(a), 8 + 3.6 * math.sin(a)), (8 + 6 * math.cos(a), 8 + 6 * math.sin(a)))
+            for a in (math.radians(i * 45) for i in range(8))]
+    table = {
+        # A map pin.
+        'waypoint': [circle(8, 6.2, 3.4), dot(8, 6.2, 1.1), lines((5, 8.3), (8, 14), (11, 8.3))],
+        # A quest in your log: a flag on its pole.
+        'quest': [lines((4, 14), (4, 2.2)), fill((4.4, 2.4), (13, 4.8), (4.4, 7.6))],
+        'turnin': [lines((5, 5.4), (5.8, 3.4), (8, 2.6), (10.2, 3.4), (11, 5.4), (10.2, 7.2), (8, 8.4), (8, 10.2), width=2),
+                   dot(8, 13, 1.3)],
+        'giver': [lines((8, 2.6), (8, 9.8), width=2.4), dot(8, 13, 1.4)],
+        'world': [circle(8, 8, 5.8), lines((2.4, 8), (13.6, 8)), lines((8, 2.2), (6, 5), (5.4, 8), (6, 11), (8, 13.8)),
+                  lines((8, 2.2), (10, 5), (10.6, 8), (10, 11), (8, 13.8))],
+        'rare': [star(8, 8.4, 6.4, 2.7)],
+        'treasure': [box(2.6, 6.4, 13.4, 13.6, 1.2, W), lines((2.6, 9.4), (13.4, 9.4)),
+                     lines((3.4, 6.4), (4.4, 3.4), (11.6, 3.4), (12.6, 6.4)), dot(8, 9.4, 1.3)],
+        'event': [circle(8, 8, 2.2)] + rays,
+        # A gate with its portcullis.
+        'dungeon': [lines((3, 14), (3, 7), (4.4, 4), (8, 2.6), (11.6, 4), (13, 7), (13, 14)), lines((1.8, 14), (14.2, 14)),
+                    lines((6, 4.2), (6, 14), width=1.2), lines((10, 4.2), (10, 14), width=1.2), lines((3.4, 9), (12.6, 9), width=1.2)],
+        # Flight: a pair of wings.
+        'taxi': [lines((1.6, 3.6), (5.2, 7.6), (8, 6.6), (10.8, 7.6), (14.4, 3.6)),
+                 lines((5.2, 7.6), (8, 13.2), (10.8, 7.6)), dot(8, 4.4, 1.3)],
+        'portal': [circle(8, 8, 5.8), circle(8, 8, 2.8, width=1.3), dot(8, 8, 0.9)],
+        # An inn: a bed with its pillow.
+        'inn': [lines((2, 3.6), (2, 13.6)), lines((2, 10.4), (14, 10.4), (14, 13.6)), box(3.6, 6.6, 7, 9, 1),
+                lines((8.2, 7.8), (12.4, 7.8), (14, 10.4))],
+        'bank': [lines((2, 6), (8, 2.4), (14, 6), (2, 6)), lines((4.2, 7.6), (4.2, 11.8)), lines((8, 7.6), (8, 11.8)),
+                 lines((11.8, 7.6), (11.8, 11.8)), lines((2, 13.4), (14, 13.4))],
+        'mail': [box(2, 3.5, 14, 12.5, 1.5, W), lines((2.5, 4.5), (8, 9), (13.5, 4.5))],
+        # Repair: a hammer.
+        'repair': [lines((2.8, 13.4), (9.2, 7), width=1.9), bar(10.6, 5.4, 9.4, 3.4, 45)],
+        # The auction house: a gavel on its block.
+        'auction': [lines((3, 11), (8.4, 5.6), width=1.7), bar(9.8, 4.2, 7.4, 3.6, 45), box(7.4, 12, 14, 14, 0.6)],
+        # A vendor: a purse.
+        'vendor': [lines((4.6, 5.2), (2.8, 9), (2.8, 12.4), (4.8, 14), (11.2, 14), (13.2, 12.4), (13.2, 9), (11.4, 5.2)),
+                   lines((4.2, 5.2), (11.8, 5.2)), lines((6.6, 5.2), (6, 2.4)), lines((9.4, 5.2), (10, 2.4)), dot(8, 10.2, 1.3)],
+        # A class trainer: a shield.
+        'trainer': [lines((3, 2.8), (13, 2.8), (13, 8), (8, 14), (3, 8), (3, 2.8)), lines((8, 4.6), (8, 11), width=1.3),
+                    lines((5.4, 7), (10.6, 7), width=1.3)],
+        # A profession trainer: an anvil.
+        'profession': [fill((1.6, 4.6), (14.4, 4.6), (14.4, 6.4), (11.2, 8.2), (11.2, 10.4), (13, 13.6), (3, 13.6), (4.8, 10.4),
+                            (4.8, 8.2), (1.6, 6.4))],
+        # A stable: a horseshoe.
+        'stable': [lines((4.2, 2.8), (3.2, 7), (4, 10.6), (5.8, 12.9), (8, 13.6), (10.2, 12.9), (12, 10.6), (12.8, 7), (11.8, 2.8)),
+                   dot(5.4, 5.6, 0.75), dot(10.6, 5.6, 0.75)],
+        'barber': [circle(4.6, 11.6, 2.1), circle(11.4, 11.6, 2.1), lines((6.2, 10), (12.4, 2.4)), lines((9.8, 10), (3.6, 2.4))],
+        # Transmogrification: a coat hanger.
+        'transmog': [lines((8, 5.8), (8, 4.6), (9.3, 3.6), (8.7, 2.2), (7.2, 2.4)), lines((8, 5.8), (1.8, 11.6), (14.2, 11.6), (8, 5.8))],
+        # The guild bank: a vault door.
+        'guildbank': [box(2.2, 2.2, 13.8, 13.8, 1.6, W), circle(8, 8, 3.2), lines((8, 6), (8, 10), width=1.2),
+                      lines((6, 8), (10, 8), width=1.2), lines((3.8, 13.8), (3.8, 15), width=1.2)],
+        'poi': [lines((8, 2.4), (13.6, 8), (8, 13.6), (2.4, 8), (8, 2.4)), dot(8, 8, 1.4)],
+        # An entrance to another map: a door.
+        'link': [box(4, 2.4, 12, 13.6, 0.8, W), dot(9.6, 8.4, 0.9), lines((1.6, 13.6), (14.4, 13.6))],
+    }
+    return table[name]
+
+
+# Navigation glyphs in atlas order. Modules/Navigation.lua lists the same names.
+NAV_ICONS = ('waypoint', 'quest', 'turnin', 'giver', 'world', 'rare', 'treasure', 'event',
+             'dungeon', 'taxi', 'portal', 'inn', 'bank', 'mail', 'repair', 'auction',
+             'vendor', 'trainer', 'profession', 'stable', 'barber', 'transmog', 'guildbank', 'poi',
+             'link')
+
+
+def nav_icons(cell=64, columns=8, rows=4):
+    shapes = [nav_icon_shapes(name) for name in NAV_ICONS]
+    scale = cell / 16
+
+    def alpha(x, y):
+        index = int(y // cell) * columns + int(x // cell)
+        if index >= len(shapes):
+            return 0
+        u, v = (x % cell) / scale, (y % cell) / scale
+        return cover(min(shape(u, v) for shape in shapes[index]) * scale)
+    return raster(cell * columns, cell * rows, alpha)
+
+
 def tile_dot(size=16, radius=4.6, inverse=False):
     # Square tiles: lit/unlit LED dots, and the perforated cover that turns any
     # native status bar into a dot meter without reading its (maybe secret) value.
@@ -481,6 +598,7 @@ def textures():
     yield 'knob-ticks', knob_ticks()
     yield 'icons', icons()
     yield 'icons-menu', menu_icons()
+    yield 'icons-nav', nav_icons()
 
 
 def main():
@@ -496,6 +614,7 @@ def main():
     fixture['textures'] = records
     fixture['icons'] = list(ICONS)
     fixture['menuIcons'] = list(MENU_ICONS)
+    fixture['navIcons'] = list(NAV_ICONS)
     fixture.setdefault('sounds', [])
     FIXTURE.write_text(json.dumps(fixture, indent=2) + '\n')
     print(f'{len(records)} Hardware textures, {sum(len(d) for _, d in textures()):,} bytes')
