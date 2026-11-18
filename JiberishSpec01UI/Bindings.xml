@@ -1,4 +1,5 @@
 <Bindings>
 	<Binding name="JIBERISHSPEC_DRAWER" header="JIBERISHSPEC" category="ADDONS">JiberishSpec01_ToggleDrawer()</Binding>
 	<Binding name="JIBERISHSPEC_UNLOCK" category="ADDONS">JiberishSpec01_ToggleMovers()</Binding>
+	<Binding name="JIBERISHSPEC_MAP" category="ADDONS">JiberishSpec01_ToggleMap()</Binding>
 </Bindings>

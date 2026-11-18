@@ -48,6 +48,9 @@ Modules\SkinsSettings.lua
 Modules\Bags.lua
 Modules\Nameplates.lua
 Modules\NavBar.lua
+Modules\Navigation.lua
+Modules\Compass.lua
+Modules\OverlayMap.lua
 Modules\Objectives.lua
 Modules\Buffs.lua
 Modules\Timeline.lua

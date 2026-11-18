@@ -1129,7 +1129,7 @@ local GROUPS = {
 	{'layout', 'Layout', {'layout', 'profiles'}},
 	{'frames', 'Frames', {'unitframes', 'group', 'nameplates', 'navbar', 'wiring'}},
 	{'bars', 'Bars and auras', {'actionbars', 'buffs', 'timeline', 'cooldowns', 'swingtimer'}},
-	{'interface', 'Interface', {'minimap', 'chat', 'windows', 'bags', 'objectives', 'infopanel', 'meters', 'banners',
+	{'interface', 'Interface', {'minimap', 'navigation', 'chat', 'windows', 'bags', 'objectives', 'infopanel', 'meters', 'banners',
 		'notifications', 'qol', 'away'}},
 	{'extras', 'Extras', {'drawer', 'calendar', 'components', 'about'}},
 }

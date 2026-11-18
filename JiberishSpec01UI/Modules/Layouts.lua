@@ -88,7 +88,7 @@ local function Lookup(key) return type(key) == 'string' and PRESET_BY_KEY[RENAME
 -- Custom layouts: positions as fractions of the screen, so they carry across resolutions.
 local SNAPSHOT = {'actionbars.layout', 'actionbars.dock', 'actionbars.rows', 'actionbars.side', 'actionbars.keySize',
 	'actionbars.consoleWidth', 'actionbars.consoleHeight', 'actionbars.dockFocus', 'actionbars.dockToT', 'actionbars.dockPet',
-	'actionbars.consoleLayout', 'unitframes.scale', 'nameplates.scale', 'style.infopanel'}
+	'actionbars.consoleLayout', 'actionbars.menuLayout', 'actionbars.menuEdge', 'unitframes.scale', 'nameplates.scale', 'style.infopanel'}
 
 local function SaveCustom(name)
 	name = strtrim(name or '')
@@ -255,7 +255,8 @@ local EXCLUSIVE = {['group.small'] = 'group.large', ['group.large'] = 'group.sma
 -- Sizes for frames not built yet, by key prefix.
 local GUESS = {{'ab.bar', 480, 50}, {'ab.side', 50, 480}, {'ab.menu', 160, 60}, {'ab.bags', 160, 34}, {'ab.', 160, 44},
 	{'uf.player', 224, 70}, {'uf.target', 224, 70}, {'uf.party', 176, 50}, {'uf.', 136, 36}, {'cb.', 240, 30},
-	{'group.small', 420, 200}, {'group.large', 560, 300}, {'group.', 200, 300}, {'dm.', 270, 180}, {'tl.', 440, 60}}
+	{'group.small', 420, 200}, {'group.large', 560, 300}, {'group.', 200, 300}, {'dm.', 270, 180}, {'tl.', 440, 60},
+	{'nav.compass', 460, 86}, {'nav.map', 300, 300}}
 
 -- Frames the game's Edit Mode places: never moved from here, but nothing may
 -- cover them. Extra room around chat for its tabs and edit box.
@@ -390,7 +391,16 @@ local function Solver(preset)
 		-- Docked frames are placed by the console. A layout that docks, applied
 		-- before the reload that docks them, places them beside it meanwhile.
 		if docked and Docks(key) and (UI:MoverDocked(key) or not UI:HasMover(key)) then return false end
+		-- Any other frame its dock holds (stance and pet keys put back in the
+		-- console) takes no screen space. The unit frames above follow the layout's own docking.
+		if not DOCKABLE[key] and UI.MoverDocked and UI:MoverDocked(key) then return false end
 		if key == 'ab.console' then return not free end
+		-- The micro menu set into the console's header takes no space of its own.
+		if key == 'ab.menu' then
+			local menu = settings['actionbars.menuLayout']
+			if menu == nil and type(UI.db.actionbars) == 'table' then menu = UI.db.actionbars.menuLayout end
+			if menu == 'console' then return false end
+		end
 		local bar = key:match('^ab%.bar(%d)$')
 		if bar then return free and tonumber(bar) <= rows end
 		if key:find('^ip%.') and not InfoShown(key) then return false end
@@ -749,8 +759,12 @@ local function Frame(s)
 	s.put('ip.extra', 17.33, H - 43.2 - height, {nudge = {'down', 'right'}, scale = 0.9})
 	width, height = s.dims('ip.hud')
 	s.put('ip.hud', W / 2 - 4 - width / 2, H - 56.8 - height, {nudge = {'down'}})
+	-- The NV-3 compass, centred under the info strip (and the HUD when it shows).
+	width, height = s.dims('nav.compass')
+	local under = min(s.bottom('ip.main', H - 17.6), s.bottom('ip.hud', H))
+	s.put('nav.compass', W / 2 - width / 2, under - GAP - height, {nudge = {'down'}})
 	width, height = s.dims('cue.status')
-	s.put('cue.status', W / 2 - width / 2, H - 94 - height, {nudge = {'down'}})
+	s.put('cue.status', W / 2 - width / 2, min(H - 94, s.bottom('nav.compass', H) - GAP) - height, {nudge = {'down'}})
 	-- Banners show briefly; they may come over the combat status.
 	width, height = s.dims('nt.banner')
 	s.put('nt.banner', W / 2 - width / 2, H - 146 - height, {nudge = {'down'}, over = {'cue.status'}})
@@ -805,6 +819,30 @@ local function Middle(s)
 	s.put('bags.bank', 12, H - 76.8 - height, {nudge = {'down', 'right'}})
 end
 
+-- The NV-4 overlay map (shown on demand), right of the centre: past the loot
+-- feed and rolls and under the loot window, clear of the boss column, or
+-- under the rolls (smaller where that is narrow); else right of the combat ring under the loot feed,
+-- centred above the ring, or the nearest free spot.
+local function OverlayMap(s)
+	local W, H = s.W, s.H
+	local width, height = s.dims('nav.map')
+	local x = max(s.right('nt.rolls', W / 2), s.right('nt.loot', W / 2), s.right('uf.focus', W / 2)) + GAP
+	local top = min(s.bottom('nt.lootwindow', H / 2 + height / 2 + GAP) - GAP, H / 2 + height / 2)
+	local ring = s.top('cue.ring', H / 2 + 72)
+	-- Or under the rolls, right of the loot feed.
+	local x2 = max(s.right('nt.loot', W / 2), s.right('uf.focus', W / 2)) + GAP
+	local top2 = min(s.bottom('nt.rolls', top + GAP), s.bottom('nt.lootwindow', top + GAP)) - GAP
+	s.try('nav.map', {
+		{x, top - height, {nudge = {'down', 'right', 'up'}}},
+		{x2, top2 - height, {nudge = {'down', 'up', 'right'}}},
+		{x, top - height, {nudge = {'down', 'right', 'up'}, scale = 0.85}},
+		{s.right('cue.ring', W / 2 + 70) + GAP, s.bottom('nt.loot', H / 2 - 80) - GAP - height * 0.85,
+			{nudge = {'down', 'right', 'left'}, scale = 0.85}},
+		{W / 2 - width / 2, ring + GAP, {nudge = {'up', 'right', 'left'}}},
+		{W / 2 + W * 0.17 - width / 2, H / 2 - height / 2, {nudge = {'up', 'down', 'right', 'left'}, scale = 0.75}},
+	})
+end
+
 -- In a docking layout, frames not docked yet (before its reload) sit beside
 -- the console meanwhile.
 local function Flank(s, console)
@@ -824,7 +862,7 @@ PRESETS = {
 		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = false, ['actionbars.rows'] = 2, ['actionbars.side'] = true,
 			['actionbars.keySize'] = 34, ['actionbars.consoleWidth'] = 640, ['actionbars.consoleHeight'] = 0,
 			['actionbars.dockFocus'] = false, ['actionbars.dockToT'] = false, ['actionbars.dockPet'] = false,
-			['actionbars.consoleLayout'] = {}},
+			['actionbars.consoleLayout'] = {}, ['actionbars.menuLayout'] = 'console', ['actionbars.menuEdge'] = 'header'},
 		rules = function(s)
 			local console = Console(s)
 			local cx, top = console.x + console.w / 2, console.y + console.h
@@ -841,6 +879,7 @@ PRESETS = {
 			Timeline(s, cx, s.highest({'cb.player', 'cb.target', 'uf.player', 'uf.target'}, top) + 76)
 			Frame(s)
 			Middle(s)
+			OverlayMap(s)
 			Edges(s, {meters = 'corner', party = 'left'})
 		end},
 	{key = 'integrated', title = 'Integrated console', model = 'LY-2',
@@ -848,7 +887,7 @@ PRESETS = {
 		settings = {['actionbars.layout'] = 'console', ['actionbars.dock'] = true, ['actionbars.rows'] = 3, ['actionbars.side'] = true,
 			['actionbars.keySize'] = 34, ['actionbars.consoleWidth'] = 0, ['actionbars.consoleHeight'] = 0,
 			['actionbars.dockFocus'] = true, ['actionbars.dockToT'] = true, ['actionbars.dockPet'] = true,
-			['actionbars.consoleLayout'] = {}},
+			['actionbars.consoleLayout'] = {}, ['actionbars.menuLayout'] = 'console', ['actionbars.menuEdge'] = 'header'},
 		rules = function(s)
 			-- Centred; on a narrow screen it steps right of the chat rather than over it.
 			local console = Console(s, {'right', 'up'})
@@ -861,6 +900,7 @@ PRESETS = {
 			Timeline(s, cx, s.highest({'cb.player', 'cb.target', 'uf.player', 'uf.target'}, top + 72) + height / 2)
 			Frame(s)
 			Middle(s)
+			OverlayMap(s)
 			Edges(s, {meters = 'corner', party = 'left'})
 		end},
 }

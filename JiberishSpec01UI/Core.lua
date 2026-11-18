@@ -247,15 +247,18 @@ SlashCmdList.JIBERISHSPEC = function(input)
 	elseif command == 'console' and UI.EditConsole then UI:EditConsole()
 	elseif command == 'calendar' and UI.OpenCalendar then UI:OpenCalendar()
 	elseif command == 'afk' and UI.PreviewAway then UI:PreviewAway()
+	elseif command == 'map' and UI.ToggleOverlayMap then UI:ToggleOverlayMap()
 	elseif command == 'reset' then
 		if UI.ResetMovers then UI:ResetMovers() end
 	elseif UI.ToggleHub then UI:ToggleHub(command ~= '' and command or nil)
 	end
 end
 
--- Key bindings (Bindings.xml): the drawer and unlock mode.
+-- Key bindings (Bindings.xml): the drawer, unlock mode and the overlay map.
 BINDING_HEADER_JIBERISHSPEC = 'Jiberish SPEC-01 UI'
 BINDING_NAME_JIBERISHSPEC_DRAWER = 'Open or close the drawer'
 BINDING_NAME_JIBERISHSPEC_UNLOCK = 'Unlock or lock frames'
+BINDING_NAME_JIBERISHSPEC_MAP = 'Show or hide the overlay map'
 function JiberishSpec01_ToggleDrawer() if UI.ToggleDrawer then UI:ToggleDrawer() end end
 function JiberishSpec01_ToggleMovers() if UI.ToggleMovers then UI:ToggleMovers() end end
+function JiberishSpec01_ToggleMap() if UI.ToggleOverlayMap then UI:ToggleOverlayMap() end end
