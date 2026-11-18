@@ -244,10 +244,10 @@ def icons(cell=32, columns=8):
 def menu_icon_shapes(name):
     """The micro menu and bag bar glyphs, in the same 16-unit cell as the icons.
 
-    One stroke weight (1.4 units) and one corner language throughout, so the
-    set reads as one family on SPEC-01 keys.
+    One stroke weight (1.6 units: heavy enough to hold at menu-key size) and
+    one corner language throughout, so the set reads as one family on SPEC-01 keys.
     """
-    W = 1.4
+    W = 1.6
 
     def lines(*points, width=W):
         return lambda x, y: min(segment(x, y, *points[i], *points[i + 1])
@@ -273,7 +273,9 @@ def menu_icon_shapes(name):
     table = {
         'character': [box(2.2, 2.2, 13.8, 13.8, 2, W), dot(8, 6.6, 2.3), lines((4.4, 13.8), (5, 11.6), (6.6, 10.4), (9.4, 10.4), (11, 11.6), (11.6, 13.8))],
         'spellbook': [box(3, 2.4, 13, 13.6, 1.2, W), lines((5.6, 2.4), (5.6, 13.6)), fill(*STAR_SMALL)],
-        'talents': [lines((8, 3), (4.2, 8), (8, 13)), lines((8, 3), (11.8, 8), (8, 13)), lines((4.2, 8), (11.8, 8)), dot(8, 3, 1.7), dot(4.2, 8, 1.7), dot(11.8, 8, 1.7), dot(8, 13, 1.7)],
+        # A talent tree: a root that branches into two chosen nodes.
+        'talents': [lines((8, 12.4), (8, 8.6)), lines((8, 8.6), (4.4, 5)), lines((8, 8.6), (11.6, 5)),
+                    dot(3.9, 4, 2.1), dot(12.1, 4, 2.1), circle(8, 12.6, 1.6), dot(8, 8.6, 1.2)],
         'professions': [box(2.6, 2, 9, 5, 0.8), lines((9, 3.5), (14, 3.5), width=1.6), lines((1.8, 8.4), (14.2, 8.4), (12.4, 10.4), (10.2, 10.4), (10.8, 13.8), (5.2, 13.8), (5.8, 10.4), (3.6, 10.4), (1.8, 8.4))],
         'achievements': [lines((2.8, 2.6), (8, 1.6), (13.2, 2.6), (13.2, 8), (8, 14.2), (2.8, 8), (2.8, 2.6)), fill(*STAR)],
         'legacy': [lines((3.8, 2.4), (12.2, 2.4)), lines((3.8, 13.6), (12.2, 13.6)),

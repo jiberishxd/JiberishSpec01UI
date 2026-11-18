@@ -2303,7 +2303,37 @@ local hoverHooked = setmetatable({}, {__mode = 'k'})
 local GROUPS = {menu = MICRO, bags = BAGS}
 
 local function Opt(group, field) return DB()[group..field] end
+-- Spellbook and talents come as one combined key (Retail) or two separate ones
+-- (Forever), and the client builds all three. Only the ones its own micro menu
+-- lays out belong on ours; asked of the menu once, after it has loaded.
+local Unlisted
+do
+local SPELL_KEYS = {PlayerSpellsMicroButton = true, SpellbookMicroButton = true, TalentMicroButton = true}
+local spellKeysListed
+function Unlisted(name)
+	if not SPELL_KEYS[name] then return false end
+	if spellKeysListed == nil then
+		local micro = _G.MicroMenu
+		if type(micro) ~= 'table' or Forbidden(micro) or type(micro.GenerateButtonInfos) ~= 'function' then return false end
+		spellKeysListed = false
+		local ok, infos = pcall(micro.GenerateButtonInfos, micro)
+		if ok and type(infos) == 'table' then
+			local listed = {}
+			for _, info in ipairs(infos) do
+				local button = type(info) == 'table' and info.button
+				local buttonName = type(button) == 'table' and button.GetName and button:GetName()
+				if type(buttonName) == 'string' then listed[buttonName] = true end
+			end
+			if next(listed) then spellKeysListed = listed end
+		end
+	end
+	return spellKeysListed and not spellKeysListed[name] or false
+end
+end
+Deck.MenuUnlisted = Unlisted
+
 local function LeftOut(group, name)
+	if group == 'menu' and Unlisted(name) then return true end
 	local list = Opt(group, 'Hide')
 	return type(list) == 'table' and list[name] and true or false
 end
@@ -2626,7 +2656,7 @@ function Deck.ButtonRows(group)
 				if type(list) ~= 'table' then list = {}; DB()[group..'Hide'] = list end
 				list[name] = (not value) or nil
 			end,
-			hidden = function() return _G[name] == nil end}
+			hidden = function() return _G[name] == nil or (group == 'menu' and Unlisted(name)) end}
 	end
 	return rows
 end
