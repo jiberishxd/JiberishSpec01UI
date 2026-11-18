@@ -89,6 +89,7 @@ UI:RegisterDefaults('nameplates', {
 	auraTime = false,
 	-- Cast bar.
 	castHeight = 18, castIcon = true, castName = true, castTarget = true,
+	castFriendly = false, -- cast bars on friendly plates (enemies only by default)
 	castColor = {0.91, 0.63, 0.07}, castLockedColor = {0.55, 0.55, 0.52},
 	-- Threat.
 	threatColorBar = false, tankMode = 'auto', -- 'auto' | 'on' | 'off'
@@ -1304,6 +1305,7 @@ end
 local function CastStart(plate)
 	local cast, unit = plate.cast, plate.unit
 	if not DB().castbar then return false end
+	if plate.friendly and not DB().castFriendly then return false end
 	local duration, channel, empowering = Casting(unit)
 	if not duration then return false end
 	local name, texture, notInterruptible
@@ -1896,7 +1898,7 @@ function module:Refresh()
 		UI:Safe(UpdateQuest, plate)
 		UI:Safe(UpdateTarget, plate, false)
 		if not DB().threat then Lamp(plate.threat, false) end
-		if not DB().castbar then CastClear(plate) end
+		if not DB().castbar or (plate.friendly and not DB().castFriendly) then CastClear(plate) end
 	end
 	ApplySize()
 	ApplyCVars()
@@ -1987,6 +1989,8 @@ UI:RegisterPage('nameplates', {title = 'Nameplates', order = 15,
 	}},
 	{title = 'Cast bar', rows = {
 		{'switch', 'Cast bars', 'nameplates.castbar', 'Docked under each plate.'},
+		{'switch', 'Friendly cast bars', 'nameplates.castFriendly', 'Casts on friendly plates too. Off: only enemies show what they cast.',
+			disabled = function() return not Get('castbar') end, since = '0.5.2'},
 		{'slider', 'Height', 'nameplates.castHeight', 10, 30, 1, nil, format = Int, disabled = function() return not Get('castbar') end},
 		{'switch', 'Icon', 'nameplates.castIcon', nil, disabled = function() return not Get('castbar') end},
 		{'switch', 'Spell name', 'nameplates.castName', nil, disabled = function() return not Get('castbar') end},
