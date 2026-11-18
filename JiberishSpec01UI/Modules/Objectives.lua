@@ -3,17 +3,20 @@
 -- Housing: a dark device behind Blizzard's tracker, its printed header (lamp,
 -- model code, name, an LCD counter of tracked quests or the quest log) on the
 -- tracker header's own centre line, a hairline under it, and even gutters.
--- Sections: printed bands (a dim section code, the name in small caps, a
--- hairline rule and a round key that folds the section); a folded section
--- shows how many entries it holds on a small LCD.
--- Quests: the title sits on a plate that lifts with a soft lamp glow on hover;
--- a lamp left of it is unlit, lit in the key colour for the focused quest,
--- green once it is ready to turn in, red if it failed. Each objective has a
--- lamp in place of its dash, counts such as 3/8 sit on LCD chips with ghost
--- digits, progress bars are LED dot meters in glass, timers read on an LCD,
--- and "Ready for turn-in" is a lit badge. Quest item buttons wear a key.
--- Motion and sound: a new quest powers on (title prints in, lamp blinks, a
--- relay), a count prints its new value with a tick, a finished objective
+-- Sections: printed bands (Blizzard's own name in the header font, a hairline
+-- rule, a dim section code and a round key that folds the section); a folded
+-- section shows how many entries it holds on a small LCD.
+-- Quests: Blizzard's round quest buttons become small SPEC-01 keys with a
+-- monochrome glyph, lit in the key colour when focused, green when ready to
+-- turn in, red if failed (blocks without one get a lamp instead: one status
+-- light per quest). The title sits on a slab of dark glass with a thin edge
+-- in that state's colour; on hover it lifts with a soft lamp glow. Each
+-- objective has a lamp in place of its dash, an open count such as 3/8 sits
+-- on a small LCD glass under Blizzard's own digits, progress bars are LED dot
+-- meters in glass, timers read on an LCD and "Ready for turn-in" reads in a
+-- soft green ink beside a green lamp. Quest item buttons wear a key.
+-- Motion and sound: a new quest powers on (title prints in, its key flashes,
+-- a relay), a count that moves flashes its glass with a tick, a finished objective
 -- flashes its lamp with a detent, a finished quest gets a lamp sweep, and a
 -- quest that leaves powers down. Reduce motion and the sound settings rule.
 --
@@ -30,11 +33,12 @@
 --     their headers only;
 --   * changes the typeface and line spacing through the tracker's font
 --     objects, so Blizzard measures its lines in the new font and wraps them
---     within its own width; everything of ours is drawn over or under its
---     lines (a chip covers the count it measured), never beside them;
+--     within its own width; everything of ours is drawn under or beside its
+--     text in the space it leaves, never over it;
 --   * keeps everything it adds in side tables keyed by Blizzard's frames, and
---     quiets Blizzard's art with alpha and vertex alpha only (its own fade-in
---     animations reset alpha, so a vertex alpha of 0 keeps it quiet).
+--     quiets Blizzard's art with alpha and vertex alpha (its own animations
+--     reset alpha), hiding only art it never shows again; our own fills bake
+--     their alpha into the color texture.
 -- The housing is a frame of our own, anchored to the tracker and to the lowest
 -- section showing, so it follows Edit Mode moves and the content's height.
 local _, UI = ...
@@ -49,10 +53,12 @@ local function Plain(value) if not IsSecret(value) then return value end end
 local function Forbidden(object) return type(object) ~= 'table' or (object.IsForbidden and object:IsForbidden()) end
 -- Quiet one of Blizzard's regions. Textures also lose their color: the tracker's
 -- own animations set alpha back to 1, a vertex alpha of 0 survives them.
-local function Mute(region)
+-- hide: also hide it, for art Blizzard only ever animates and never shows again.
+local function Mute(region, hide)
 	if Forbidden(region) then return end
 	if region.IsObjectType and region:IsObjectType('Texture') then region:SetVertexColor(1, 1, 1, 0) end
 	if region.SetAlpha then region:SetAlpha(0) end
+	if hide and region.Hide then region:Hide() end
 end
 
 -- defaults:begin
@@ -95,6 +101,7 @@ local rigs = setmetatable({}, {__mode = 'k'})
 local bars = setmetatable({}, {__mode = 'k'})
 local items = setmetatable({}, {__mode = 'k'})
 local timers = setmetatable({}, {__mode = 'k'})
+local pois = setmetatable({}, {__mode = 'k'})
 local hooked = setmetatable({}, {__mode = 'k'})
 local counts = setmetatable({}, {__mode = 'k'})
 -- Keyed by quest or objective: what was seen last (so changes can tick), quests
@@ -108,13 +115,20 @@ local function MasterHeader()
 	return tracker and (tracker.Header or tracker.HeaderMenu)
 end
 local function Px(frame, n) return UI.Pixel and UI.Pixel.Px(frame, n) or n end
+-- A length in a frame's units, rounded to whole physical pixels.
+local function Snap(frame, value) return UI.Pixel and UI.Pixel.Snap(frame, value) or floor(value + 0.5) end
+-- A plain color texture: color and alpha baked into the texture itself.
+local function Fill(texture, token, alpha)
+	local r, g, b = Kit:RGB(token)
+	texture:SetColorTexture(r, g, b, alpha or 1)
+end
 local function Tag(kind, object) return Kit.MotionTag('ot-'..kind, object) end
 local function FontSize(fontString, fallback)
 	local _, size = fontString:GetFont()
 	size = Plain(size)
 	return type(size) == 'number' and size > 0 and size or fallback or 12
 end
-local function LampSize(size) return max(5, floor(size * 0.42 + 0.5)) end
+local function LampSize(frame, size) return max(Snap(frame, 5), Snap(frame, size * 0.42)) end
 
 -- Motion and sound ----------------------------------------------------------------
 local function Moving() return DB().motion ~= false and not Kit:Reduced() end
@@ -211,7 +225,7 @@ local function Measure(fontString, text)
 	end
 	measure:SetFont(path, size, flags or '')
 	measure:SetText(text)
-	return Plain(measure:GetStringWidth())
+	return Plain(measure:GetStringWidth()), Plain(measure:GetStringHeight())
 end
 
 -- Blizzard text prints in left to right, by its alpha gradient only (the
@@ -440,8 +454,8 @@ local function SkinRightEdge(section)
 end
 
 -- Lines -------------------------------------------------------------------------------
--- Each line gets a rig of our own above it (its lamp, a halo to flash and an
--- LCD chip over its count) and, for the ready line, a badge plate under it.
+-- Each line gets a rig of our own: above it its lamp and a halo to flash, under
+-- it a small LCD glass behind its count.
 local CHECK_ATLAS = 'ui-questtracker-tracker-check'
 local function IsCheck(icon)
 	if Forbidden(icon) then return false end
@@ -468,6 +482,7 @@ end
 local function Rig(line)
 	local rig = rigs[line]
 	if rig then return rig end
+	-- Above the line: the lamp and the halo it flashes from.
 	rig = CreateFrame('Frame', nil, line)
 	rig:SetAllPoints()
 	rig:EnableMouse(false)
@@ -476,9 +491,18 @@ local function Rig(line)
 	rig.halo:SetSize(5, 5)
 	rig.lamp = Kit:Led(rig.halo, 5, false)
 	rig.lamp:SetPoint('CENTER', rig.halo)
+	-- Under it: a small LCD glass the line's own count is printed on.
+	rig.back = CreateFrame('Frame', nil, line)
+	rig.back:SetAllPoints()
+	rig.back:EnableMouse(false)
+	rig.lcd = CreateFrame('Frame', nil, rig.back)
+	rig.lcd:EnableMouse(false)
+	rig.lcd.glass = Kit:Texture(rig.lcd, 'round-3', 'BACKGROUND', 1)
+	Kit:Place(rig.lcd.glass, rig.lcd, 0, 0, 0, 0)
+	rig.lcd:Hide()
 	-- Blizzard's glow sweeps and check flash give way to ours.
-	Mute(line.Glow)
-	Mute(line.CheckGlow)
+	Mute(line.Glow, true)
+	Mute(line.CheckGlow, true)
 	rigs[line] = rig
 	return rig
 end
@@ -489,35 +513,28 @@ local function SizeLamp(holder, lamp, size)
 	if lamp.glow then Kit:FitSprite(lamp.glow, size, size) end
 end
 
--- "Ready for turn-in" as a lit badge: a plate under the lamp and the line.
-local function ReadyPlate(rig, line, text, style)
-	if not rig.back then
-		rig.back = CreateFrame('Frame', nil, line)
-		rig.back:SetAllPoints()
-		rig.back:EnableMouse(false)
-		rig.plate = rig.back:CreateTexture(nil, 'BACKGROUND', nil, 1)
-		rig.plate:SetColorTexture(1, 1, 1, 1)
-		rig.wash = rig.back:CreateTexture(nil, 'BACKGROUND', nil, 2)
-		rig.wash:SetColorTexture(1, 1, 1, 1)
-		rig.wash:SetAllPoints(rig.plate)
+-- "Ready for turn-in" reads in a soft green ink: lit, not loud.
+local readyInk
+local function ReadyInk()
+	if not readyInk then
+		local r, g, b = Kit:RGB('ledGreen')
+		local ir, ig, ib = Kit:RGB('darkInk')
+		readyInk = {r * 0.55 + ir * 0.45, g * 0.55 + ig * 0.45, b * 0.55 + ib * 0.45}
 	end
-	rig.back:SetFrameLevel(max(line:GetFrameLevel() - 1, 0))
-	local width, room = Plain(text:GetStringWidth()), Plain(text:GetWidth())
-	local lines = text.GetNumLines and Plain(text:GetNumLines()) or 1
-	if type(width) ~= 'number' or type(room) ~= 'number' then rig.back:Hide() return end
-	width = (type(lines) == 'number' and lines > 1) and room or min(width, room)
-	local pad = PLATE_PAD[DB().density] or 2
-	if rig.readyWidth ~= width or rig.readyPad ~= pad then
-		rig.readyWidth, rig.readyPad = width, pad
-		rig.plate:ClearAllPoints()
-		rig.plate:SetPoint('TOP', text, 'TOP', 0, pad)
-		rig.plate:SetPoint('BOTTOM', text, 'BOTTOM', 0, -pad)
-		rig.plate:SetPoint('LEFT', rig.halo, 'LEFT', -3, 0)
-		rig.plate:SetPoint('RIGHT', text, 'LEFT', width + 4, 0)
-	end
-	Kit:Tint(rig.plate, 'darkEdge', 0.9)
-	Kit:Tint(rig.wash, style == 'green' and 'green' or 'lamp', 0.1)
-	rig.back:Show()
+	return readyInk
+end
+
+-- The LCD glass under a leading count (3/8): measured in Blizzard's own font
+-- from the start of its text, one physical pixel round the digits' box. The
+-- digits are Blizzard's own, so nothing can drift from them.
+local function PlaceCount(rig, text, count)
+	local width, height = Measure(text, count)
+	if not width or not height or width <= 0 or height <= 0 then return false end
+	local lcd, px = rig.lcd, Px(rig.lcd, 1)
+	lcd:ClearAllPoints()
+	lcd:SetPoint('TOPLEFT', text, 'TOPLEFT', -2 * px, px)
+	lcd:SetSize(Snap(lcd, width) + 4 * px, Snap(lcd, height) + px)
+	return true
 end
 
 local function PaintLine(block, key, line, ctx)
@@ -530,6 +547,9 @@ local function PaintLine(block, key, line, ctx)
 	local done = kind == 'ready' or (kind == 'objective' and Complete(line, check))
 	local lamps = db.lamps ~= false
 	local style = db.completed
+	local under = max(line:GetFrameLevel() - 1, 0)
+	rig.back:SetFrameLevel(under)
+	rig.lcd:SetFrameLevel(under)
 	-- The lamp takes the dash's and the check's place.
 	if check then icon:SetVertexColor(1, 1, 1, lamps and 0 or 1) end
 	if dash then dash:SetAlpha(lamps and 0 or 1) end
@@ -541,77 +561,58 @@ local function PaintLine(block, key, line, ctx)
 	local dashText = dash and Plain(dash:GetText())
 	local slot = (type(dashText) == 'string' and dashText ~= '') and 'dash' or 'margin'
 	if rig.slot ~= slot or rig.size ~= size then
-		rig.slot, rig.size = slot, size
-		SizeLamp(rig.halo, rig.lamp, LampSize(size))
+		rig.slot, rig.size, rig.count = slot, size, nil
+		SizeLamp(rig.halo, rig.lamp, LampSize(rig.halo, size))
 		rig.halo:ClearAllPoints()
 		if slot == 'dash' then rig.halo:SetPoint('CENTER', dash, 'CENTER', 0, 0)
-		else rig.halo:SetPoint('CENTER', text, 'TOPLEFT', -4, -size / 2) end
+		else rig.halo:SetPoint('CENTER', text, 'TOPLEFT', -Snap(rig.halo, 5), -Snap(rig.halo, size / 2)) end
 	end
 	local showLamp = lamps and kind ~= 'waypoint'
 	Kit:ShowLed(rig.lamp, showLamp)
-	if showLamp and not rig.blinking then
+	if showLamp then
 		if kind == 'failed' then Kit:SetLed(rig.lamp, true, 'red')
-		elseif kind == 'ready' then Kit:SetLed(rig.lamp, true, style == 'green' and 'ledGreen' or nil)
+		elseif kind == 'ready' then Kit:SetLed(rig.lamp, true, 'ledGreen')
 		elseif done then Kit:SetLed(rig.lamp, true, style == 'green' and 'green' or nil)
 		else Kit:SetLed(rig.lamp, false) end
 	end
 	if kind == 'failed' then Kit:Tint(text, 'red')
-	elseif kind == 'ready' then Kit:Tint(text, style == 'green' and 'green' or 'darkInk')
+	elseif kind == 'ready' then Kit:Tint(text, ReadyInk())
 	elseif kind == 'waypoint' then Kit:Tint(text, 'darkDim')
 	elseif done and style == 'green' then Kit:Tint(text, 'green')
 	elseif done and style == 'dim' then Kit:Tint(text, 'darkDim', 0.55)
 	else Kit:Tint(text, done and 'darkInk' or 'darkDim') end
-	if kind == 'ready' then ReadyPlate(rig, line, text, style)
-	elseif rig.back then rig.back:Hide() end
 
-	-- A leading count (3/8) reads on a chip laid exactly over Blizzard's digits.
+	-- A leading count (3/8) of an objective still to do sits on LCD glass.
 	local raw = Plain(text:GetText())
 	local parsed = kind == 'objective' and type(raw) == 'string' and raw:match('^(%d[%d,%.]*/%d[%d,%.]*)%s') or nil
-	local count = db.chips ~= false and parsed or nil
-	local chip = rig.chip
-	if count then
-		if not chip then
-			chip = Chip(rig, 9)
-			rig.chip = chip
-		end
-		if rig.count ~= count or rig.chipSize ~= size then
-			local width = Measure(text, count)
-			if width then
-				rig.chipSize = size
-				chip:ClearAllPoints()
-				chip:SetPoint('TOPLEFT', text, 'TOPLEFT', -1.5, 1)
-				chip:SetSize(width + 3, size + 2)
-				chip.text = nil
-				SetChip(chip, count, max(7, floor(size * 0.8 + 0.5)))
-			else
-				count = nil
-			end
-		end
+	local count = db.chips ~= false and not done and parsed or nil
+	if count and (rig.count ~= count) then
+		if not PlaceCount(rig, text, count) then count = nil end
 	end
 	rig.count = count
-	if chip then
-		chip:SetShown(count ~= nil)
-		chip:SetAlpha(done and style == 'dim' and 0.55 or 1)
-	end
+	if count then Kit:Tint(rig.lcd.glass, Kit:DB().finish == 'graphite' and 'lcd' or 'darkEdge', 0.95) end
+	rig.lcd:SetShown(count ~= nil)
 
-	-- Changes since the last pass: a count that moved ticks and prints, a
-	-- finished objective flashes its lamp with a detent.
+	-- Changes since the last pass: a count that moved flashes its glass and
+	-- ticks, a finished objective flashes its lamp with a detent.
 	ctx.index = ctx.index + 1
 	local id = Plain(block.id)
 	if id == nil or (type(id) ~= 'number' and type(id) ~= 'string') then return end
 	local stamp = tostring(id)..':'..tostring(key)
 	local before, now = seen[stamp], (parsed or '')..(done and '+' or '-')
 	if ctx.powering then
-		PrintChip(count and chip, ctx.index * 0.05)
+		if count and Moving() then
+			local delay = ctx.index * 0.05
+			C_Timer.After(delay, function() if rig.lcd:IsVisible() then Kit:Flash(rig.lcd, {alpha = 0.35, duration = 0.3}) end end)
+		end
 	elseif before and before ~= now and module.settled then
 		local wasDone, oldCount = before:sub(-1) == '+', before:sub(1, -2)
 		if done and not wasDone then
 			Sound('detent')
 			if lamps and Moving() then Kit:Flash(rig.halo, {alpha = 0.85, duration = 0.35}) end
-			PrintChip(count and chip)
 		elseif parsed and oldCount ~= '' and oldCount ~= parsed then
 			Sound('tick')
-			PrintChip(chip)
+			if count and Moving() then Kit:Flash(rig.lcd, {alpha = 0.35, duration = 0.3}) end
 		end
 	end
 	seen[stamp] = now
@@ -645,7 +646,7 @@ local function SweepBand(entry)
 	local clip = CreateFrame('Frame', nil, entry.front)
 	clip:SetClipsChildren(true)
 	clip:EnableMouse(false)
-	clip:SetAllPoints(entry.plate)
+	clip:SetAllPoints(entry.slab)
 	local band = CreateFrame('Frame', nil, clip)
 	band:EnableMouse(false)
 	band.left = band:CreateTexture(nil, 'OVERLAY')
@@ -662,7 +663,7 @@ local function SweepBand(entry)
 	return clip
 end
 
--- A band of lamp light runs across the title plate.
+-- A band of lamp light runs across the title's slab.
 local function Sweep(entry, token)
 	if not entry.title or not Moving() then return end
 	local clip = SweepBand(entry)
@@ -699,8 +700,8 @@ local function PowerOn(entry)
 	if not Moving() or not entry.title then return end
 	PrintIn(entry.title)
 	Blink(entry, entry.lamp, 3, 0.48)
-	Kit:Flash(entry.halo, {alpha = 0.8, duration = 0.45})
-	entry.plate:SetAlpha(0.9)
+	Kit:Flash(entry.key or entry.halo, {alpha = 0.8, duration = 0.45})
+	entry.slab:SetAlpha(0.9)
 	entry.plateTarget = nil
 	Sweep(entry, 'lamp')
 end
@@ -709,7 +710,7 @@ end
 local function Completed(block, entry)
 	if not Moving() then return end
 	Sweep(entry, 'ledGreen')
-	Kit:Flash(entry.halo, {token = 'ledGreen', alpha = 0.9, duration = 0.5})
+	Kit:Flash(entry.key or entry.halo, {token = 'ledGreen', alpha = 0.9, duration = 0.5})
 	if DB().lamps == false or type(block.usedLines) ~= 'table' then return end
 	local list = {}
 	for _, line in pairs(block.usedLines) do
@@ -778,19 +779,27 @@ local function Block(block)
 	entry = {title = TitleOf(block)}
 	blocks[block] = entry
 	for _, part in ipairs({'Background', 'HeaderBackground', 'Stripe', 'Sheen', 'Glow', 'ShineTop', 'ShineBottom', 'HeaderGlow'}) do
-		Mute(block[part])
+		Mute(block[part], true)
 	end
-	-- Under the title: a plate and its glow, one level below the block's text.
+	-- Under the title, one level below the block's text: a slab of dark glass
+	-- (a fill, a low wash and a thin state edge on its left) and a hover glow.
 	entry.back = CreateFrame('Frame', nil, block)
 	entry.back:SetAllPoints()
 	entry.back:EnableMouse(false)
-	entry.plate = entry.back:CreateTexture(nil, 'BACKGROUND', nil, 1)
-	entry.plate:SetColorTexture(1, 1, 1, 1)
-	entry.plate:SetAlpha(0)
+	entry.slab = CreateFrame('Frame', nil, entry.back)
+	entry.slab:EnableMouse(false)
+	entry.slab:SetAlpha(0)
+	entry.fill = entry.slab:CreateTexture(nil, 'BACKGROUND', nil, 1)
+	entry.fill:SetAllPoints()
+	entry.wash = entry.slab:CreateTexture(nil, 'BACKGROUND', nil, 2)
+	entry.wash:SetAllPoints()
+	entry.edge = entry.slab:CreateTexture(nil, 'BACKGROUND', nil, 3)
+	entry.edge:SetPoint('TOPLEFT')
+	entry.edge:SetPoint('BOTTOMLEFT')
 	entry.glow = Kit:Texture(entry.back, 'glow', 'BACKGROUND', 0)
 	entry.glow:SetAlpha(0)
 	Kit:Tint(entry.glow, 'lamp')
-	-- Over it: the title's lamp and the halo it flashes from.
+	-- Over it: the title's lamp (for blocks without a quest key) and its halo.
 	entry.front = CreateFrame('Frame', nil, block)
 	entry.front:SetAllPoints()
 	entry.front:EnableMouse(false)
@@ -802,14 +811,69 @@ local function Block(block)
 	return entry
 end
 
-local function PlacePlate(entry, lift)
-	local title, plate, pad = entry.title, entry.plate, PLATE_PAD[DB().density] or 2
-	plate:ClearAllPoints()
-	plate:SetPoint('TOPLEFT', title, 'TOPLEFT', -7, pad + lift)
-	plate:SetPoint('BOTTOMRIGHT', title, 'BOTTOMRIGHT', 1, -pad + lift)
+-- The slab starts just right of the quest key's column and ends at the title's
+-- right edge (left of any item key), on whole physical pixels.
+local function PlaceSlab(entry, lift)
+	local title, slab = entry.title, entry.slab
+	local pad = Px(slab, PLATE_PAD[DB().density] or 2)
+	slab:ClearAllPoints()
+	slab:SetPoint('TOPLEFT', title, 'TOPLEFT', -Snap(slab, 4), pad + lift)
+	slab:SetPoint('BOTTOMRIGHT', title, 'BOTTOMRIGHT', 0, -pad + lift)
+	entry.edge:SetWidth(Px(slab, 2))
 	entry.glow:ClearAllPoints()
-	entry.glow:SetPoint('TOPLEFT', plate, 'TOPLEFT', -8, 8)
-	entry.glow:SetPoint('BOTTOMRIGHT', plate, 'BOTTOMRIGHT', 8, -8)
+	entry.glow:SetPoint('TOPLEFT', slab, 'TOPLEFT', -8, 8)
+	entry.glow:SetPoint('BOTTOMRIGHT', slab, 'BOTTOMRIGHT', 8, -8)
+end
+
+-- Quest keys -----------------------------------------------------------------------------
+-- Blizzard's round quest buttons (the ? ! and ... left of each title) become
+-- small SPEC-01 round keys: our key and ring under Blizzard's glyph, its own
+-- ring art quiet, the glyph monochrome. Lit in the key colour when focused,
+-- green when ready to turn in, red if failed. Style only: they are pooled, so
+-- nothing is moved and everything is set again on each pass.
+local POI_ART = {'NormalTexture', 'PushedTexture', 'HighlightTexture', 'Glow', 'UnderlayAtlas', 'UnderlayBannerAtlas',
+	'UnderlayBannerAtlasHighlight'}
+local POI_TOKENS = {focus = 'lamp', complete = 'ledGreen', failed = 'red'}
+local function DressPOI(button, state)
+	local dress = pois[button]
+	if not dress then
+		dress = CreateFrame('Frame', nil, button)
+		dress:EnableMouse(false)
+		dress:SetPoint('CENTER')
+		dress.glow = Kit:Texture(dress, 'glow', 'BACKGROUND', -1)
+		dress.glow:SetPoint('TOPLEFT', -6, 6)
+		dress.glow:SetPoint('BOTTOMRIGHT', 6, -6)
+		dress.glow:SetAlpha(0)
+		dress.skin = Kit:Skin(dress, 'key-round', 'BACKGROUND', 0)
+		dress.ring = Kit:Texture(dress, 'circle-ring', 'ARTWORK', 0)
+		dress.ring:SetAllPoints()
+		button:HookScript('OnEnter', function() dress.hover = true; Kit:FadeTo(dress.glow, 0.25, 'FAST') end)
+		button:HookScript('OnLeave', function() dress.hover = nil; Kit:FadeTo(dress.glow, dress.lit or 0, 'FAST') end)
+		pois[button] = dress
+	end
+	-- Just under Blizzard's glyph layer, above the button's own (quiet) art.
+	dress:SetFrameLevel(max(button:GetFrameLevel(), 1))
+	local size = Snap(dress, 17)
+	if dress.size ~= size then
+		dress.size = size
+		dress:SetSize(size, size)
+	end
+	for _, key in ipairs(POI_ART) do
+		local region = button[key]
+		if not Forbidden(region) and region.SetVertexColor then region:SetVertexColor(1, 1, 1, 0) end
+	end
+	local token = POI_TOKENS[state]
+	local glyph = button.Display and button.Display.Icon
+	if not Forbidden(glyph) and glyph.SetDesaturated then
+		glyph:SetDesaturated(true)
+		local r, g, b = Kit:RGB(token or 'ink')
+		glyph:SetVertexColor(r, g, b, 1)
+	end
+	local r, g, b = Kit:RGB(token or 'keyEdge')
+	dress.ring:SetVertexColor(r, g, b, token and 1 or 0.6)
+	Kit:Tint(dress.glow, token or 'lamp')
+	dress.lit = token and 0.18 or 0
+	if not dress.hover then Kit:FadeTo(dress.glow, dress.lit, 'FAST') end
 end
 
 local function PaintTitle(block, entry, ctx)
@@ -822,41 +886,50 @@ local function PaintTitle(block, entry, ctx)
 	local focused = quest and ctx.focus == id
 	local complete = quest and log and log.IsComplete and Plain(log.IsComplete(id)) == true or false
 	local failed = quest and log and log.IsFailed and Plain(log.IsFailed(id)) == true or false
+	local state = failed and 'failed' or focused and 'focus' or complete and 'complete' or nil
 	local hover = entry.hover
 	local token
 	if hover or focused then token = 'lamp'
 	elseif failed then token = 'red'
-	elseif complete then token = 'green'
 	elseif db.titleColor == 'difficulty' and quest then token = Difficulty(id) or 'darkInk'
 	else token = 'darkInk' end
 	Kit:Tint(title, token)
 
-	-- The lamp, centred on the title's first line, left of it.
+	-- One status light per quest: its quest key when it has one, else our lamp.
+	local named = (Plain(title:GetText()) or '') ~= ''
+	local poi = block.poiButton
+	local keyed = not Forbidden(poi) and poi:IsShown()
+	if keyed then UI:Safe(DressPOI, poi, state) end
+	entry.key = keyed and pois[poi] or nil
 	local size = FontSize(title, 12)
 	if entry.size ~= size then
 		entry.size = size
-		SizeLamp(entry.halo, entry.lamp, LampSize(size))
+		SizeLamp(entry.halo, entry.lamp, LampSize(entry.halo, size))
 		entry.halo:ClearAllPoints()
-		entry.halo:SetPoint('CENTER', title, 'TOPLEFT', -3.5, -size / 2)
+		entry.halo:SetPoint('CENTER', title, 'TOPLEFT', -Snap(entry.halo, 9), -Snap(entry.halo, size / 2))
 	end
-	-- Some blocks (bonus objectives) leave their title empty: no lamp, no plate.
-	local named = (Plain(title:GetText()) or '') ~= ''
-	Kit:ShowLed(entry.lamp, named and db.lamps ~= false)
+	Kit:ShowLed(entry.lamp, named and not keyed and db.lamps ~= false)
 	if not entry.blinking then
-		Kit:SetLed(entry.lamp, failed or focused or complete, failed and 'red' or (complete and not focused) and 'ledGreen' or nil)
+		Kit:SetLed(entry.lamp, state ~= nil, state == 'failed' and 'red' or state == 'complete' and 'ledGreen' or nil)
 	end
-	if focused and entry.focus ~= id and module.settled and Moving() then Kit:Flash(entry.halo, {alpha = 0.7, duration = 0.4}) end
+	if focused and entry.focus ~= id and module.settled and Moving() then
+		Kit:Flash(entry.key or entry.halo, {alpha = 0.6, duration = 0.4})
+	end
 	entry.focus = focused and id or nil
 
-	-- The plate: lifted and glowing on hover, lit for the focused quest, washed
-	-- green once the quest is ready to turn in.
-	local target = not named and 0 or hover and 0.9 or focused and 0.6 or complete and 1 or 0
-	if complete and not hover and not focused then Kit:Tint(entry.plate, 'green', 0.22) else Kit:Tint(entry.plate, 'darkEdge') end
+	-- The slab: dark glass with a thin edge in the state's colour (key colour
+	-- when focused, green when ready, red if failed) and the faintest wash of
+	-- it; on hover it lifts two physical pixels with a soft lamp glow.
+	local edge = state and POI_TOKENS[state]
+	local target = not named and 0 or (hover or state) and 1 or 0
+	Fill(entry.fill, hover and 'darkEdge' or 'glass', hover and 0.6 or 0.45)
+	Fill(entry.wash, edge or 'lamp', edge and 0.05 or 0)
+	Fill(entry.edge, edge or 'darkEdge', edge and 0.9 or 0)
 	if entry.plateTarget ~= target or entry.lifted ~= (hover or false) then
 		entry.plateTarget, entry.lifted = target, hover or false
-		PlacePlate(entry, hover and Px(entry.back, 2) or 0)
-		Kit:FadeTo(entry.plate, target, 'FAST')
-		Kit:FadeTo(entry.glow, (hover and named) and 0.18 * min(1.5, Kit:Intensity()) or 0, 'FAST')
+		PlaceSlab(entry, hover and Px(entry.slab, 2) or 0)
+		Kit:FadeTo(entry.slab, target, 'FAST')
+		Kit:FadeTo(entry.glow, (hover and named) and 0.14 * min(1.5, Kit:Intensity()) or 0, 'FAST')
 	end
 
 	-- A quest that has just finished gets its sweep.
@@ -868,7 +941,9 @@ local function PaintTitle(block, entry, ctx)
 end
 
 local function PaintBlock(block, entry, ctx)
-	entry.back:SetFrameLevel(max(block:GetFrameLevel() - 1, 0))
+	local under = max(block:GetFrameLevel() - 1, 0)
+	entry.back:SetFrameLevel(under)
+	entry.slab:SetFrameLevel(under)
 	PaintTitle(block, entry, ctx)
 	ctx.index = 0
 	local lines = block.usedLines
@@ -1004,44 +1079,40 @@ local function RoundKey(button)
 	return key
 end
 
+-- The header font's size, and the section code's (a little over half of it).
 local function HeaderSize()
 	local font, size = _G.ObjectiveTrackerHeaderFont, nil
 	if font and font.GetFont then
 		local _, got = font:GetFont()
 		size = Plain(got)
 	end
-	return max(8, floor((type(size) == 'number' and size or 14) * 0.72 + 0.5))
+	size = type(size) == 'number' and size or 14
+	return size, max(7, floor(size * 0.6 + 0.5))
 end
 
+-- A section band is Blizzard's own name (in the tracker's header font, so
+-- there is one label, never two), a hairline rule after it, the dim section
+-- code, a folded count and the round key, all on the band's centre line.
 local function SkinHeader(header, code, section)
 	if Forbidden(header) or headers[header] then return end
 	local master = header == MasterHeader()
 	local entry = {master = master, section = section}
 	headers[header] = entry
 	for _, part in ipairs({'Background', 'Line', 'LineSheen', 'LineGlow', 'Divider', 'Sheen', 'Glow', 'Shine', 'Stripe'}) do
-		Mute(header[part])
-	end
-	local text = header.Text
-	if text then
-		Kit:Font(text, 10, '', true)
-		Kit:Tint(text, 'darkInk')
-		-- A section prints its own band; the housing's header names the device.
-		if not master or DB().housing ~= false then text:SetAlpha(0) end
+		Mute(header[part], true)
 	end
 	local button = header.MinimizeButton
 	if not Forbidden(button) then entry.key = RoundKey(button) end
 	if not master then
 		entry.code = Kit:Label(header, code or '', 'darkDim', 8, true)
-		entry.code:SetPoint('LEFT', header, 'LEFT', -2, 0)
-		entry.label = Kit:Label(header, '', 'darkInk', 9, true)
-		entry.label:SetJustifyH('LEFT')
-		entry.label:SetWordWrap(false)
-		-- A hairline from the name to the key, as the reference rules its groups.
+		entry.code:SetWordWrap(false)
 		entry.rule = header:CreateTexture(nil, 'ARTWORK')
 		entry.rule:SetColorTexture(1, 1, 1, 1)
 		Kit:Tint(entry.rule, 'darkEdge')
 		entry.count = Chip(header, 8)
 		entry.count:SetHeight(12)
+		if entry.key then entry.count:SetPoint('RIGHT', entry.key, 'LEFT', -Snap(header, 5), 0)
+		else entry.count:SetPoint('RIGHT', header, 'RIGHT', -Snap(header, 4), 0) end
 	end
 	PaintChevron(header, IsCollapsed(header), false)
 	if header.SetCollapsed then
@@ -1059,51 +1130,52 @@ function module.PaintHeader(header)
 	local entry = headers[header]
 	if not entry then return end
 	local db = DB()
+	local text = header.Text
 	if entry.master then
-		if header.Text then header.Text:SetAlpha(db.housing ~= false and 0 or 1) end
+		if text then text:SetAlpha(db.housing ~= false and 0 or 1) end
 		return
 	end
-	local style = db.headerStyle or 'code'
-	local text = header.Text and Plain(header.Text:GetText())
-	if type(text) ~= 'string' then text = '' end
-	local size = HeaderSize()
-	if entry.text ~= text or entry.size ~= size or entry.style ~= style then
-		entry.text, entry.size, entry.style = text, size, style
-		Kit:Font(entry.label, size, '', true)
-		Kit:Font(entry.code, max(7, size - 2), '', true)
-		entry.code:SetShown(style == 'code')
-		entry.label:ClearAllPoints()
-		if style == 'code' then entry.label:SetPoint('LEFT', entry.code, 'RIGHT', 6, 0)
-		else entry.label:SetPoint('LEFT', header, 'LEFT', -2, 0) end
-		entry.label:SetWidth(0)
-		entry.label:SetText(strupper(text))
-		-- Long names in a wide typeface stop short of the count and the key.
-		local width = Plain(header:GetWidth())
-		local codeWidth = style == 'code' and (Plain(entry.code:GetStringWidth()) or 0) + 6 or 0
-		local room = (type(width) == 'number' and width or 260) - codeWidth - 56
-		local wide = Plain(entry.label:GetStringWidth()) or 0
-		if room > 24 and wide > room then entry.label:SetWidth(room) end
+	if text then
+		text:SetAlpha(1)
+		Kit:Tint(text, 'darkInk')
 	end
+	local style = db.headerStyle or 'code'
+	local textSize, codeSize = HeaderSize()
 	local collapsed = IsCollapsed(header)
 	local n = counts[entry.section]
 	local folded = collapsed and type(n) == 'number' and n > 0 or false
-	if not entry.counted then
-		entry.counted = true
-		if entry.key then entry.count:SetPoint('RIGHT', entry.key, 'LEFT', -5, 0)
-		else entry.count:SetPoint('RIGHT', header, 'RIGHT', -4, 0) end
-	end
 	if folded then SetChip(entry.count, format('%02d', min(n, 99)), 8, true) end
 	entry.count:SetShown(folded)
-	entry.rule:SetShown(style ~= 'plain')
+	-- The code sits left of the count (or the key), its baseline on the name's.
 	local right = folded and entry.count or entry.key or false
-	if style ~= 'plain' and entry.ruleTo ~= right then
-		entry.ruleTo = right
+	if entry.style ~= style or entry.codeSize ~= codeSize or entry.codeTo ~= right then
+		entry.style, entry.codeSize, entry.codeTo, entry.ruleTo = style, codeSize, right, nil
+		Kit:Font(entry.code, codeSize, '', true)
+		local drop = -Snap(header, (textSize - codeSize) * 0.3)
+		entry.code:ClearAllPoints()
+		if right then entry.code:SetPoint('RIGHT', right, 'LEFT', -Snap(header, 6), drop)
+		else entry.code:SetPoint('RIGHT', header, 'RIGHT', -Snap(header, 6), drop) end
+		entry.code:SetShown(style == 'code')
+	end
+	-- The rule runs from the end of the name to the code (or the count or key);
+	-- a name too long for one leaves it out.
+	local width = text and Plain(text:GetStringWidth())
+	local headerWidth = Plain(header:GetWidth())
+	local showRule = style ~= 'plain' and type(width) == 'number' and type(headerWidth) == 'number'
+	if showRule then
+		local used = 7 + width + 6 + 6 + 22 + (folded and 26 or 0) + (style == 'code' and (Plain(entry.code:GetStringWidth()) or 0) + 6 or 0)
+		showRule = headerWidth - used >= 8
+	end
+	local ruleTo = style == 'code' and entry.code or right
+	if showRule and (entry.ruleTo ~= ruleTo or entry.nameWidth ~= width) then
+		entry.ruleTo, entry.nameWidth = ruleTo, width
 		entry.rule:ClearAllPoints()
-		entry.rule:SetPoint('LEFT', entry.label, 'RIGHT', 6, 0)
-		if right then entry.rule:SetPoint('RIGHT', right, 'LEFT', -6, 0)
-		else entry.rule:SetPoint('RIGHT', header, 'RIGHT', -6, 0) end
+		entry.rule:SetPoint('LEFT', text, 'LEFT', Snap(header, width + 7), 0)
+		if ruleTo then entry.rule:SetPoint('RIGHT', ruleTo, 'LEFT', -Snap(header, 6), 0)
+		else entry.rule:SetPoint('RIGHT', header, 'RIGHT', -Snap(header, 6), 0) end
 	end
 	entry.rule:SetHeight(Px(header, 1))
+	entry.rule:SetShown(showRule and true or false)
 end
 
 -- Housing -----------------------------------------------------------------------------
@@ -1354,9 +1426,10 @@ local function Queue() module:Queue() end
 -- After a setting or the typeface changes, everything measures again.
 local function Invalidate()
 	wipe(difficulty)
-	for _, entry in pairs(headers) do entry.text, entry.ruleTo = nil, nil end
+	readyInk = nil
+	for _, entry in pairs(headers) do entry.style, entry.ruleTo = nil, nil end
 	for _, entry in pairs(blocks) do entry.size, entry.plateTarget = nil, nil end
-	for _, rig in pairs(rigs) do rig.slot, rig.count, rig.readyWidth = nil, nil, nil end
+	for _, rig in pairs(rigs) do rig.slot, rig.count = nil, nil end
 	for _, chip in pairs(timers) do chip.text = nil end
 	if housing then housing.counter.text = nil end
 end
@@ -1459,8 +1532,8 @@ UI:RegisterPage('objectives', {title = 'Objectives', order = 15, cards = {
 		{'switch', 'Housing', 'objectives.housing', 'The dark OT-1 device behind the tracker.'},
 		{'segmented', 'Header counter', 'objectives.counter', items = {{'tracked', 'Tracked'}, {'log', 'Quest log'}, {'off', 'Off'}},
 			note = 'The LCD in the housing\'s header: quests you track, or quests in your log out of the most you can hold.', since = SINCE},
-		{'switch', 'Objective lamps', 'objectives.lamps', 'A lamp in place of each dash and check, lit once the objective is done, and one beside each title: key colour for the focused quest, green when it is ready to turn in.', since = SINCE},
-		{'switch', 'LCD counters', 'objectives.chips', 'Counts such as 3/8, and quest timers, read on small LCD chips with unlit ghost digits behind.', since = SINCE},
+		{'switch', 'Objective lamps', 'objectives.lamps', 'A lamp in place of each dash and check, lit once the objective is done. Each quest\'s round key lights in the key colour when focused, green when ready to turn in.', since = SINCE},
+		{'switch', 'LCD counters', 'objectives.chips', 'Counts such as 3/8 sit on a small LCD glass while the objective is open; quest timers read on an LCD chip.', since = SINCE},
 		{'note', 'Place and size the tracker with Edit Mode; the housing follows it.'},
 	}},
 	{title = 'Text', rows = {
