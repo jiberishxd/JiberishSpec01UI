@@ -606,18 +606,28 @@ local function Casting()
 end
 
 -- Hidden values count as "not full", so a part comes back rather than stays out.
-local function Full(current, most)
-	if IsSecret(current) or IsSecret(most) or type(current) ~= 'number' or type(most) ~= 'number' then return false end
-	return current >= most
+-- Health and power the game hides (secret, around a fight) keep the last
+-- answer read in the open, rather than holding every part up.
+local healthLow, powerBusy = false, false
+local function HealthLow()
+	local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost('player')
+	if not IsSecret(dead) and dead then healthLow = false return false end
+	local current, most = UnitHealth('player'), UnitHealthMax('player')
+	if not IsSecret(current) and not IsSecret(most) and type(current) == 'number' and type(most) == 'number' and most > 0 then
+		healthLow = current < most
+	end
+	return healthLow
 end
 
 local EMPTYING = {RAGE = true, RUNIC_POWER = true, LUNAR_POWER = true, FURY = true, PAIN = true, INSANITY = true, MAELSTROM = true}
 local function PowerSettled()
 	local _, token = UnitPowerType('player')
 	local current, most = UnitPower('player'), UnitPowerMax('player')
-	if IsSecret(token) or IsSecret(current) then return false end
-	if token and EMPTYING[token] then return current == 0 end
-	return Full(current, most)
+	if not IsSecret(token) and not IsSecret(current) and not IsSecret(most) and type(current) == 'number' and type(most) == 'number' then
+		if token and EMPTYING[token] then powerBusy = current ~= 0
+		else powerBusy = most > 0 and current < most end
+	end
+	return not powerBusy
 end
 
 local function On(db, trigger)
@@ -629,7 +639,7 @@ local function Wanted(db)
 	if fighting or InCombatLockdown() then return On(db, 'combat') end
 	if On(db, 'target') and UnitExists('target') then return true end
 	if On(db, 'casting') and Casting() then return true end
-	if On(db, 'health') and not Full(UnitHealth('player'), UnitHealthMax('player')) then return true end
+	if On(db, 'health') and HealthLow() then return true end
 	if On(db, 'power') and not PowerSettled() then return true end
 	if On(db, 'group') and IsInGroup() then return true end
 	if On(db, 'instance') then
