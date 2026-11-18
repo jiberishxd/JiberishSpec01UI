@@ -1817,6 +1817,27 @@ local function LayoutConsoleNow()
 	if strip and stripCount > 0 and edge == 'bottom' then
 		Put('menu', 'menu', strip, (consoleWidth - stripW) / 2, consoleHeight - PAD - Deck.BottomHeight() - stripH, stripW, stripH)
 	end
+	-- The stance and pet keys: tucked on the console's top edge, out on their
+	-- own spot (taken out), or set into the body like a bank (a saved spot).
+	-- Stance keys with no stances for this character take no room.
+	local minis = Deck.Minis()
+	for _, mini in ipairs(minis) do
+		local spot = Saved(mini.key)
+		mini.columns = spot and tonumber(spot.columns) or nil
+		mini.keys = spot and tonumber(spot.keys) or nil
+		Deck.ShapeMini(mini)
+		if spot and spot.off then
+			mini.state = 'out'
+		elseif spot and tonumber(spot.x) and tonumber(spot.y) then
+			mini.state = 'in'
+			if mini.count > 0 then
+				local w, h = Measure(mini.module)
+				Put(mini.key, 'mini', mini, 0, 0, w, h)
+			end
+		else
+			mini.state = 'tucked'
+		end
+	end
 
 	-- The user's arrangement: each saved block at its spot (a cast bar or the
 	-- deck at its width). Nothing may cover another block or leave the body,
@@ -1831,7 +1852,7 @@ local function LayoutConsoleNow()
 			local spot = custom[block.key]
 			if type(spot) == 'table' and tonumber(spot.x) and tonumber(spot.y) then
 				if (block.kind == 'cast' or block.kind == 'deck') and tonumber(spot.w) then block.w = Snap(max(tonumber(spot.w), 40)) end
-				block.x, block.y, block.saved = Snap(tonumber(spot.x)), SnapUp(tonumber(spot.y)), true
+				block.x, block.y, block.saved, block.rank = Snap(tonumber(spot.x)), SnapUp(tonumber(spot.y)), true, tonumber(spot.rank)
 			end
 		end
 		local grid = UI.ConsoleGrid
@@ -1863,6 +1884,8 @@ local function LayoutConsoleNow()
 		elseif kind == 'menu' then
 			frame:ClearAllPoints()
 			frame:SetPoint('TOPLEFT', console, 'TOPLEFT', x, -y)
+		elseif kind == 'mini' then
+			Deck.PlaceMini(frame, console, x, y)
 		elseif (kind == 'unit' or kind == 'cast') and frame then
 			docked[block.key] = frame
 			local ratio = select(3, Measure(frame))
@@ -1943,15 +1966,24 @@ local function LayoutConsoleNow()
 		-- Put the menu and bag keys into it (or back on their own devices).
 		if Deck.LayoutMenu then Deck.LayoutMenu() end
 	end
-	-- Pet and stance modules sit on the console's top edge, tucked under it.
-	if stanceModule then
-		stanceModule:ClearAllPoints()
-		stanceModule:SetPoint('BOTTOMLEFT', console, 'TOPLEFT', left - 8, -8)
+	-- Tucked pet and stance keys sit on the console's top edge, under it;
+	-- taken-out ones go back to their own spot. The editor sees the tucked
+	-- ones too (outside the body, so they hold no room in it).
+	local tucked = {}
+	for _, mini in ipairs(minis) do
+		if mini.state == 'out' then
+			Deck.FreeMini(mini)
+		elseif mini.state == 'tucked' then
+			local w, h = Measure(mini.module)
+			local x = mini.key == 'stance' and left - 8 or consoleWidth - left + 8 - w
+			Deck.PlaceMini(mini, console, x, 8 - h, true)
+			if mini.count > 0 then
+				tucked[#tucked + 1] = {key = mini.key, kind = 'mini', x = x, y = 8 - h, w = w, h = h, tucked = true,
+					count = mini.count, keySize = mini.size}
+			end
+		end
 	end
-	if petModule then
-		petModule:ClearAllPoints()
-		petModule:SetPoint('BOTTOMRIGHT', console, 'TOPRIGHT', -left + 8, -8)
-	end
+	console.tucked = tucked
 end
 
 function LayoutConsole()
@@ -2022,8 +2054,12 @@ end
 function UI:ConsoleSlots()
 	local list = {}
 	for _, slot in ipairs(console and console.slots or {}) do
-		list[#list + 1] = {key = slot.key, kind = slot.kind, x = slot.x, y = slot.y, w = slot.w, h = slot.h, saved = slot.saved}
+		local mini = slot.kind == 'mini' and slot.frame or nil
+		list[#list + 1] = {key = slot.key, kind = slot.kind, x = slot.x, y = slot.y, w = slot.w, h = slot.h, saved = slot.saved,
+			count = mini and mini.count, keySize = mini and mini.size}
 	end
+	-- Pet and stance keys tucked on the top edge (outside the body).
+	for _, slot in ipairs(console and console.tucked or {}) do list[#list + 1] = slot end
 	return list, console and console.bounds
 end
 UI.ConsoleBlocks = UI.ConsoleSlots
@@ -2124,13 +2160,12 @@ end
 local function PlacePetKeys()
 	if not petModule then return end
 	if InCombatLockdown() then return UI:AfterCombat(PlacePetKeys, 'ab.petkeys') end
-	local size, spacing = petModule.keySize, Spacing('Pet')
-	for index, button in pairs(petKeys) do
+	for _, button in pairs(petKeys) do
 		if button:GetParent() ~= petModule then button:SetParent(petModule) end
-		button:ClearAllPoints()
-		button:SetPoint('LEFT', PAD + (index - 1) * (size + spacing), (Docking() and 4 or 0) - (HW.On() and HW.BANK_H / 2 or 0))
 		button:Show()
 	end
+	local spot = Deck.CustomLayout() and Deck.CustomLayout().petbar
+	Deck.LayoutMini(petModule, petKeys, NUM_PET_ACTION_SLOTS or 10, type(spot) == 'table' and tonumber(spot.columns) or nil)
 end
 
 local function BuildPet()
@@ -2138,7 +2173,7 @@ local function BuildPet()
 	local count = NUM_PET_ACTION_SLOTS or 10
 	petModule = Device('JiberishSpec01PetKeys', 'PT-1', '', {header = false, template = 'SecureHandlerStateTemplate', radius = 9, level = 4})
 	petModule:SetSize(PAD + count * size + (count - 1) * Spacing('Pet') + PAD, size + 16 + (HW.On() and HW.BANK_H or 0))
-	petModule.keySize = size
+	petModule.keySize, petModule.spacingId = size, 'Pet'
 	HW.MiniLegend(petModule, 'Pet')
 	RegisterStateDriver(petModule, 'visibility', '[petbattle][vehicleui][overridebar][possessbar] hide; [@pet,exists] show; hide')
 	for index = 1, count do
@@ -2165,17 +2200,20 @@ local function LayoutStance()
 	if not stanceModule then return end
 	if InCombatLockdown() then return UI:AfterCombat(LayoutStance, 'ab.stance') end
 	local forms = GetNumShapeshiftForms and GetNumShapeshiftForms() or 0
-	local size = stanceModule.size
 	for index, button in ipairs(stanceKeys) do button:SetShown(index <= forms) end
 	stanceModule:SetShown(forms > 0)
-	if forms > 0 then stanceModule:SetWidth(PAD + forms * size + (forms - 1) * Spacing('Stance') + PAD) end
+	local spot = Deck.CustomLayout() and Deck.CustomLayout().stance
+	if forms > 0 then Deck.LayoutMini(stanceModule, stanceKeys, forms, type(spot) == 'table' and tonumber(spot.columns) or nil) end
 	UpdateStance()
+	-- Set into the console, the stance keys take room only while there are stances.
+	if console and stanceModule.forms ~= nil and (stanceModule.forms > 0) ~= (forms > 0) then LayoutConsole() end
+	stanceModule.forms = forms
 end
 
 local function BuildStance()
 	local size = BarSize('Stance', max(20, floor(KeySize() * 0.72)))
 	stanceModule = Device('JiberishSpec01StanceKeys', 'ST-1', '', {header = false, radius = 9, level = 4})
-	stanceModule.size = size
+	stanceModule.size, stanceModule.keySize, stanceModule.spacingId = size, size, 'Stance'
 	stanceModule:SetHeight(size + 16 + (HW.On() and HW.BANK_H or 0))
 	HW.MiniLegend(stanceModule, 'Stance')
 	for index = 1, (NUM_STANCE_SLOTS or 10) do
@@ -2188,6 +2226,88 @@ local function BuildStance()
 	end
 	WatchFade(stanceModule, 'Stance', stanceKeys)
 	if not Docking() then UI:RegisterMover(stanceModule, 'ab.stance', 'Stance keys', {'BOTTOM', -200, 150}) end
+end
+
+-- The pet and stance keys as console blocks -------------------------------------------------
+-- Keys in lines of `columns` (all in one line by default), evenly spaced, the
+-- device sized round them. Out of combat only (secure buttons).
+function Deck.LayoutMini(module, keys, count, columns)
+	if not module or InCombatLockdown() then return end
+	count = max(floor(count or 1), 1)
+	local size, spacing = module.keySize or 24, Spacing(module.spacingId or 'Stance')
+	local across = Kit:Clamp(floor(columns or count), 1, count)
+	local lines = math.ceil(count / across)
+	local keysW, keysH = across * size + (across - 1) * spacing, lines * size + (lines - 1) * spacing
+	local height = keysH + 16 + (HW.On() and HW.BANK_H or 0)
+	local top = (height - keysH) / 2 - ((Docking() and 4 or 0) - (HW.On() and HW.BANK_H / 2 or 0))
+	module:SetSize(PAD * 2 + keysW, height)
+	for index = 1, count do
+		local button = keys[index]
+		if button then
+			local line, place = floor((index - 1) / across), (index - 1) % across
+			button:ClearAllPoints()
+			button:SetPoint('TOPLEFT', module, 'TOPLEFT', PAD + place * (size + spacing), -(top + line * (size + spacing)))
+		end
+	end
+end
+
+-- The two as the console sees them: {key, module, mover, count, size}. The
+-- pet keys always hold their room (a pet can come in combat); the stance keys
+-- only while this character has stances.
+function Deck.Minis()
+	local list = {}
+	if stanceModule then
+		list[#list + 1] = {key = 'stance', module = stanceModule, mover = 'ab.stance', label = 'Stance keys', at = {'BOTTOM', -200, 150},
+			count = GetNumShapeshiftForms and GetNumShapeshiftForms() or 0, size = stanceModule.keySize, keysList = stanceKeys}
+	end
+	if petModule then
+		list[#list + 1] = {key = 'petbar', module = petModule, mover = 'ab.pet', label = 'Pet keys', at = {'BOTTOM', 200, 150},
+			count = NUM_PET_ACTION_SLOTS or 10, size = petModule.keySize, keysList = petKeys}
+	end
+	return list
+end
+
+-- Its shape (columns) and key size (a scale on the device) for where it is.
+function Deck.ShapeMini(mini)
+	local module = mini.module
+	if mini.count > 0 then Deck.LayoutMini(module, mini.keysList, mini.count, mini.columns) end
+	local base = DB().scale or 1
+	local scale = mini.keys and base * Kit:Clamp(mini.keys, 16, 48) / max(mini.size or 24, 1) or base
+	if math.abs(module:GetScale() - scale) > 0.001 then module:SetScale(scale) end
+end
+
+-- Anchor it inside the console (or, tucked, on its top edge and under it) at
+-- x, y in console units from the top-left. With a mover of its own (it was
+-- taken out once), the mover holds it there.
+function Deck.PlaceMini(mini, parent, x, y, tucked)
+	local module = mini.module
+	local function Place(frame)
+		local ratio = frame:GetEffectiveScale() / parent:GetEffectiveScale()
+		frame:SetPoint('TOPLEFT', parent, 'TOPLEFT', x / ratio, -y / ratio)
+	end
+	-- Inside, it sits on the console's housing, above it; tucked, under its edge.
+	module:SetFrameLevel(tucked and 4 or parent:GetFrameLevel() + 3)
+	Kit:Relevel(module)
+	if module.shell then module.shell:SetShown(tucked and DB().housing ~= false or false) end
+	if UI:HasMover(mini.mover) then
+		UI:DockMover(mini.mover, Place)
+	else
+		module:ClearAllPoints()
+		Place(module)
+	end
+end
+
+-- Taken out of the console: its own spot (a mover, made the first time).
+function Deck.FreeMini(mini)
+	local module = mini.module
+	module:SetFrameLevel(4)
+	Kit:Relevel(module)
+	if module.shell then module.shell:SetShown(DB().housing ~= false) end
+	if UI:HasMover(mini.mover) then
+		UI:DockMover(mini.mover, nil)
+	else
+		UI:RegisterMover(module, mini.mover, mini.label, mini.at)
+	end
 end
 
 -- Menu and bags -----------------------------------------------------------------------------

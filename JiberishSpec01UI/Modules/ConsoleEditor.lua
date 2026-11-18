@@ -2,9 +2,11 @@
 -- move anywhere inside it.
 --
 --   Blocks     each key bank, the two function key clusters, the meters and
---              stats strip, the menu keys (when set into the console), and each
---              docked unit frame and cast bar: glass blocks with a printed
---              label and a lamp, lit in the key color when selected.
+--              stats strip, the menu keys (when set into the console), each
+--              docked unit frame and cast bar, and the stance and pet keys
+--              (tucked on the top edge until dragged into the body): glass
+--              blocks with a printed label and a lamp, lit in the key color
+--              when selected.
 --   Moving     drag a block: it snaps to the grid (whole screen pixels: 1, 2,
 --              4 or 8) and to the other blocks' edges and centres, with
 --              hairline guides. A spot over another block or outside the
@@ -61,16 +63,25 @@ end
 -- Nearest first: down, right, left, up (the console grows downward and rightward).
 local SEARCH = {{0, 1}, {1, 0}, {-1, 0}, {0, -1}}
 
--- Lay blocks out so none covers another or leaves the body: in list order, the
--- saved ones (block.saved) first. A block that doesn't fit where it asks moves
--- to the nearest free spot in `step`s; failing that it goes under everything.
+-- Lay blocks out so none covers another or leaves the body: the saved ones
+-- (block.saved) first, the most recently edited (block.rank) first among them,
+-- then in list order. A block that doesn't fit where it asks moves to the
+-- nearest free spot in `step`s; failing that it goes under everything.
 -- px: one screen pixel, so a block clamped to an edge stays on the pixel grid.
 function Grid.Resolve(blocks, bounds, step, px)
 	step = (step and step > 0) and step or 1
 	px = (px and px > 0) and px or step
-	local order = {}
-	for _, block in ipairs(blocks) do if block.saved then order[#order + 1] = block end end
-	for _, block in ipairs(blocks) do if not block.saved then order[#order + 1] = block end end
+	local order, position = {}, {}
+	for index, block in ipairs(blocks) do
+		order[#order + 1] = block
+		position[block] = index
+	end
+	table.sort(order, function(a, b)
+		if (a.saved and true or false) ~= (b.saved and true or false) then return a.saved and true or false end
+		local ra, rb = tonumber(a.rank) or 0, tonumber(b.rank) or 0
+		if ra ~= rb then return ra > rb end
+		return position[a] < position[b]
+	end)
 	local placed = {}
 	local probe = {}
 	local function Fits(block, x, y)
@@ -137,10 +148,10 @@ local MAGNET = 6 -- screen pixels
 
 local LABELS = {['uf.player'] = 'Player', ['uf.target'] = 'Target', ['uf.focus'] = 'Focus', ['uf.targettarget'] = 'Target of target',
 	['uf.pet'] = 'Pet', ['cb.player'] = 'Player cast', ['cb.target'] = 'Target cast', fnL = 'Function keys', fnR = 'Function keys',
-	deck = 'Meters', menu = 'Menu keys'}
+	deck = 'Meters', menu = 'Menu keys', stance = 'Stance keys', petbar = 'Pet keys'}
 -- Frames the layouts dock with a setting of their own; the rest are taken out with an off flag.
 local DOCK_SETTING = {['uf.focus'] = 'dockFocus', ['uf.targettarget'] = 'dockToT', ['uf.pet'] = 'dockPet'}
-local REMOVABLE = {unit = true, cast = true, fn = true, deck = true}
+local REMOVABLE = {unit = true, cast = true, fn = true, deck = true, mini = true}
 
 local editing, selected, drag, wasUnlocked = false, nil, nil, false
 local overlay, inspector, keyboard, editKey
@@ -193,9 +204,12 @@ local function Snapshot()
 	local layout = Layout()
 	if next(layout) ~= nil then return layout end
 	for _, block in ipairs(current) do
-		local spot = {x = block.x, y = block.y}
-		if block.kind == 'cast' or block.kind == 'deck' then spot.w = block.w end
-		layout[block.key] = spot
+		-- Stance and pet keys still tucked on the top edge stay there.
+		if not block.tucked then
+			local spot = {x = block.x, y = block.y}
+			if block.kind == 'cast' or block.kind == 'deck' then spot.w = block.w end
+			layout[block.key] = spot
+		end
 	end
 	return layout
 end
@@ -213,6 +227,10 @@ local function Commit(key, changes)
 	local layout = Snapshot()
 	local spot = type(layout[key]) == 'table' and layout[key] or {}
 	for field, value in pairs(changes) do spot[field] = value end
+	-- The block just edited keeps its spot; others make room for it.
+	local rank = 0
+	for _, other in pairs(layout) do if type(other) == 'table' then rank = max(rank, tonumber(other.rank) or 0) end end
+	spot.rank = rank + 1
 	layout[key] = spot
 	return Relayout()
 end
@@ -361,6 +379,9 @@ local function BlockFrame(index)
 		GameTooltip:SetOwner(self, 'ANCHOR_TOP')
 		GameTooltip:AddLine(Label(self.block.key), 1, 1, 1)
 		GameTooltip:AddLine('Drag to move it. Arrow keys nudge one pixel, Shift one grid step.', 0.8, 0.8, 0.78, true)
+		if self.block.tucked then
+			GameTooltip:AddLine('Tucked on the console\'s top edge: drag it into the console to set it in. Reset block tucks it back.', 0.8, 0.8, 0.78, true)
+		end
 		GameTooltip:Show()
 	end)
 	frame:SetScript('OnLeave', function() GameTooltip:Hide() end)
@@ -378,7 +399,7 @@ function Draw()
 		frame.block = block
 		frame:SetSize(max(block.w, 2), max(block.h, 2))
 		Place(frame, block.x, block.y)
-		frame.label:SetText(strupper(Label(block.key)))
+		frame.label:SetText(strupper(Label(block.key))..(block.tucked and '  (TOP EDGE)' or ''))
 		frame.label:SetWidth(max(block.w - 8, 1))
 		frame.label:SetShown(block.w > 30 and block.h > 9)
 		Paint(frame)
@@ -418,10 +439,24 @@ local function Columns(sign)
 	local block = Find(selected)
 	if not block then return end
 	local spot = Layout()[block.key]
-	local now = type(spot) == 'table' and tonumber(spot.columns) or 12
-	local value = Kit:Clamp(now + sign, 1, 12)
+	-- A bank has 12 keys; the stance and pet keys as many as they show.
+	local most = block.kind == 'mini' and max(block.count or 1, 1) or 12
+	local now = type(spot) == 'table' and tonumber(spot.columns) or most
+	local value = Kit:Clamp(now + sign, 1, most)
 	if value == now then return Kit:Play('error') end
 	Commit(block.key, {columns = value})
+	Kit:Play('tick')
+end
+
+-- The stance or pet keys' own key size (the device scales to it).
+local function MiniKeys(sign)
+	local block = Find(selected)
+	if not block then return end
+	local spot = Layout()[block.key]
+	local now = type(spot) == 'table' and tonumber(spot.keys) or floor((block.keySize or 24) + 0.5)
+	local value = Kit:Clamp(now + sign, 16, 48)
+	if value == now then return Kit:Play('error') end
+	Commit(block.key, {keys = value})
 	Kit:Play('tick')
 end
 
@@ -540,9 +575,9 @@ local function BuildInspector()
 	-- The selected block's own controls (labels set per block).
 	y = -104
 	inspector.context = {}
-	for index = 1, 4 do
-		local key = Key(inspector, '', 78, function(self) if self.action then self.action() end end)
-		key:SetPoint('TOPLEFT', 10 + (index - 1) * 84, y)
+	for index = 1, 5 do
+		local key = Key(inspector, '', 62, function(self) if self.action then self.action() end end)
+		key:SetPoint('TOPLEFT', 10 + (index - 1) * 66, y)
 		inspector.context[index] = key
 	end
 
@@ -599,18 +634,24 @@ function UpdateInspector()
 		inspector.spot:SetText('DRAG TO MOVE  -  ARROWS NUDGE 1 PX')
 	end
 	inspector.state:SetText(Edited() and 'CUSTOM' or 'AUTO')
-	for index = 1, 4 do SetContext(index) end
+	for index = 1, 5 do SetContext(index) end
 	if block and block.kind == 'bank' then
 		SetContext(1, 'COLS -', function() Columns(-1) end)
 		SetContext(2, 'COLS +', function() Columns(1) end)
 		SetContext(3, 'KEYS -', function() KeySize(-1) end)
 		SetContext(4, 'KEYS +', function() KeySize(1) end)
+	elseif block and block.kind == 'mini' then
+		SetContext(1, 'COLS -', function() Columns(-1) end)
+		SetContext(2, 'COLS +', function() Columns(1) end)
+		SetContext(3, 'KEYS -', function() MiniKeys(-1) end)
+		SetContext(4, 'KEYS +', function() MiniKeys(1) end)
+		SetContext(5, 'TAKE OUT', Remove)
 	elseif block then
 		if block.kind == 'cast' or block.kind == 'deck' then
 			SetContext(1, 'WIDTH -', function() Widen(-1) end)
 			SetContext(2, 'WIDTH +', function() Widen(1) end)
 		end
-		if REMOVABLE[block.kind] then SetContext(4, 'TAKE OUT', Remove) end
+		if REMOVABLE[block.kind] then SetContext(5, 'TAKE OUT', Remove) end
 	end
 	local console = Console()
 	if console then
