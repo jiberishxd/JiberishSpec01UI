@@ -1,0 +1,6 @@
+#!/bin/sh
+# Checks the Lua files staged for commit (syntax, late locals, local limits).
+# Install with: make hooks
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.lua')
+[ -z "$files" ] && exit 0
+exec python3 tools/check.py $files
