@@ -4,7 +4,7 @@
 local _, UI = ...
 local Kit = UI.Kit
 
-local CreateFrame, UIParent, GetTime = CreateFrame, UIParent, GetTime
+local CreateFrame, UIParent, GetTime, InCombatLockdown = CreateFrame, UIParent, GetTime, InCombatLockdown
 local max, min = math.max, math.min
 
 local root, catcher, current
@@ -243,6 +243,82 @@ function Kit:CloseDialog()
 	if dialog and dialog:IsShown() then dialog:Hide() end
 end
 
+-- Reloading -----------------------------------------------------------------------
+-- On 12.x clients an addon may no longer call ReloadUI itself (it is blocked as
+-- a protected action, even from a click). The game's own /reload, run by a
+-- secure action button, still works: one such button is laid over whichever
+-- Reload key is showing and takes the click itself. It can only be placed out
+-- of combat; a Reload key clicked in combat says to reload afterwards.
+local reloadCover, reloadOwner
+local function ReloadCover()
+	if reloadCover then return reloadCover end
+	reloadCover = CreateFrame('Button', 'JiberishSpec01ReloadButton', UIParent, 'SecureActionButtonTemplate')
+	reloadCover:SetAttribute('type', 'macro')
+	reloadCover:SetAttribute('macrotext', '/reload')
+	reloadCover:RegisterForClicks('AnyUp', 'AnyDown')
+	reloadCover:Hide()
+	-- The key under it still looks and sounds pressed.
+	reloadCover:HookScript('OnMouseDown', function()
+		if reloadOwner then Kit:Play('down-primary', true) end
+	end)
+	reloadCover:HookScript('PreClick', function()
+		local before = reloadOwner and reloadOwner.kitBeforeReload
+		if before then pcall(before) end
+	end)
+	reloadCover:HookScript('OnEnter', function()
+		local enter = reloadOwner and reloadOwner:GetScript('OnEnter')
+		if enter then pcall(enter, reloadOwner) end
+	end)
+	reloadCover:HookScript('OnLeave', function()
+		local leave = reloadOwner and reloadOwner:GetScript('OnLeave')
+		if leave then pcall(leave, reloadOwner) end
+	end)
+	return reloadCover
+end
+
+local function CoverKey(key)
+	if InCombatLockdown() or not key:IsVisible() then return end
+	local cover = ReloadCover()
+	reloadOwner = key
+	cover:ClearAllPoints()
+	cover:SetAllPoints(key)
+	cover:SetFrameStrata(key:GetFrameStrata())
+	cover:SetFrameLevel(key:GetFrameLevel() + 20)
+	cover:Show()
+end
+
+local function UncoverKey(key)
+	if reloadOwner ~= key or not reloadCover or InCombatLockdown() then return end
+	reloadOwner = nil
+	reloadCover:Hide()
+	reloadCover:ClearAllPoints()
+end
+
+-- What a Reload key does when it is clicked itself (only in combat, when the
+-- secure button can't be placed over it).
+function Kit:ReloadLater()
+	UI:Print('Reload once combat ends: type /reload.')
+	self:Play('error')
+end
+
+-- on: make this key a Reload key (its clicks reload); before: run just before.
+function Kit:ReloadKey(key, on, before)
+	key.kitReload = on and true or nil
+	key.kitBeforeReload = on and before or nil
+	if not key.kitReloadHooked then
+		key.kitReloadHooked = true
+		key:HookScript('OnShow', function(self) if self.kitReload then CoverKey(self) end end)
+		key:HookScript('OnHide', function(self) UncoverKey(self) end)
+	end
+	if on then
+		key.onClick = function() Kit:ReloadLater() end
+		-- Placed a frame later, once the key has its final spot and level.
+		C_Timer.After(0, function() if key.kitReload then CoverKey(key) end end)
+	else
+		UncoverKey(key)
+	end
+end
+
 -- opts: title, text, tone ('default' | 'warning' | 'error'), width, actions = {{text=, tone=, onClick=}}
 function Kit:Dialog(opts)
 	opts = opts or {}
@@ -268,6 +344,9 @@ function Kit:Dialog(opts)
 			Kit:CloseDialog()
 			if action.onClick then action.onClick() end
 		end
+		local reload = action.reload or (action.onClick ~= nil and action.onClick == ReloadUI)
+		Kit:ReloadKey(key, reload, reload and action.before or nil)
+		if reload then key.onClick = function() Kit:CloseDialog(); Kit:ReloadLater() end end
 		key:Show()
 	end
 	for index = #actions + 1, #dialog.keys do dialog.keys[index]:Hide() end
@@ -289,7 +368,8 @@ end
 function Kit:AlertDialog(opts)
 	opts = opts or {}
 	opts.tone = opts.tone or 'warning'
-	opts.actions = opts.actions or {{text = 'Cancel'}, {text = opts.confirm or 'Confirm', tone = 'primary', onClick = opts.onConfirm}}
+	opts.actions = opts.actions or {{text = 'Cancel'}, {text = opts.confirm or 'Confirm', tone = 'primary', onClick = opts.onConfirm,
+		reload = opts.reload}}
 	return self:Dialog(opts)
 end
 
@@ -492,6 +572,10 @@ function Kit:Toast(opts)
 			DismissToast(toast)
 			if opts.action.onClick then opts.action.onClick() end
 		end
+	end
+	Kit:ReloadKey(toast.action, opts.action ~= nil and opts.action.reload and true or false)
+	if opts.action and opts.action.reload then
+		toast.action.onClick = function() DismissToast(toast); Kit:ReloadLater() end
 	end
 	toast:SetHeight((hasText and (36 + max(toast.text:GetStringHeight(), 10)) or 36) + 8)
 	-- Hover comes from OnEnter/OnLeave only; before placement IsMouseOver means nothing.

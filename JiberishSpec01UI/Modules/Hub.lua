@@ -1537,7 +1537,7 @@ local function Build()
 		hub.accents[name] = swatch
 	end
 	hub.reload = Kit:Key(hub, {text = 'Reload UI', width = 112, height = KEY_H, led = true})
-	hub.reload.onClick = function() ReloadUI() end
+	Kit:ReloadKey(hub.reload, true)
 	Kit:AttachTooltip(hub.reload, 'Style changes apply after a reload')
 	hub.reload:SetShown(UI.reloadPending and true or false)
 	-- How much each page shows: every option (Advanced), and a line of description.

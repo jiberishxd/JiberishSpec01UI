@@ -56,7 +56,7 @@ end
 local function ReloadToast()
 	UI:NeedsReload()
 	Kit:Toast({title = 'Reload to finish', text = 'Some of this layout takes effect after a reload.',
-		action = {text = 'Reload', onClick = function() ReloadUI() end}})
+		action = {text = 'Reload', reload = true}})
 end
 
 -- Presets (defined with the solver below) ----------------------------------------------

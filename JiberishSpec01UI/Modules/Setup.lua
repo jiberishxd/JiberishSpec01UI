@@ -1294,6 +1294,7 @@ STEPS[#STEPS + 1] = {key = 'finish', title = 'Ready', short = 'Finish', final = 
 		step.reload = Kit:Key(body, {width = 220, height = 38, tone = 'primary', text = 'Reload and play'})
 		step.reload:SetPoint('TOPRIGHT', body, 'TOPRIGHT', 0, -318)
 		step.reload.onClick = function() UI:FinishSetup(true) end
+		Kit:ReloadKey(step.reload, true, function() UI:Account('setup').done = true end)
 		step.later = Kit:Key(body, {width = 220, height = 38, text = 'Finish without reloading'})
 		step.later:SetPoint('RIGHT', step.reload, 'LEFT', -12, 0)
 		step.later.onClick = function() UI:FinishSetup(false) end
@@ -1588,15 +1589,15 @@ end
 function UI:FinishSetup(reload)
 	UI:Account('setup').done = true
 	if reload then
-		Kit:Play('down-primary', true)
-		ReloadUI()
+		-- Reached only by a click in combat; out of combat the key's secure cover reloads.
+		Kit:ReloadLater()
 		return
 	end
 	Kit:Play('success')
 	if guide then Kit:Close(guide) end
 	if UI.reloadPending then
 		Kit:Toast({title = 'Reload to finish', text = 'Some of your choices take effect after a reload.',
-			action = {text = 'Reload', onClick = function() ReloadUI() end}})
+			action = {text = 'Reload', reload = true}})
 	end
 end
 

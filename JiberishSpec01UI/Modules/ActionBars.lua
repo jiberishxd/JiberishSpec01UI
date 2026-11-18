@@ -3643,7 +3643,7 @@ local FN = {
 			ApplyLock()
 		end, lamp = function() return not BarsLocked() and 'amber' or nil end},
 	reload = {glyph = 'reload', legend = 'Reload', tip = 'Reload the interface.', func = function()
-			Kit:AlertDialog({title = 'Reload UI', text = 'Reload the interface now?', confirm = 'Reload', onConfirm = ReloadUI})
+			Kit:AlertDialog({title = 'Reload UI', text = 'Reload the interface now?', confirm = 'Reload', onConfirm = ReloadUI, reload = true})
 		end},
 	menu = {glyph = 'menu', legend = 'Menu', tip = 'Open the game menu.', click = 'MainMenuMicroButton',
 		lamp = function() return ShownFrame('GameMenuFrame') and 'lamp' or nil end},

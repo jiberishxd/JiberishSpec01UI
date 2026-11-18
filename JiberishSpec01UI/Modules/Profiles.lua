@@ -185,7 +185,7 @@ local function Exists(profile)
 end
 
 local function AskReload(text)
-	Kit:AlertDialog({title = 'Reload to apply', text = text, confirm = 'Reload', onConfirm = ReloadUI})
+	Kit:AlertDialog({title = 'Reload to apply', text = text, confirm = 'Reload', onConfirm = ReloadUI, reload = true})
 end
 
 function UI:SwitchProfile(profile)
