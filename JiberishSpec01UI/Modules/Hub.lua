@@ -1106,13 +1106,13 @@ end
 -- Pages are grouped into a few sections. One section is open at a time (the
 -- current page's, or the one last clicked); the others fold to their headers.
 local GROUPS = {
-	{'general', 'General', {'overview', 'setup', 'theme', 'fonts', 'motion', 'sounds', 'combatcue'}},
+	{'general', 'General', {'overview', 'setup', 'theme', 'colors', 'housing', 'fonts', 'fade', 'motion', 'sounds', 'combatcue'}},
 	{'layout', 'Layout', {'layout', 'profiles'}},
-	{'frames', 'Frames', {'unitframes', 'group', 'nameplates', 'navbar'}},
+	{'frames', 'Frames', {'unitframes', 'group', 'nameplates', 'navbar', 'wiring'}},
 	{'bars', 'Bars and auras', {'actionbars', 'buffs', 'timeline', 'cooldowns', 'swingtimer'}},
 	{'interface', 'Interface', {'minimap', 'chat', 'windows', 'bags', 'objectives', 'infopanel', 'meters', 'banners',
 		'notifications', 'qol'}},
-	{'extras', 'Extras', {'components', 'about'}},
+	{'extras', 'Extras', {'drawer', 'calendar', 'components', 'about'}},
 }
 local GROUP_OF = {}
 for _, group in ipairs(GROUPS) do

@@ -197,7 +197,8 @@ UI:RegisterPage('theme', {title = 'Theme', order = 2,
 		{'button', 'Appearance', 'Reset', ResetLook, 'Borders, corners, shadows, type, bars and motion back to the reference.'},
 	}},
 	{title = 'Fade', rows = {
-		{'note', 'Fading parts of the interface out of combat has its own page: Fade.'},
+		{'note', 'Fading parts of the interface out of combat has its own page: General > Fade.'},
+		{'button', 'Fade settings', 'Open', function() UI:ToggleHub('fade', true) end, 'Mode, triggers, parts and timing.'},
 	}},
 }})
 
