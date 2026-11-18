@@ -56,3 +56,4 @@ Modules\CombatCue.lua
 Modules\Wiring.lua
 Modules\Notifications.lua
 Modules\QoL.lua
+Modules\Away.lua

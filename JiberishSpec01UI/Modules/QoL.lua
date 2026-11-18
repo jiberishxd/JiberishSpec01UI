@@ -1,8 +1,9 @@
--- Quality of life, in the SPEC-01 language: an away screen, a cursor ring,
--- quieter errors, faster looting, gossip and quest shortcuts, the delete
--- confirmation filled in, a longer camera, combat text in the reference's
--- typeface, an interrupt call-out, achievement screenshots and a flash when a
--- quest is ready to hand in. Every feature has its own switch.
+-- Quality of life, in the SPEC-01 language: a cursor ring, quieter errors,
+-- faster looting, gossip and quest shortcuts, the delete confirmation filled
+-- in, a longer camera, combat text in the reference's typeface, an interrupt
+-- call-out, achievement screenshots and a flash when a quest is ready to hand
+-- in. Every feature has its own switch. The away screen is Modules/Away.lua
+-- (its settings stay here, under qol.afk*).
 --
 -- Nothing here hooks a Blizzard method or writes onto its frames, except two
 -- documented spots: quieted error types go into the game's own
@@ -13,12 +14,11 @@ local _, UI = ...
 local Kit = UI.Kit
 
 local CreateFrame, UIParent, GetTime, InCombatLockdown = CreateFrame, UIParent, GetTime, InCombatLockdown
-local floor, max, min = math.floor, math.max, math.min
+local max = math.max
 local format, find = string.format, string.find
 
 -- defaults:begin
 UI:RegisterDefaults('qol', {
-	afk = true, afkSpin = false, afkHideUI = true,
 	cursorRing = false, cursorCombat = true, cursorSize = 40,
 	quietErrors = true, errorSound = true,
 	fastLoot = true,
@@ -56,150 +56,6 @@ end
 events:SetScript('OnEvent', function(_, event, ...)
 	for _, handler in ipairs(handlers[event] or {}) do UI:Safe(handler, event, ...) end
 end)
-
--- Away screen --------------------------------------------------------------------
--- A full-screen device: a dim veil, the player's model turning slowly on a
--- black display, and a housing with the name, guild and level, the time away
--- on an LCD, the clock and a key to put the screen away.
-local afk, afkSince, afkTicker, afkDismissed, uiHidden
-
-local function Clock(seconds)
-	seconds = max(0, floor(seconds))
-	local hours = floor(seconds / 3600)
-	if hours > 0 then return format('%d:%02d:%02d', hours, floor(seconds / 60) % 60, seconds % 60) end
-	return format('%02d:%02d', floor(seconds / 60), seconds % 60)
-end
-
-local function BuildAFK()
-	afk = CreateFrame('Frame', 'JiberishSpec01AwayScreen', WorldFrame)
-	afk:SetFrameStrata('FULLSCREEN')
-	afk:SetAllPoints(UIParent)
-	afk:EnableMouse(true)
-	afk:EnableKeyboard(false)
-	afk.veil = afk:CreateTexture(nil, 'BACKGROUND')
-	afk.veil:SetAllPoints()
-	afk.veil:SetColorTexture(0, 0, 0, 1)
-	afk.veil:SetGradient('VERTICAL', CreateColor(0, 0, 0, 0.78), CreateColor(0, 0, 0, 0.2))
-
-	-- The model stands on its own black display, right of centre.
-	local stage = Kit:Screen(afk, {inset = 4, radius = 14})
-	stage:SetSize(300, 380)
-	stage:SetPoint('BOTTOMRIGHT', afk, 'BOTTOM', 420, 150)
-	afk.stage = stage
-	local model = CreateFrame('PlayerModel', nil, stage.screen)
-	model:SetPoint('TOPLEFT', 6, -6)
-	model:SetPoint('BOTTOMRIGHT', -6, 6)
-	afk.model = model
-
-	local device = Kit:Device(afk, {model = 'AW-1', title = 'Away', width = 640, height = 118, radius = 14})
-	device:SetPoint('BOTTOM', afk, 'BOTTOM', 0, 40)
-	Kit:SetLed(device.lamp, true, 'amber')
-	afk.device = device
-	local ink = Kit.INK[device.surface] or Kit.INK.paper
-	afk.name = Kit:Text(device, '', 'title', ink[1], true)
-	afk.name:SetPoint('TOPLEFT', 16, -30)
-	afk.guild = Kit:Text(device, '', 'small', ink[2])
-	afk.guild:SetPoint('TOPLEFT', afk.name, 'BOTTOMLEFT', 0, -4)
-	afk.line = Kit:Text(device, '', 'small', ink[2])
-	afk.line:SetPoint('TOPLEFT', afk.guild, 'BOTTOMLEFT', 0, -4)
-
-	-- Time away and the clock, on one LCD with unlit segments behind.
-	local lcd = Kit:LCDPanel(device)
-	lcd:SetSize(190, 44)
-	lcd:SetPoint('TOPRIGHT', -112, -30)
-	local ghost = Kit:Text(lcd, '88:88:88', 'title', 'lcdGhost', true)
-	ghost:SetPoint('RIGHT', -10, 4)
-	afk.timer = Kit:Text(lcd, '', 'title', 'lcdInk', true)
-	afk.timer:SetPoint('RIGHT', -10, 4)
-	afk.timer:SetJustifyH('RIGHT')
-	afk.clock = Kit:Label(lcd, '', 'lcdDim', 'tiny')
-	afk.clock:SetPoint('BOTTOMLEFT', 8, 5)
-	local tag = Kit:Label(lcd, 'AWAY', 'lcdDim', 'tiny', true)
-	tag:SetPoint('TOPLEFT', 8, -5)
-
-	afk.back = Kit:Key(device, {width = 84, height = 34, text = 'Back', tone = 'primary', onClick = function()
-		afkDismissed = true
-		module:HideAFK()
-	end})
-	afk.back:SetPoint('RIGHT', device, 'RIGHT', -16, -6)
-	afk:SetScript('OnKeyDown', nil)
-	afk:Hide()
-end
-
-local function UpdateAFKText()
-	if not afk then return end
-	afk.timer:SetText(Clock(GetTime() - (afkSince or GetTime())))
-	afk.clock:SetText(date('%H:%M  %a %d %b'))
-end
-
-function module:ShowAFK()
-	if not DB().afk or InCombatLockdown() then return end
-	if not afk then BuildAFK() end
-	if afk:IsShown() then return end
-	afkSince = GetTime()
-	local name = Plain(UnitName, 'player') or ''
-	afk.name:SetText(strupper(name))
-	local guild = Plain(GetGuildInfo, 'player')
-	afk.guild:SetText(guild and ('<'..guild..'>') or '')
-	local level = Plain(UnitLevel, 'player')
-	local className = Plain(UnitClass, 'player')
-	afk.line:SetText(format('LEVEL %s  %s', level and tostring(level) or '??', className and strupper(className) or ''))
-	afk.model:SetUnit('player')
-	afk.model:SetFacing(0.4)
-	afk.model:SetAnimation(0)
-	-- The model turns slowly while the screen shows; nothing runs otherwise.
-	afk.model:SetScript('OnUpdate', function(self, elapsed)
-		self.turn = ((self.turn or 0.4) + elapsed * 0.25) % (math.pi * 2)
-		self:SetFacing(self.turn)
-	end)
-	UpdateAFKText()
-	if afkTicker then afkTicker:Cancel() end
-	afkTicker = C_Timer.NewTicker(1, UpdateAFKText)
-	if DB().afkHideUI and UIParent:IsShown() then
-		UIParent:Hide()
-		uiHidden = true
-	end
-	if DB().afkSpin and MoveViewLeftStart then MoveViewLeftStart(0.035) end
-	afk:SetAlpha(0)
-	afk:Show()
-	Kit:Animate(afk, Kit.SPEED.SLOW, 0, 1, function(alpha) afk:SetAlpha(alpha) end)
-	Kit:Play('open')
-end
-
-function module:HideAFK()
-	if not (afk and afk:IsShown()) then return end
-	if afkTicker then afkTicker:Cancel(); afkTicker = nil end
-	afk.model:SetScript('OnUpdate', nil)
-	if MoveViewLeftStop then MoveViewLeftStop() end
-	-- Showing UIParent is allowed until lockdown starts, which comes after
-	-- PLAYER_REGEN_DISABLED; later than that it waits for combat to end.
-	if uiHidden then
-		uiHidden = nil
-		if InCombatLockdown() then UI:AfterCombat(function() UIParent:Show() end, 'qol.afk') else UIParent:Show() end
-	end
-	Kit:Animate(afk, Kit.SPEED.FAST, afk:GetAlpha(), 0, function(alpha) afk:SetAlpha(alpha) end, function() afk:Hide() end)
-	Kit:Play('latch-up')
-end
-
-local function CheckAFK()
-	local away = Plain(UnitIsAFK, 'player')
-	if away then
-		if not afkDismissed then module:ShowAFK() end
-	else
-		afkDismissed = nil
-		module:HideAFK()
-	end
-end
-
-On('PLAYER_FLAGS_CHANGED', function(_, unit)
-	if IsSecret(unit) or unit ~= 'player' then return end
-	CheckAFK()
-end)
--- A fight, a cinematic or a loading screen always takes the away screen down.
-On('PLAYER_REGEN_DISABLED', function() module:HideAFK() end)
-On('CINEMATIC_START', function() module:HideAFK() end)
-On('PLAY_MOVIE', function() module:HideAFK() end)
-On('PLAYER_LEAVING_WORLD', function() module:HideAFK() end)
 
 -- Cursor ring ---------------------------------------------------------------------
 local ring
@@ -698,22 +554,21 @@ function module:Enable()
 	ApplyCamera()
 	ApplyCombatFont()
 	UpdateRing()
-	C_Timer.After(1, CheckAFK)
 end
 
 function module:Refresh()
 	SyncErrors()
 	ApplyCamera()
 	UpdateRing()
-	if afk and afk:IsShown() and not DB().afk then self:HideAFK() end
 end
 
 UI:RegisterPage('qol', {title = 'Quality of life', order = 22, cards = {
 	{title = 'Away', rows = {
-		{'switch', 'Away screen', 'qol.afk', 'A SPEC-01 screen while you are away: your character on a display, time away on an LCD.'},
+		{'switch', 'Away screen', 'qol.afk', 'A SPEC-01 standby console while you are away: your character on an open stage, time away, a log of what happened, volume and function keys.'},
 		{'switch', 'Hide the interface', 'qol.afkHideUI', 'Only the away screen shows while you are away.'},
 		{'switch', 'Turn the camera', 'qol.afkSpin', 'The camera circles slowly around you.'},
-		{'button', 'Preview', 'Show', function() afkDismissed = nil; module:ShowAFK() end, 'Click Back to close it.'},
+		{'button', 'Preview', 'Show', function() if UI.PreviewAway then UI:PreviewAway() end end, 'Back, Esc or a step puts it away. Also /spec afk.'},
+		{'button', 'More settings', 'Open', function() UI:ToggleHub('away', true) end, 'The console log, sounds and the turning figure.', since = '0.5.2'},
 	}},
 	{title = 'Cursor', rows = {
 		{'switch', 'Cursor ring', 'qol.cursorRing', 'A lit ring around the mouse cursor.'},

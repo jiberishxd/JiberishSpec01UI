@@ -245,6 +245,7 @@ SlashCmdList.JIBERISHSPEC = function(input)
 	elseif (command == 'drawer' or command == 'timer' or command == 'volume' or command == 'cpu') and UI.ToggleDrawer then
 		UI:ToggleDrawer(command ~= 'drawer' and command or nil)
 	elseif command == 'calendar' and UI.OpenCalendar then UI:OpenCalendar()
+	elseif command == 'afk' and UI.PreviewAway then UI:PreviewAway()
 	elseif command == 'reset' then
 		if UI.ResetMovers then UI:ResetMovers() end
 	elseif UI.ToggleHub then UI:ToggleHub(command ~= '' and command or nil)

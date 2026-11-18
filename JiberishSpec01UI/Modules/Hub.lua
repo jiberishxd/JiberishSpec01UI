@@ -1130,7 +1130,7 @@ local GROUPS = {
 	{'frames', 'Frames', {'unitframes', 'group', 'nameplates', 'navbar', 'wiring'}},
 	{'bars', 'Bars and auras', {'actionbars', 'buffs', 'timeline', 'cooldowns', 'swingtimer'}},
 	{'interface', 'Interface', {'minimap', 'chat', 'windows', 'bags', 'objectives', 'infopanel', 'meters', 'banners',
-		'notifications', 'qol'}},
+		'notifications', 'qol', 'away'}},
 	{'extras', 'Extras', {'drawer', 'calendar', 'components', 'about'}},
 }
 local GROUP_OF = {}
