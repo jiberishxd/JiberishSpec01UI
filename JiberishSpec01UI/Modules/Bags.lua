@@ -29,8 +29,7 @@ UI:RegisterDefaults('bags', {
 -- defaults:end
 
 local function DB() return UI.db.bags end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Forbidden(object) return not object or (object.IsForbidden and object:IsForbidden()) end
+local IsSecret, Forbidden = UI.Util.IsSecret, UI.Util.Forbidden
 local function API(object, name) return object and type(object[name]) == 'function' and object[name] or nil end
 
 local BagIndex = (Enum and Enum.BagIndex) or {}

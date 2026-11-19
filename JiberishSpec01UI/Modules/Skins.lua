@@ -46,18 +46,7 @@ local type, ipairs, pairs, pcall = type, ipairs, pairs, pcall
 
 local module = UI:RegisterModule('windows', {})
 
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Forbidden(object)
-	if type(object) ~= 'table' then return true end
-	if object.IsForbidden then
-		local ok, forbidden = pcall(object.IsForbidden, object)
-		return not ok or forbidden
-	end
-	return false
-end
-local function Is(object, kind)
-	return not Forbidden(object) and object.IsObjectType and object:IsObjectType(kind) and true or false
-end
+local IsSecret, Forbidden, Is = UI.Util.IsSecret, UI.Util.Forbidden, UI.Util.IsObjectType
 local function Hide(region)
 	if not Forbidden(region) and region.SetAlpha then region:SetAlpha(0) end
 end

@@ -41,11 +41,7 @@ UI:RegisterDefaults('overlaymap', {
 
 local function DB() return UI.db.overlaymap end
 local function Reduced() return Kit:Reduced() end
-local function Snap(value, px) return floor(value / px + 0.5) * px end
-local function Clamp(value, low, high, fallback)
-	value = type(value) == 'number' and value or fallback
-	return max(low, min(high, value))
-end
+local Snap, Clamp = UI.Util.SnapTo, UI.Util.Clamp
 
 local holder, window, canvas, pins
 local m = {} -- the layout: sizes and the tile grid

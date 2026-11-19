@@ -51,9 +51,9 @@ UI:RegisterDefaults('combatcue', {enable = true, where = 'always', sound = true,
 -- defaults:end
 
 local function DB() return UI.db.combatcue end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 local function Reduced() return Kit:DB().reduceMotion end
-local function Px(frame, n) return UI.Pixel.Px(frame, n) end
+local Px = UI.Util.Px
 local function RGB(color, fallback)
 	if type(color) == 'table' then
 		local r, g, b = Kit.ColorParts(color)
@@ -955,7 +955,7 @@ local function Times(value) return format('%.2fx', value) end
 local function Seconds(value) return format('%.1f s', value) end
 local function Units(value) return format('%d', value + 0.5) end
 local function Pixels(value) return format('%d px', value + 0.5) end
-local function Percent(value) return format('%d%%', value * 100 + 0.5) end
+local Percent = UI.Util.Percent
 
 local SOUNDS = {{'off', 'None'}}
 for _, name in ipairs({'latch-down', 'latch-up', 'blip', 'success', 'tick', 'down', 'down-primary', 'up', 'open',

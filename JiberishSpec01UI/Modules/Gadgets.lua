@@ -16,14 +16,7 @@ UI:RegisterDefaults('gadgets', {timerMinutes = 15, timerAlarm = true, timerSound
 -- defaults:end
 
 local function DB() return UI.db.gadgets end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Plain(func, ...)
-	if type(func) ~= 'function' then return nil end
-	local ok, value = pcall(func, ...)
-	if not ok or IsSecret(value) then return nil end
-	return value
-end
-local function Px(frame, n) return UI.Pixel.Px(frame, n) end
+local IsSecret, Plain, Px = UI.Util.IsSecret, UI.Util.PlainCall, UI.Util.Px
 
 -- Timer -------------------------------------------------------------------------------------------
 -- The face is a 60-minute dial: the red sector is the time left, from 12

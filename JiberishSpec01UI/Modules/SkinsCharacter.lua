@@ -50,8 +50,7 @@ local function DB() return UI.db.skins end
 local function Screened(frame)
 	if type(frame) == 'table' and type(P.Screened) == 'function' then P.Screened(frame) end
 end
-local function Px(frame, n) return UI.Pixel.Px(frame, n) end
-local function Snap(frame, value) return UI.Pixel.Snap(frame, value) end
+local Px, Snap = UI.Util.Px, UI.Util.Snap
 
 -- Small helpers ------------------------------------------------------------------------
 -- Uppercase text, leaving the game's escape codes (colors, textures) alone.

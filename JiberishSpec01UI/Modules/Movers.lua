@@ -25,7 +25,7 @@ UI:RegisterDefaults('layout', {grid = 8, snap = true, preset = 'console', resolu
 	suggest = true, lastHeight = false, custom = {}})
 -- defaults:end
 
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 local function DB() return UI.db.layout end
 
 local movers, order = {}, {}
@@ -438,7 +438,7 @@ function UI:GetMoverOption(key, field)
 end
 
 -- Size and opacity, for unlock mode's grip, wheel and inspector.
-local function Clamp(value, low, high) return value < low and low or (value > high and high or value) end
+local Clamp = UI.Util.Clamp
 
 -- quiet: the caller already took an undo snapshot (a grip drag).
 function UI:SetMoverScale(key, scale, quiet)

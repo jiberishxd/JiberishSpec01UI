@@ -25,7 +25,7 @@ local Kit = UI.Kit
 local CreateFrame, GetTime = CreateFrame, GetTime
 local floor, max, min, cos, pi = math.floor, math.max, math.min, math.cos, math.pi
 
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 
 -- Settings --------------------------------------------------------------------
 -- The Motion page (Modules/Motion.lua) declares these; until it loads, the

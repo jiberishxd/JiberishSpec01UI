@@ -41,12 +41,7 @@ UI:RegisterDefaults('compass', {
 
 local function DB() return UI.db.compass end
 local function Reduced() return Kit:Reduced() end
-local function Px(frame, n) return UI.Pixel.Px(frame, n) end
-local function Snap(value, px) return floor(value / px + 0.5) * px end
-local function Clamp(value, low, high, fallback)
-	value = type(value) == 'number' and value or fallback
-	return max(low, min(high, value))
-end
+local Px, Snap, Clamp = UI.Util.Px, UI.Util.SnapTo, UI.Util.Clamp
 
 local holder, tape, strip, band
 local ticks, labels, slots, free = {}, {}, {}, {}

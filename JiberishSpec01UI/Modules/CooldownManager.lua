@@ -28,11 +28,7 @@ UI:RegisterDefaults('cooldowns', {enable = true, key = 'light', keyPad = 2, coun
 -- defaults:end
 
 local function DB() return UI.db.cooldowns end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Is(object, kind)
-	return type(object) == 'table' and object.IsObjectType and not (object.IsForbidden and object:IsForbidden())
-		and object:IsObjectType(kind)
-end
+local IsSecret, Is = UI.Util.IsSecret, UI.Util.IsObjectType
 
 local VIEWERS = {'EssentialCooldownViewer', 'UtilityCooldownViewer', 'BuffIconCooldownViewer', 'BuffBarCooldownViewer'}
 local OVERLAY_ATLAS, OVERLAY_FILE = 'UI-HUD-CoolDownManager-IconOverlay', 6707800

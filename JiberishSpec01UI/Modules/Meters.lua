@@ -38,9 +38,7 @@ UI:RegisterDefaults('meters', {
 -- defaults:end
 
 local function DB() return UI.db.meters end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Plain(value) if IsSecret(value) then return nil end return value end
-local function Forbidden(object) return not object or (object.IsForbidden and object:IsForbidden()) end
+local IsSecret, Plain, Forbidden = UI.Util.IsSecret, UI.Util.PlainValue, UI.Util.Forbidden
 
 local BARS = {dots = {'SPEC-01 Dots', 'bar-dots'}, segments = {'SPEC-01 Segments', 'bar-segments'}, flat = {'SPEC-01 Flat', 'bar-flat'}}
 local function Bar() return BARS[DB().bar] or BARS.flat end
@@ -256,7 +254,7 @@ end
 -- if chosen) every time the game recolors it, its background becomes the dark
 -- track, and a lit line and spark ride the fill's edge. Parts are found by
 -- type, not by name, so Forever's and Retail's rows are both reached.
-local function Is(object, kind) return type(object) == 'table' and object.IsObjectType and object:IsObjectType(kind) end
+local Is = UI.Util.IsObjectType
 
 -- The first StatusBar on the row, or one or two levels down.
 local function FindBar(entry)

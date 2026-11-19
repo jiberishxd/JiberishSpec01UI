@@ -25,9 +25,7 @@ local floor, max, min = math.floor, math.max, math.min
 
 local module = UI:RegisterModule('minimap', {})
 local function DB() return UI.db.minimap end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Plain(value) if not IsSecret(value) then return value end end
-local function Forbidden(object) return type(object) ~= 'table' or (object.IsForbidden and object:IsForbidden()) end
+local IsSecret, Plain, Forbidden = UI.Util.IsSecret, UI.Util.PlainValue, UI.Util.Forbidden
 local function Fade(region)
 	if region and region.SetAlpha and not Forbidden(region) then region:SetAlpha(0) end
 end

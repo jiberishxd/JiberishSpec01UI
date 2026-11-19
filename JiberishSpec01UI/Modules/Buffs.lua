@@ -17,8 +17,7 @@ local CreateFrame = CreateFrame
 local max, floor = math.max, math.floor
 
 local module = UI:RegisterModule('buffs', {})
-local function Forbidden(object) return type(object) ~= 'table' or (object.IsForbidden and object:IsForbidden()) end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local Forbidden, IsSecret = UI.Util.Forbidden, UI.Util.IsSecret
 
 -- defaults:begin
 -- keyPad: how far the key shows around each icon. time: 'chip' (on a gray LCD

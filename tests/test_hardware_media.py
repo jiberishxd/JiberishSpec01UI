@@ -302,7 +302,7 @@ class HardwareMedia(unittest.TestCase):
     def test_toc_loads_every_lua_file_core_first(self):
         toc = (ADDON / 'JiberishSpec01UI.toc').read_text()
         listed = [line.strip().replace('\\', '/') for line in toc.splitlines() if line.strip() and not line.startswith('#')]
-        self.assertEqual(listed[:3], ['Core.lua', 'Kit/Theme.lua', 'Kit/Skin.lua'])
+        self.assertEqual(listed[:4], ['Core.lua', 'Kit/Util.lua', 'Kit/Theme.lua', 'Kit/Skin.lua'])
         self.assertEqual(listed[listed.index('Kit/Deck.lua') + 1], 'Modules/Hub.lua')
         on_disk = {p.relative_to(ADDON).as_posix() for p in ADDON.rglob('*.lua')}
         self.assertEqual(set(listed), on_disk)

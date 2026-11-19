@@ -60,16 +60,11 @@ UI:RegisterDefaults('navigation', {
 -- defaults:end
 
 local function DB() return UI.db.navigation end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 Nav.IsSecret = IsSecret
 
 -- One plain answer, or nil when the call fails or answers secret.
-local function Plain(func, ...)
-	if type(func) ~= 'function' then return nil end
-	local ok, value = pcall(func, ...)
-	if not ok or IsSecret(value) then return nil end
-	return value
-end
+local Plain = UI.Util.PlainCall
 Nav.Plain = Plain
 
 -- Two plain answers, or nothing.
@@ -1074,7 +1069,7 @@ function UI:ToggleOverlayMap(show)
 end
 
 -- Hub page ------------------------------------------------------------------------------
-local function Int(value) return format('%d', value + 0.5) end
+local Int = UI.Util.Int
 local function Yd(value) return format('%d yd', value + 0.5) end
 local function Pct(value) return format('%d%%', value * 100 + 0.5) end
 local function Px(value) return format('%d px', value + 0.5) end

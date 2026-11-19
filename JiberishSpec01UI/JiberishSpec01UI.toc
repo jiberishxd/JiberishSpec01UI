@@ -9,6 +9,7 @@
 
 Core.lua
 
+Kit\Util.lua
 Kit\Theme.lua
 Kit\Skin.lua
 Kit\Pixel.lua

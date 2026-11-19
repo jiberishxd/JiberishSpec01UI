@@ -20,8 +20,7 @@ local CreateFrame, UIParent, GetTime, InCombatLockdown = CreateFrame, UIParent, 
 local floor, max, min = math.floor, math.max, math.min
 
 local module = UI:RegisterModule('loot', {})
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Plain(value) if not IsSecret(value) then return value end end
+local IsSecret, Plain = UI.Util.IsSecret, UI.Util.PlainValue
 local function Toasts() return UI.db.toasts end
 local function LootDB() return UI.db.loot end
 local function Wants(setting) local db = Toasts(); return db.enable and db[setting] end
@@ -1467,7 +1466,7 @@ end
 local VOICES = {{'success', 'Success'}, {'open', 'Pop-up'}, {'blip', 'Blip'}, {'tick', 'Tick'}, {'latch-down', 'Latch'},
 	{'down-primary', 'Key'}, {'warning', 'Warning'}, {'off', 'Off'}}
 local function Seconds(v) return v..' s' end
-local function Percent(v) return format('%d%%', v * 100 + 0.5) end
+local Percent = UI.Util.Percent
 
 local function BannerRows(key, label, note)
 	return {'slider', label..' time', 'banners.'..key..'.hold', 1, 12, 0.5, note, format = Seconds},

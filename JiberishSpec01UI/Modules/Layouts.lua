@@ -21,8 +21,7 @@ local CreateFrame, UIParent, InCombatLockdown = CreateFrame, UIParent, InCombatL
 local floor, max, min, abs = math.floor, math.max, math.min, math.abs
 
 local function DB() return UI.db.layout end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Round(value) return floor(value + 0.5) end
+local IsSecret, Round = UI.Util.IsSecret, UI.Util.Round
 
 -- Settings a layout changes ---------------------------------------------------------
 -- A path is only set when the setting exists (a module that isn't installed or

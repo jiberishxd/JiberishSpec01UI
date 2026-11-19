@@ -41,8 +41,7 @@ UI:RegisterDefaults('infopanel', {
 -- defaults:end
 
 local function DB() return UI.db.infopanel end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Plain(value) if IsSecret(value) then return nil end return value end
+local IsSecret, Plain = UI.Util.IsSecret, UI.Util.PlainValue
 
 local MAX_SLOTS, PAD, GAP = 8, 5, 4
 local strips, sessionMoney = {}, nil

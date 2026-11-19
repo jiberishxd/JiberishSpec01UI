@@ -5,7 +5,7 @@
 -- stylesheet by tools/capture-hardware-reference.py, and the sounds from its
 -- sound recipe by tools/build-hardware-sounds.py.
 local _, UI = ...
-local Kit = {}
+local Kit = {Util = UI.Util}
 UI.Kit = Kit
 
 local CreateFrame, UIParent, GetTime = CreateFrame, UIParent, GetTime

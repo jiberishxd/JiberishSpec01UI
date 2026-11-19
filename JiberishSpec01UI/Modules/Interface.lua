@@ -4,15 +4,7 @@ local _, UI = ...
 local Kit = UI.Kit
 
 local CreateFrame, GetTime = CreateFrame, GetTime
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Forbidden(object)
-	if type(object) ~= 'table' then return true end
-	if object.IsForbidden then
-		local ok, forbidden = pcall(object.IsForbidden, object)
-		return not ok or forbidden
-	end
-	return false
-end
+local IsSecret, Forbidden = UI.Util.IsSecret, UI.Util.Forbidden
 
 -- Interface sounds ------------------------------------------------------------------
 -- One sound per thing that happens. Blizzard plays its own click for many of

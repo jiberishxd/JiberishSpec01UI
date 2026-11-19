@@ -48,9 +48,7 @@ local CreateFrame, UIParent, InCombatLockdown, GetTime = CreateFrame, UIParent, 
 local floor, max, min, sin, pi = math.floor, math.max, math.min, math.sin, math.pi
 
 local module = UI:RegisterModule('objectives', {})
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Plain(value) if not IsSecret(value) then return value end end
-local function Forbidden(object) return type(object) ~= 'table' or (object.IsForbidden and object:IsForbidden()) end
+local IsSecret, Plain, Forbidden = UI.Util.IsSecret, UI.Util.PlainValue, UI.Util.Forbidden
 -- Quiet one of Blizzard's regions. Textures also lose their color: the tracker's
 -- own animations set alpha back to 1, a vertex alpha of 0 survives them.
 -- hide: also hide it, for art Blizzard only ever animates and never shows again.
@@ -114,9 +112,9 @@ local function MasterHeader()
 	local tracker = Tracker()
 	return tracker and (tracker.Header or tracker.HeaderMenu)
 end
-local function Px(frame, n) return UI.Pixel and UI.Pixel.Px(frame, n) or n end
+local Px = UI.Util.Px
 -- A length in a frame's units, rounded to whole physical pixels.
-local function Snap(frame, value) return UI.Pixel and UI.Pixel.Snap(frame, value) or floor(value + 0.5) end
+local Snap = UI.Util.Snap
 -- A plain color texture: color and alpha baked into the texture itself.
 local function Fill(texture, token, alpha)
 	local r, g, b = Kit:RGB(token)

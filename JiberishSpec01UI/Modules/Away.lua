@@ -42,14 +42,9 @@ UI:RegisterDefaults('qol', {afk = true, afkSpin = false, afkHideUI = true,
 
 local module = UI:RegisterModule('away', {always = true})
 local function DB() return UI.db.qol end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 -- A call's first result, or nil when it fails or the answer is secret.
-local function Plain(func, ...)
-	if type(func) ~= 'function' then return nil end
-	local ok, value = pcall(func, ...)
-	if not ok or IsSecret(value) then return nil end
-	return value
-end
+local Plain = UI.Util.PlainCall
 -- A call's first four results, each nil when secret.
 local function Call(func, ...)
 	if type(func) ~= 'function' then return nil end
@@ -77,8 +72,7 @@ local CANVAS_W, CANVAS_H = 1240, 620
 local MAIN_W, MAIN_H, CONSOLE_H, MIXER_W, MIXER_H, STAGE_W = 580, 278, 300, 150, 362, 470
 local KEY, KEY_GAP = 34, 14
 
-local function Px(frame, n) return UI.Pixel.Px(frame, n) end
-local function Snap(frame, value) return UI.Pixel.Snap(frame, value) end
+local Px, Snap = UI.Util.Px, UI.Util.Snap
 local function Shown() return A.screen and A.screen:IsShown() and not A.closing end
 
 -- The same voice at most once per `gap` seconds; a delay lets it clear the

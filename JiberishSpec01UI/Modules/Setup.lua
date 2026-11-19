@@ -23,7 +23,7 @@ local floor, max, min, sin, pi = math.floor, math.max, math.min, math.sin, math.
 local function Done() return UI:Account('setup').done end
 local function Reduced() return Kit:Reduced() end
 local function Read(path) return UI.ReadOption(path) end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 
 local guide, pill
 local WIDTH, HEIGHT = 820, 568
@@ -664,8 +664,7 @@ local function Slider(body, label, low, high, step, get, set, format, width)
 	return slider
 end
 
-local function Percent(value) return format('%d%%', value * 100 + 0.5) end
-local function Whole(value) return format('%d', value + 0.5) end
+local Percent, Whole = UI.Util.Percent, UI.Util.Int
 
 -- Shapes and portraits as the unit frames module lists them.
 local SHAPES = {{'device', 'Device'}, {'bar', 'Bar'}, {'square', 'Square'}, {'slim', 'Slim'}, {'lcdstrip', 'LCD strip'},

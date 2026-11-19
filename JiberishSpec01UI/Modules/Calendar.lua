@@ -28,7 +28,7 @@ UI:RegisterDefaults('calendar', {enable = true, clock24 = true, server = false, 
 -- defaults:end
 
 local function DB() return UI.db.calendar end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 local function Store()
 	local store = UI:Account('calendar')
 	if type(store.reminders) ~= 'table' then store.reminders = {} end

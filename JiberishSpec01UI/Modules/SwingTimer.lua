@@ -20,8 +20,7 @@ UI:RegisterDefaults('swingtimer', {enable = true, colors = 'slots', range = true
 -- defaults:end
 
 local function DB() return UI.db.swingtimer end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Is(object, kind) return type(object) == 'table' and object.IsObjectType and object:IsObjectType(kind) end
+local IsSecret, Is = UI.Util.IsSecret, UI.Util.IsObjectType
 
 local FRAMES = {
 	{name = 'SwingTimerMainHandFrame', slot = 'MainHand', token = 'lamp'},

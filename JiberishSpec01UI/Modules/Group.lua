@@ -52,21 +52,12 @@ UI:RegisterDefaults('group', {
 -- defaults:end
 
 local function DB() return UI.db.group end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 -- A call's first result, or nil when it fails or the answer is secret.
-local function Plain(func, ...)
-	if type(func) ~= 'function' then return nil end
-	local ok, value = pcall(func, ...)
-	if not ok or IsSecret(value) then return nil end
-	return value
-end
+local Plain = UI.Util.PlainCall
 -- A value is there: a secret one always is, a plain one unless nil.
 local function Has(value) return IsSecret(value) or value ~= nil end
-local function RGB(color)
-	if type(color) ~= 'table' then return 1, 1, 1 end
-	return color[1] or color.r or 1, color[2] or color.g or 1, color[3] or color.b or 1
-end
-local function Forbidden(object) return not object or (object.IsForbidden and object:IsForbidden()) end
+local RGB, Forbidden = UI.Util.RGB, UI.Util.Forbidden
 
 local SMOOTH = Enum and Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
 local IMMEDIATE = Enum and Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Immediate
@@ -195,9 +186,9 @@ local function HealthColor(unit)
 	local mode = DB().healthColor
 	-- A key color set to Class means each member's own class, not the player's.
 	if mode == 'accent' and Kit:DB().accent ~= 'class' then return Kit:RGB('lamp') end
-	if mode == 'custom' then return RGB(DB().customColor) end
+	if mode == 'custom' then return RGB(DB().customColor, 1) end
 	if mode == 'reaction' then return ReactionColor(unit) end
-	if mode == 'gradient2' then return RGB(DB().healthEnd) end
+	if mode == 'gradient2' then return RGB(DB().healthEnd, 1) end
 	return ClassColor(unit)
 end
 
@@ -255,7 +246,7 @@ local function BuildDispelCurve()
 	-- No type: no ring.
 	dispelCurve:AddPoint(0, CreateColor(0, 0, 0, 0))
 	for key, index in pairs(DISPEL_INDEX) do
-		local r, g, b = RGB(DB().dispelColors[key])
+		local r, g, b = RGB(DB().dispelColors[key], 1)
 		dispelCurve:AddPoint(index, CreateColor(r, g, b, 1))
 	end
 	dispelCurve:AddPoint(9, CreateColor(0, 0, 0, 0)) -- enrage
@@ -519,7 +510,7 @@ end
 
 local function UpdateTarget(cell)
 	if not DB().targetOutline then cell.outline:Hide() return end
-	cell.outline:SetVertexColor(RGB(DB().targetColor))
+	cell.outline:SetVertexColor(RGB(DB().targetColor, 1))
 	local isTarget = UnitIsUnit(cell.unit, 'target')
 	if IsSecret(isTarget) then
 		cell.outline:Show()
@@ -594,7 +585,7 @@ local function UpdateAuras(cell)
 				end
 				Remember(cell, data)
 			elseif not IsSecret(data.dispelName) and DISPEL_NAME[data.dispelName or ''] then
-				ring:SetVertexColor(RGB(db.dispelColors[DISPEL_NAME[data.dispelName]]))
+				ring:SetVertexColor(RGB(db.dispelColors[DISPEL_NAME[data.dispelName]], 1))
 				ring:Show()
 				Remember(cell, data)
 			end
@@ -885,7 +876,7 @@ local function BuildPreview(holder, key)
 		local coords = DB().roleIcon and ROLE_COORDS[role]
 		if coords then dummy.role:SetTexCoord(coords[1], coords[2], coords[3], coords[4]); dummy.role:Show() else dummy.role:Hide() end
 		dummy.ring:SetShown(DB().dispel and index % 6 == 2)
-		if dummy.ring:IsShown() then dummy.ring:SetVertexColor(RGB(DB().dispelColors.magic)) end
+		if dummy.ring:IsShown() then dummy.ring:SetVertexColor(RGB(DB().dispelColors.magic, 1)) end
 		-- Position as the header would.
 		local slot, column = (index - 1) % p.unitsPerColumn, floor((index - 1) / p.unitsPerColumn)
 		local x, y
@@ -1536,7 +1527,7 @@ end
 local GROWTH_ITEMS = {{'down_right', 'Down, then right'}, {'down_left', 'Down, then left'}, {'up_right', 'Up, then right'},
 	{'up_left', 'Up, then left'}, {'right_down', 'Right, then down'}, {'right_up', 'Right, then up'},
 	{'left_down', 'Left, then down'}, {'left_up', 'Left, then up'}}
-local function Percent(v) return format('%d%%', v * 100 + 0.5) end
+local Percent = UI.Util.Percent
 local function Px(v) return format('%d px', v) end
 
 local function RaidRows(key)

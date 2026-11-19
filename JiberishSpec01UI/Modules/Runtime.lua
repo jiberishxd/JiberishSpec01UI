@@ -6,7 +6,7 @@ local CreateFrame, UIParent = CreateFrame, UIParent
 local floor = math.floor
 local LSM = LibStub and LibStub('LibSharedMedia-3.0', true)
 
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 
 -- Usable from any addon that reads LibSharedMedia, when one provides the library.
 if LSM then

@@ -17,7 +17,7 @@ local Kit = UI.Kit
 local CreateFrame, UIParent, InCombatLockdown = CreateFrame, UIParent, InCombatLockdown
 local abs = math.abs
 
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 
 -- defaults:begin
 UI:RegisterDefaults('appearance', {
@@ -85,7 +85,7 @@ UI:RegisterDefaults('fonts', {
 local TOKENS = {'borderPx', 'rounding', 'shadowSize', 'shadowOpacity', 'textScale', 'textOutline', 'textShadow', 'ghostDigits',
 	'barBrightness', 'softness', 'smoothBars', 'motionScale'}
 
-local function Percent(value) return format('%d%%', value * 100 + 0.5) end
+local Percent = UI.Util.Percent
 local function Times(value) return format('%.2fx', value) end
 
 -- Sample strip ---------------------------------------------------------------
@@ -718,7 +718,7 @@ do
 
 	local function Reduced() return UI.db.reduceMotion end
 	local function Lerp(a, b, t) return a + (b - a) * t end
-	local function Px(region, n) return UI.Pixel and UI.Pixel.Px(region, n or 1) or (n or 1) end
+	local Px = UI.Util.Px
 	local function Clamp(value) return value < 0 and 0 or value > 1 and 1 or value end
 	local function Span(progress, from, to) return Clamp((progress - from) / (to - from)) end
 

@@ -34,7 +34,7 @@ local _, UI = ...
 local Kit = UI.Kit
 
 local CreateFrame, UIParent = CreateFrame, UIParent
-local max, min, abs, floor = math.max, math.min, math.abs, math.floor
+local max, min, abs = math.max, math.min, math.abs
 
 local module = UI:RegisterModule('wiring', {always = true})
 
@@ -47,14 +47,9 @@ UI:RegisterDefaults('wiring', {enable = true, style = 'traces', target = true, t
 -- defaults:end
 
 local function DB() return UI.db.wiring end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 local function Reduced() return Kit:DB().reduceMotion end
-local function Plain(func, ...)
-	if type(func) ~= 'function' then return nil end
-	local ok, value = pcall(func, ...)
-	if not ok or IsSecret(value) then return nil end
-	return value
-end
+local Plain = UI.Util.PlainCall
 
 local root
 local wires = {} -- key -> wire
@@ -1020,8 +1015,7 @@ end
 
 -- Hub -----------------------------------------------------------------------------------
 local function Off() return not DB().enable end
-local function Percent(value) return format('%d%%', value * 100 + 0.5) end
-local function Whole(value) return format('%d', floor(value + 0.5)) end
+local Percent, Whole = UI.Util.Percent, UI.Util.Int
 UI:RegisterPage('wiring', {title = 'Wiring', order = 4.25, cards = {
 	{title = 'Wiring', rows = {
 		{'switch', 'Wiring', 'wiring.enable', 'Two-tone traces join the interface\'s devices, so every part reads as one board.', since = '0.5.2'},

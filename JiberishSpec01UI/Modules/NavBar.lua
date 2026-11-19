@@ -44,13 +44,7 @@ UI:RegisterDefaults('navbar', {enable = true, show = 'target', yards = true, bea
 -- defaults:end
 
 local function DB() return UI.db.navbar end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Plain(func, ...)
-	if type(func) ~= 'function' then return nil end
-	local ok, value = pcall(func, ...)
-	if not ok or IsSecret(value) then return nil end
-	return value
-end
+local IsSecret, Plain = UI.Util.IsSecret, UI.Util.PlainCall
 local function Plates() return UI.modules.nameplates end
 local function Reduced() return UI.db.reduceMotion end
 
@@ -235,8 +229,7 @@ local bars = setmetatable({}, {__mode = 'k'}) -- our plate -> its tape
 local active = {} -- tapes being shown, in no order
 local preview
 
-local function Px(frame, n) return UI.Pixel and UI.Pixel.Px(frame, n) or n end
-local function Snap(value, px) return floor(value / px + 0.5) * px end
+local Px, Snap = UI.Util.Px, UI.Util.SnapTo
 
 -- Fixed parts of the motion; the sizes the player can set come from the settings.
 local RIPPLE = 2
@@ -1023,7 +1016,7 @@ local function HidePreview()
 	preview:Hide()
 end
 
-local function Int(value) return format('%d', value + 0.5) end
+local Int = UI.Util.Int
 local function Pct(value) return format('%d%%', value + 0.5) end
 local function Pixels(value) return format('%d px', value + 0.5) end
 

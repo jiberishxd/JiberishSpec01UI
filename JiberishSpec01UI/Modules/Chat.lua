@@ -57,8 +57,7 @@ UI:RegisterDefaults('chat', {
 
 local module = UI:RegisterModule('chat', {})
 local function DB() return UI.db.chat end
-local function Forbidden(object) return not object or (object.IsForbidden and object:IsForbidden()) end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local Forbidden, IsSecret = UI.Util.Forbidden, UI.Util.IsSecret
 -- A number the client may keep secret, or 0.
 local function Plain(value) return not IsSecret(value) and type(value) == 'number' and value or 0 end
 
@@ -93,9 +92,7 @@ local function Clear(texture)
 	end
 end
 
-local function Is(object, kind)
-	return type(object) == 'table' and not Forbidden(object) and object.IsObjectType and object:IsObjectType(kind)
-end
+local Is = UI.Util.IsObjectType
 
 local function Hex(r, g, b)
 	return format('|cff%02x%02x%02x', floor((r or 1) * 255 + 0.5), floor((g or 1) * 255 + 0.5), floor((b or 1) * 255 + 0.5))

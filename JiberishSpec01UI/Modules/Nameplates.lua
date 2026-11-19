@@ -23,7 +23,7 @@ local max, min, floor = math.max, math.min, math.floor
 
 local module = UI:RegisterModule('nameplates', {})
 local function DB() return UI.db.nameplates end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 
 -- An aura update with nothing in it. Its fields can be secret in restricted
 -- content; then it counts as a full update, never tested.
@@ -41,25 +41,12 @@ local function Style()
 end
 
 -- The first value of a call, or nil if the call fails or the value is secret.
-local function Plain(func, ...)
-	if type(func) ~= 'function' then return nil end
-	local ok, value = pcall(func, ...)
-	if not ok or IsSecret(value) then return nil end
-	return value
-end
+local Plain = UI.Util.PlainCall
 
-local function Forbidden(frame)
-	if type(frame) ~= 'table' then return true end
-	if not frame.IsForbidden then return false end
-	local ok, forbidden = pcall(frame.IsForbidden, frame)
-	return not ok or forbidden == true
-end
+local Forbidden = UI.Util.Forbidden
 
 -- A color setting: {r, g, b} or {r =, g =, b =}.
-local function RGB(color)
-	if type(color) ~= 'table' then return nil end
-	return color[1] or color.r, color[2] or color.g, color[3] or color.b
-end
+local RGB = UI.Util.RGB
 
 local INTERPOLATION = Enum and Enum.StatusBarInterpolation
 local IMMEDIATE = INTERPOLATION and INTERPOLATION.Immediate
@@ -1950,8 +1937,7 @@ Kit:OnRefresh(function()
 	if preview and preview:IsVisible() then UI:Safe(FillSample, preview) end
 end)
 
-local function Int(value) return format('%d', value + 0.5) end
-local function Percent(value) return format('%d%%', value * 100 + 0.5) end
+local Int, Percent = UI.Util.Int, UI.Util.Percent
 local function Get(key) return UI.db.nameplates[key] end
 
 UI:RegisterPage('nameplates', {title = 'Nameplates', order = 15,

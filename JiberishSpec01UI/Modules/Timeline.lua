@@ -40,13 +40,7 @@ local GetActionInfo = (C_ActionBar and C_ActionBar.GetActionInfo) or _G.GetActio
 
 local module = UI:RegisterModule('timeline', {always = true})
 
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
-local function Plain(func, ...)
-	if type(func) ~= 'function' then return nil end
-	local ok, value = pcall(func, ...)
-	if not ok or IsSecret(value) then return nil end
-	return value
-end
+local IsSecret, Plain = UI.Util.IsSecret, UI.Util.PlainCall
 
 -- An aura update with nothing in it. Its fields can be secret: then it counts
 -- as a full update, never tested.

@@ -34,15 +34,9 @@ UI:RegisterDefaults('qol', {
 
 local module = UI:RegisterModule('qol', {always = true})
 local function DB() return UI.db.qol end
-local function IsSecret(value) return issecretvalue and issecretvalue(value) end
+local IsSecret = UI.Util.IsSecret
 -- A call's first result, or nil when it fails or the answer is secret.
-local function Plain(func, ...)
-	if type(func) ~= 'function' then return nil end
-	local ok, value = pcall(func, ...)
-	if not ok or IsSecret(value) then return nil end
-	return value
-end
-local function Forbidden(object) return not object or (object.IsForbidden and object:IsForbidden()) end
+local Plain, Forbidden = UI.Util.PlainCall, UI.Util.Forbidden
 
 local events = CreateFrame('Frame')
 local handlers = {}
