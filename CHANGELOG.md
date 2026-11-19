@@ -3,6 +3,13 @@
 What changed in each version of Jiberish SPEC-01 UI, newest first. The in-game
 **What's new** page (`/spec whatsnew`) shows the highlights, with a key to each page.
 
+## 0.6.6 (2026-11-18)
+
+### Fixes
+- **Party frames are back.** The 0.6.5 standard profile had **Party as raid** on, so a party
+  showed only as small raid cells. It is off in the standard profile, and turned off once in
+  existing profiles; switch it back on (Raid, boss and arena page) if you prefer the cells.
+
 ## 0.6.5 (2026-11-18)
 
 ### Profiles

@@ -15,6 +15,12 @@ local floor, max = math.floor, math.max
 -- Releases, newest first. Each highlight: area (the card's printed title), title,
 -- text (one line or two), page (the hub page Open goes to) or command (a /spec word).
 local RELEASES = {
+	{version = '0.6.6', date = '2026-11-18',
+		summary = 'Your party shows on the party frames again.',
+		entries = {
+			{area = 'Unit frames', title = 'Party frames are back', page = 'group',
+				text = 'The standard profile had the raid frames take over the party. Party members are on their own party frames again; Party as raid is still an option.'},
+		}},
 	{version = '0.6.5', date = '2026-11-18',
 		summary = 'A new standard profile with its Blizzard Edit Mode layout, icon-only keys in the console, and a horse for the mount key.',
 		entries = {

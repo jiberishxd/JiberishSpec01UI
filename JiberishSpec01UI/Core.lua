@@ -186,6 +186,11 @@ function UI:Migrate(db)
 	if type(db.compass) == 'table' and not db.compass.iconsMoved then
 		db.compass.icons, db.compass.iconsMoved = 'game', true
 	end
+	-- 0.6.6: the party shows on its own party frames again (0.6.5's standard profile
+	-- had the raid frames take it over), once.
+	if type(db.group) == 'table' and not db.group.partyFramesMoved then
+		db.group.partyAsRaid, db.group.partyFramesMoved = false, true
+	end
 	-- 0.5.1: the chat housing switch became a choice of housings.
 	if type(db.chat) == 'table' then
 		if db.chat.housing == true then db.chat.housing = 'device'
