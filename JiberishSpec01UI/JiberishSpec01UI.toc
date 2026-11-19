@@ -26,6 +26,7 @@ Modules\Hub.lua
 Modules\Appearance.lua
 Modules\Motion.lua
 Modules\Movers.lua
+Modules\EditMode.lua
 Modules\Layouts.lua
 Modules\DefaultProfile.lua
 Modules\Profiles.lua

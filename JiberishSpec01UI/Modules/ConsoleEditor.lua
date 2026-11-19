@@ -15,13 +15,15 @@
 --   Inspector  the block's spot and size in screen pixels; a bank's columns and
 --              the key size; a cast bar's or the meters' width; taking a block
 --              out of the console (a unit frame gets its own spot back) and
---              putting it back; the console's size (auto or fixed); reset.
+--              putting it back; the console's size (auto or fixed); reset; the
+--              block's settings page (right-clicking a block does the same).
 --
 -- The arrangement is saved in the profile (actionbars.consoleLayout), so it
 -- goes with exported profiles; a layout preset brings back its own. Editing is
 -- out of combat only: entering combat closes the editor (every change is saved
--- as it is made). /spec console, the console's Edit key in unlock mode, or the
--- Action bars page.
+-- as it is made). /spec console, or the Action bars page; in edit mode,
+-- clicking the console's handle or the edit strip's Console key opens it in
+-- place of the handles, and Done (or Esc) goes back to them.
 local _, UI = ...
 local Kit = UI.Kit
 
@@ -152,9 +154,12 @@ local LABELS = {['uf.player'] = 'Player', ['uf.target'] = 'Target', ['uf.focus']
 -- Frames the layouts dock with a setting of their own; the rest are taken out with an off flag.
 local DOCK_SETTING = {['uf.focus'] = 'dockFocus', ['uf.targettarget'] = 'dockToT', ['uf.pet'] = 'dockPet'}
 local REMOVABLE = {unit = true, cast = true, fn = true, deck = true, mini = true, menu = true}
+-- The hub page each kind of block's settings are on (unit frames and cast bars by their mover's).
+local BLOCK_PAGE = {bank = 'actionbars', fn = 'actionbars', menu = 'actionbars', mini = 'actionbars', deck = 'actionbars',
+	unit = 'unitframes', cast = 'unitframes'}
 
-local editing, selected, drag, wasUnlocked = false, nil, nil, false
-local overlay, inspector, keyboard, editKey
+local editing, selected, drag, fromEditMode = false, nil, nil, false
+local overlay, inspector, keyboard
 local blockFrames, guides = {}, {}
 local current, currentBounds = {}, nil
 local Draw -- set below
@@ -189,6 +194,14 @@ end
 
 local function Find(key)
 	for _, block in ipairs(current) do if block.key == key then return block end end
+end
+
+local function OpenSettings(block)
+	if not (block and UI.ToggleHub) then return Kit:Play('error') end
+	local page = (block.kind == 'unit' or block.kind == 'cast') and UI.MoverPage and UI:MoverPage(block.key)
+	page = page or BLOCK_PAGE[block.kind] or 'actionbars'
+	Kit:Play('open')
+	UI:ToggleHub(page, true)
 end
 
 -- Where blocks may go: the console's body; open sides up to the most it may grow.
@@ -273,6 +286,7 @@ local function ShowGuides(gx, gy)
 		local line = guides[index]
 		if not line then
 			line = overlay:CreateTexture(nil, 'OVERLAY', nil, 7)
+			line:SetColorTexture(1, 1, 1, 1)
 			Kit:Tint(line, 'accent', 0.9)
 			guides[index] = line
 		end
@@ -333,7 +347,10 @@ end
 
 local function BlockUp(frame, button)
 	if button == 'RightButton' then
-		if frame.block then Select(frame.block.key) end
+		if frame.block and not drag then
+			Select(frame.block.key)
+			OpenSettings(frame.block)
+		end
 		return
 	end
 	if not drag or drag.frame ~= frame then return end
@@ -378,7 +395,7 @@ local function BlockFrame(index)
 		if not self.block or drag then return end
 		GameTooltip:SetOwner(self, 'ANCHOR_TOP')
 		GameTooltip:AddLine(Label(self.block.key), 1, 1, 1)
-		GameTooltip:AddLine('Drag to move it. Arrow keys nudge one pixel, Shift one grid step.', 0.8, 0.8, 0.78, true)
+		GameTooltip:AddLine('Drag to move it. Arrow keys nudge one pixel, Shift one grid step. Right-click: its settings.', 0.8, 0.8, 0.78, true)
 		if self.block.tucked then
 			GameTooltip:AddLine(self.block.header and 'In the console\'s header: drag it into the body to place it freely. Reset block puts it back.'
 				or 'Tucked on the console\'s top edge: drag it into the console to set it in. Reset block tucks it back.', 0.8, 0.8, 0.78, true)
@@ -614,12 +631,24 @@ local function BuildInspector()
 
 	-- Reset and done.
 	y = -210
-	Key(inspector, 'RESET BLOCK', 96, ResetBlock):SetPoint('TOPLEFT', 10, y)
-	Key(inspector, 'RESET ALL', 96, function()
+	Key(inspector, 'RESET BLOCK', 88, ResetBlock):SetPoint('TOPLEFT', 10, y)
+	Key(inspector, 'RESET ALL', 80, function()
 		Kit:AlertDialog({title = 'Reset the console', confirm = 'Reset',
 			text = 'Every block goes back to the console\'s own arrangement.', onConfirm = ResetConsole})
-	end):SetPoint('TOPLEFT', 112, y)
-	Key(inspector, 'DONE', 120, function() UI:EditConsole(false) end, 'primary'):SetPoint('TOPRIGHT', -10, y)
+	end):SetPoint('TOPLEFT', 102, y)
+	-- The selected block's settings page, printed with the gear.
+	inspector.settings = Key(inspector, 'SETTINGS', 80, function() OpenSettings(Find(selected)) end)
+	inspector.settings:SetPoint('TOPLEFT', 186, y)
+	if UI.SetGearGlyph and inspector.settings.face then
+		local glyph = inspector.settings.face:CreateTexture(nil, 'OVERLAY', nil, 2)
+		glyph:SetSize(10, 10)
+		glyph:SetPoint('LEFT', 7, 0)
+		UI:SetGearGlyph(glyph)
+		Kit:Tint(glyph, 'ink')
+		if inspector.settings.text then inspector.settings.text:SetPoint('CENTER', 6, 0) end
+	end
+	-- Opened from edit mode, Done goes back to the frames' handles.
+	Key(inspector, 'DONE', 66, function() UI:EditConsole(false) end, 'primary'):SetPoint('TOPRIGHT', -10, y)
 end
 
 local function SetContext(index, text, action)
@@ -642,6 +671,7 @@ function UpdateInspector()
 		inspector.spot:SetText('DRAG TO MOVE  -  ARROWS NUDGE 1 PX')
 	end
 	inspector.state:SetText(Edited() and 'CUSTOM' or 'AUTO')
+	inspector.settings:SetKeyEnabled(block ~= nil)
 	for index = 1, 5 do SetContext(index) end
 	if block and block.kind == 'bank' then
 		SetContext(1, 'COLS -', function() Columns(-1) end)
@@ -697,7 +727,11 @@ local function Keyboard(on)
 		keyboard:SetScript('OnKeyDown', function(self, key)
 			if InCombatLockdown() then return end
 			local arrow = ARROWS[key]
-			if key == 'ESCAPE' then
+			local hub = UI.HubFrame and UI:HubFrame()
+			if key == 'ESCAPE' and hub and hub:IsShown() then
+				-- The hub open over the editor takes Escape for itself.
+				self:SetPropagateKeyboardInput(true)
+			elseif key == 'ESCAPE' then
 				self:SetPropagateKeyboardInput(false)
 				UI:EditConsole(false)
 			elseif arrow and selected then
@@ -731,7 +765,7 @@ local function BuildOverlay(console)
 	overlay.header:SetPoint('TOPRIGHT')
 	overlay.header:SetHeight(24)
 	overlay.header:SetColorTexture(0, 0, 0, 0.25)
-	overlay.hint = Kit:Label(overlay, 'EDITING  -  DRAG BLOCKS, ARROWS NUDGE, ESC DONE', 'darkInk', 7, true)
+	overlay.hint = Kit:Label(overlay, 'EDITING  -  DRAG BLOCKS, ARROWS NUDGE, RIGHT-CLICK SETTINGS, ESC DONE', 'darkInk', 7, true)
 	overlay.hint:SetPoint('TOP', 0, -8)
 	overlay:Hide()
 end
@@ -739,7 +773,8 @@ end
 -- Opening and closing ----------------------------------------------------------------------
 function UI:ConsoleEditing() return editing end
 
-function UI:EditConsole(on)
+-- closing: leaving everything (a fight starting), so edit mode's handles don't come back.
+function UI:EditConsole(on, closing)
 	if on == nil then on = not editing end
 	if on == editing then return end
 	if on then
@@ -751,18 +786,18 @@ function UI:EditConsole(on)
 		if not console then
 			return UI:Print('The console editor needs the console bar layout (Action bars, Layout: Console).')
 		end
-		-- Unlock mode's handles would cover the console's blocks.
-		wasUnlocked = UI.MoversUnlocked and UI:MoversUnlocked() or false
-		if wasUnlocked then UI:ToggleMovers(true) end
+		-- In edit mode the editor takes the handles' place (they would cover
+		-- the console's blocks); the edit strip stays.
+		fromEditMode = UI.MoversUnlocked and UI:MoversUnlocked() or false
 		if UI.SelectMover then UI:SelectMover(nil) end
 		if not overlay then BuildOverlay(console) end
 		if not inspector then BuildInspector() end
 		editing, selected, drag = true, nil, nil
+		if fromEditMode and UI.SetEditModeConsole then UI:SetEditModeConsole(true) end
 		inspector:ClearAllPoints()
 		inspector:SetPoint('BOTTOM', console, 'TOP', 0, 14)
 		overlay:Show()
 		inspector:Show()
-		if editKey then editKey:Hide() end
 		Keyboard(true)
 		Kit:Play('open')
 		UI:RelayoutConsole()
@@ -776,37 +811,17 @@ function UI:EditConsole(on)
 		GameTooltip:Hide()
 		Keyboard(false)
 		Kit:Play('latch-up')
-		if wasUnlocked and not InCombatLockdown() and UI.ToggleMovers then UI:ToggleMovers(false) end
-		wasUnlocked = false
-	end
-end
-
--- The Edit key on the console's header while frames are unlocked.
-local function UpdateEditKey()
-	local console = Console()
-	local wanted = console and not editing and UI.MoversUnlocked and UI:MoversUnlocked()
-	if wanted and not editKey then
-		editKey = Kit:Key(UIParent, {text = 'EDIT CONSOLE', width = 92, height = 20, textSize = 7, tone = 'primary',
-			onClick = function() UI:EditConsole(true) end})
-		editKey:SetFrameStrata('FULLSCREEN_DIALOG')
-	end
-	if editKey then
-		if wanted then
-			editKey:ClearAllPoints()
-			editKey:SetPoint('BOTTOM', console, 'TOP', 0, 4)
+		-- Back to edit mode's handles, if it is still on.
+		if fromEditMode and not closing and not InCombatLockdown() and UI.SetEditModeConsole and UI:MoversUnlocked() then
+			UI:SetEditModeConsole(false)
 		end
-		editKey:SetShown(wanted and true or false)
+		fromEditMode = false
 	end
-end
-
-if UI.OnMoversChanged then
-	UI:OnMoversChanged(function(key) if key == '__lock' then UpdateEditKey() end end)
 end
 
 -- Combat ends editing (each change is already saved) and gives the keyboard back.
 local watcher = CreateFrame('Frame')
 watcher:RegisterEvent('PLAYER_REGEN_DISABLED')
 watcher:SetScript('OnEvent', function()
-	if editing then UI:EditConsole(false) end
-	if editKey then editKey:Hide() end
+	if editing then UI:EditConsole(false, true) end
 end)

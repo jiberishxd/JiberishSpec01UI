@@ -1073,7 +1073,7 @@ end
 
 function ConfirmPreset(preset)
 	Kit:AlertDialog({title = 'Use the '..preset.title..' layout', confirm = 'Apply',
-		text = 'Every frame moves to the '..preset.title..' arrangement. Undo (Ctrl+Z in Unlock mode) brings back your current positions.',
+		text = 'Every frame moves to the '..preset.title..' arrangement. Undo (Ctrl+Z in edit mode) brings back your current positions.',
 		onConfirm = function() ApplyPreset(preset) end})
 end
 
@@ -1563,12 +1563,13 @@ local function BuildEditCard(content, page)
 	card.span = 2
 	local body = card.body
 
-	local edit = Kit:Button(body, {text = 'Unlock mode', width = 120, height = 28, tone = 'primary'})
+	-- Edit mode places every frame on the screen itself; its strip's Layout map key comes back here.
+	local edit = Kit:Button(body, {text = 'Edit mode', width = 120, height = 28, tone = 'primary'})
 	edit:SetPoint('TOPLEFT')
 	edit.onClick = function()
 		if InCombatLockdown() then return UI:Print('Frames can be moved once you leave combat.') end
 		local unlock = not UI:MoversUnlocked()
-		UI:ToggleMovers(not unlock)
+		if UI.EditMode then UI:EditMode(unlock) else UI:ToggleMovers(not unlock) end
 		if unlock then UI:ToggleHub(nil, false) end
 	end
 	local resetAll = Kit:Button(body, {text = 'Reset all', width = 96, height = 28})
@@ -1581,12 +1582,12 @@ local function BuildEditCard(content, page)
 
 	local gridLabel = Kit:Label(body, 'Grid', 'ink', 9)
 	gridLabel:SetPoint('TOPLEFT', 0, -48)
-	local grids = {4, 8, 16, 32}
-	local gridIndex = 2
-	for index, value in ipairs(grids) do if value == DB().grid then gridIndex = index end end
-	local gridControl = Kit:Segmented(body, {items = {'4', '8', '16', '32'}, width = 160, value = gridIndex, onChange = function(index)
-		DB().grid = grids[index]
-		UI:RefreshMoverGrid()
+	-- The handles' grid, in screen pixels (as the console editor's).
+	local grids = UI.MOVER_GRIDS or {1, 2, 4, 8}
+	local gridIndex = #grids
+	for index, value in ipairs(grids) do if value == (UI.MoverGrid and UI:MoverGrid() or DB().grid) then gridIndex = index end end
+	local gridControl = Kit:Segmented(body, {items = {'1 px', '2 px', '4 px', '8 px'}, width = 160, value = gridIndex, onChange = function(index)
+		if UI.SetMoverGrid then UI:SetMoverGrid(grids[index]) else DB().grid = grids[index]; UI:RefreshMoverGrid() end
 	end})
 	gridControl:SetPoint('TOPLEFT', 60, -42)
 	local snapLabel = Kit:Label(body, 'Snap', 'ink', 9)
@@ -1664,7 +1665,7 @@ local function BuildEditCard(content, page)
 		list:SetHeight(max(#entries * ROW, 16))
 		-- The card grows with its list; the page re-flows when it is next built.
 		card:SetHeight(28 + 188 + max(#entries * ROW, 16) + 14)
-		edit:SetKeyText(UI:MoversUnlocked() and 'Lock layout' or 'Unlock mode')
+		edit:SetKeyText(UI:MoversUnlocked() and 'Done editing' or 'Edit mode')
 	end
 	page.drawCustom()
 	return card
