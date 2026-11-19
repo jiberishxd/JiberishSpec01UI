@@ -12,8 +12,8 @@
 local ADDON, UI = ...
 local Kit = UI.Kit
 
-local CreateFrame, UIParent = CreateFrame, UIParent
-local floor, max = math.floor, math.max
+local CreateFrame = CreateFrame
+local floor = math.floor
 
 local STORE, DEFAULT = '__profiles', 'Default'
 local FORMAT_VERSION = 1
@@ -392,31 +392,36 @@ for index = 1, 64 do DECODE[strbyte(ALPHABET, index)] = index - 1 end
 local function Char64(index) return strsub(ALPHABET, index + 1, index + 1) end
 
 local function Encode64(data)
-	local out = {}
+	local out, count = {}, 0
 	for index = 1, #data, 3 do
 		local a, b, c = strbyte(data, index, index + 2)
 		local n = a * 65536 + (b or 0) * 256 + (c or 0)
-		out[#out + 1] = Char64(floor(n / 262144) % 64)..Char64(floor(n / 4096) % 64)
+		count = count + 1
+		out[count] = Char64(floor(n / 262144) % 64)..Char64(floor(n / 4096) % 64)
 			..(b and Char64(floor(n / 64) % 64) or '=')..(c and Char64(n % 64) or '=')
 	end
 	return table.concat(out)
 end
 
 local PAD = strbyte('=')
+-- Returns the bytes, or nil and why: 'short' (the end is missing) or 'bad'.
 local function Decode64(text)
 	text = gsub(text, '[^%w%+/=]', '')
-	if #text == 0 or #text % 4 ~= 0 then return nil end
-	local out = {}
+	if #text == 0 or #text % 4 ~= 0 then return nil, 'short' end
+	local out, count = {}, 0
 	for index = 1, #text, 4 do
 		local w, x, y, z = strbyte(text, index, index + 3)
 		local a, b = DECODE[w], DECODE[x]
 		local c = y ~= PAD and DECODE[y] or nil
 		local d = z ~= PAD and DECODE[z] or nil
-		if not a or not b or (y ~= PAD and not c) or (z ~= PAD and not d) or (not c and d) then return nil end
+		if not a or not b or (y ~= PAD and not c) or (z ~= PAD and not d) or (not c and d) then return nil, 'bad' end
+		-- Padding only ever closes the string.
+		if (not d) and index + 3 < #text then return nil, 'bad' end
 		local n = a * 262144 + b * 4096 + (c or 0) * 64 + (d or 0)
-		out[#out + 1] = strchar(floor(n / 65536) % 256)
-		if c then out[#out + 1] = strchar(floor(n / 256) % 256) end
-		if d then out[#out + 1] = strchar(n % 256) end
+		-- Three bytes at most per group of four, as one string.
+		count = count + 1
+		out[count] = (d and strchar(floor(n / 65536) % 256, floor(n / 256) % 256, n % 256))
+			or (c and strchar(floor(n / 65536) % 256, floor(n / 256) % 256)) or strchar(floor(n / 65536) % 256)
 	end
 	return table.concat(out)
 end
@@ -431,105 +436,69 @@ local function Checksum(data)
 	return format('%04x%04x', b, a)
 end
 
-function UI:EncodeProfile(data, profile)
+-- opts.positions = false leaves the frame positions out.
+function UI:EncodeProfile(data, profile, opts)
+	local clean = StripPrivate(Copy(data))
+	if opts and opts.positions == false then clean.movers = nil end
 	local out = {}
-	Serialize({v = FORMAT_VERSION, n = profile, d = StripPrivate(Copy(data))}, out, -1)
+	Serialize({v = FORMAT_VERSION, n = profile, d = clean}, out, -1)
 	local payload = table.concat(out)
 	return format('SPEC01:%d:%s:%s', FORMAT_VERSION, Checksum(payload), Encode64(payload))
 end
 
--- Returns data, name; or nil and the reason.
+-- What a pasted string that is not ours most likely is, in plain words.
+local FOREIGN = {
+	{'^!E%d*!', 'That is an ElvUI profile string. Only strings from the Export sheet of SPEC-01 UI can be imported here.'},
+	{'^!WA:', 'That is a WeakAuras string. Only strings from the Export sheet of SPEC-01 UI can be imported here.'},
+	{'^!PLATER', 'That is a Plater string. Only strings from the Export sheet of SPEC-01 UI can be imported here.'},
+}
+local function Foreign(text)
+	text = strtrim(text)
+	for _, entry in ipairs(FOREIGN) do
+		if strfind(text, entry[1]) then return entry[2] end
+	end
+	return 'That is not a SPEC-01 profile string. One starts with "SPEC01:" and is a single long line; copy it from the Export sheet of this addon.'
+end
+
+local READ_PROBLEMS = {
+	['cut short'] = 'The settings inside end too early: the string is incomplete. Copy the whole line again.',
+	['extra text at the end'] = 'There is extra text after the settings. Paste only the profile string.',
+}
+
+-- Returns data, name, info ({version =, positions = true when it holds frame
+-- positions}); or nil and what went wrong, in plain words.
 function UI:DecodeProfile(text)
-	local version, sum, body = strmatch(text or '', '^%s*SPEC01:(%d+):(%x+):(.-)%s*$')
-	if not version then return nil, 'That is not a SPEC-01 profile string.' end
-	if tonumber(version) ~= FORMAT_VERSION then return nil, 'That string was made by a newer version of this addon.' end
-	local payload = Decode64(body)
-	if not payload then return nil, 'The string is damaged: some of it is missing or changed.' end
-	if Checksum(payload) ~= strlower(sum) then return nil, 'The string is damaged: its check does not match.' end
+	text = type(text) == 'string' and text or ''
+	if strtrim(text) == '' then return nil, 'Nothing to read yet: paste a profile string into the box.' end
+	-- Anything pasted in front of the string (a chat name, a quote) is skipped.
+	local start = strfind(text, 'SPEC01:', 1, true)
+	if not start then return nil, Foreign(text) end
+	local version, sum, body = strmatch(strsub(text, start), '^SPEC01:(%d*):(%x*):(.-)%s*$')
+	if not version or version == '' or sum == '' then
+		return nil, 'The start of the string is damaged: "SPEC01:" should be followed by a version and a check. Copy it again.'
+	end
+	version = tonumber(version)
+	if version > FORMAT_VERSION then
+		return nil, format('That string comes from a newer version of SPEC-01 UI (format %d; this one reads format %d). Update the addon, then import it again.',
+			version, FORMAT_VERSION)
+	end
+	if version < 1 then return nil, format('That string uses a format this addon does not know (%d).', version) end
+	local payload, why = Decode64(body)
+	if not payload then
+		if why == 'short' then return nil, 'The string is cut short: its end is missing. Copy the whole line again.' end
+		return nil, 'The string is damaged: it holds characters in places a profile string never has them. Copy it again.'
+	end
+	if Checksum(payload) ~= strlower(sum) then
+		return nil, 'The string is damaged: some characters were changed or lost on the way (its check does not match). Copy it again from where it came from.'
+	end
 	local value, problem = Parse(payload)
-	if type(value) ~= 'table' or type(value.d) ~= 'table' then return nil, 'The string could not be read ('..tostring(problem or 'no settings')..').' end
+	if type(value) ~= 'table' then
+		return nil, READ_PROBLEMS[problem] or format('The settings inside could not be read (%s). The string may be damaged.', tostring(problem or 'no settings'))
+	end
+	if type(value.d) ~= 'table' then return nil, 'The string holds no settings.' end
 	local data = Conform(StripPrivate(value.d), UI.defaults)
 	if UI.Migrate then UI:Migrate(data) end
-	return data, type(value.n) == 'string' and value.n or nil
-end
-
--- The text sheet: a device with a black display holding the string --------------------------
-local sheet
-local function Sheet()
-	if sheet then return sheet end
-	sheet = Kit:Device(UIParent, {model = 'PR-1', title = 'Profile string', width = 480, height = 320, name = 'JiberishSpec01ProfileSheet'})
-	sheet:SetFrameStrata('FULLSCREEN_DIALOG')
-	sheet:SetFrameLevel(300)
-	Kit:Relevel(sheet)
-	sheet:SetPoint('CENTER', 0, 40)
-	sheet:EnableMouse(true)
-	sheet:SetMovable(true)
-	sheet:SetClampedToScreen(true)
-	sheet:RegisterForDrag('LeftButton')
-	sheet:SetScript('OnDragStart', sheet.StartMoving)
-	sheet:SetScript('OnDragStop', sheet.StopMovingOrSizing)
-	tinsert(UISpecialFrames, 'JiberishSpec01ProfileSheet')
-	Kit:SetLed(sheet.lamp, true)
-	sheet.hint = Kit:Text(sheet, '', 9, 'dim')
-	sheet.hint:SetPoint('TOPLEFT', 14, -28)
-	sheet.hint:SetPoint('TOPRIGHT', -14, -28)
-	sheet.hint:SetJustifyH('LEFT')
-	local screen = Kit:Screen(sheet, {inset = 3, radius = 6})
-	screen:SetPoint('TOPLEFT', 12, -54)
-	screen:SetPoint('BOTTOMRIGHT', -12, 54)
-	local scroll = CreateFrame('ScrollFrame', nil, screen.screen)
-	scroll:SetPoint('TOPLEFT', 8, -8)
-	scroll:SetPoint('BOTTOMRIGHT', -8, 8)
-	local edit = CreateFrame('EditBox', nil, scroll)
-	edit:SetMultiLine(true)
-	edit:SetAutoFocus(false)
-	edit:SetMaxLetters(0)
-	Kit:Font(edit, 10)
-	Kit:Tint(edit, 'darkInk')
-	edit:SetWidth(400)
-	scroll:SetScrollChild(edit)
-	scroll:SetScript('OnSizeChanged', function(self, width) edit:SetWidth(max(width, 10)) end)
-	scroll:EnableMouseWheel(true)
-	scroll:SetScript('OnMouseWheel', function(self, delta)
-		self:SetVerticalScroll(Kit:Clamp(self:GetVerticalScroll() - delta * 30, 0, self:GetVerticalScrollRange()))
-	end)
-	edit:SetScript('OnCursorChanged', function(_, _, y, _, height)
-		local top, view = scroll:GetVerticalScroll(), scroll:GetHeight()
-		y = -y
-		if y < top then scroll:SetVerticalScroll(y)
-		elseif y + height > top + view then scroll:SetVerticalScroll(y + height - view) end
-	end)
-	edit:SetScript('OnEscapePressed', function() Kit:Close(sheet) end)
-	-- An export can be selected and copied but not changed.
-	edit:SetScript('OnTextChanged', function(self, user)
-		if sheet.readOnly and user then
-			self:SetText(sheet.value or '')
-			self:HighlightText()
-		end
-	end)
-	edit:SetScript('OnEditFocusGained', function(self) if sheet.readOnly then self:HighlightText() end end)
-	edit:SetScript('OnChar', function(_, character)
-		if not sheet.readOnly then Kit:Play(character == ' ' and 'type-space' or 'type') end
-	end)
-	screen.screen:EnableMouse(true)
-	screen.screen:SetScript('OnMouseDown', function() edit:SetFocus() end)
-	sheet.edit = edit
-	sheet.primary = Kit:Key(sheet, {width = 96, height = 28, tone = 'primary', text = 'Import'})
-	sheet.primary:SetPoint('BOTTOMRIGHT', -14, 14)
-	sheet.closeKey = Kit:Key(sheet, {width = 84, height = 28, text = 'Close'})
-	sheet.closeKey:SetPoint('RIGHT', sheet.primary, 'LEFT', -8, 0)
-	sheet.closeKey.onClick = function() Kit:Close(sheet) end
-	sheet.status = Kit:Text(sheet, '', 9, 'dim')
-	sheet.status:SetPoint('BOTTOMLEFT', 16, 24)
-	sheet.status:SetPoint('RIGHT', sheet.closeKey, 'LEFT', -10, 0)
-	sheet.status:SetJustifyH('LEFT')
-	sheet:Hide()
-	return sheet
-end
-
-local function Status(text, token)
-	sheet.status:SetText(text or '')
-	Kit:Tint(sheet.status, token or 'dim')
+	return data, type(value.n) == 'string' and value.n or nil, {version = version, positions = type(data.movers) == 'table'}
 end
 
 local function UniqueName(profile)
@@ -542,48 +511,10 @@ local function UniqueName(profile)
 	return profile..' '..floor(GetTime())
 end
 
-function UI:ShowExport()
-	local frame = Sheet()
-	frame.readOnly = true
-	frame.value = UI:EncodeProfile(Copy(UI.db), UI:ActiveProfile())
-	frame.title:SetText(strupper('Export  /  '..UI:ActiveProfile()))
-	frame.hint:SetText('Every setting in this profile as one line of text. Copy it with Ctrl+C and paste it into the Import sheet on any character.')
-	frame.edit:SetText(frame.value)
-	frame.primary:Hide()
-	Status(format('%d characters', #frame.value))
-	Kit:Open(frame)
-	frame.edit:SetFocus()
-	frame.edit:HighlightText()
-end
-
-function UI:ShowImport()
-	local frame = Sheet()
-	frame.readOnly = false
-	frame.value = nil
-	frame.title:SetText('IMPORT')
-	frame.hint:SetText('Paste a SPEC-01 profile string. It is saved as a new profile; nothing changes until you choose to use it.')
-	frame.edit:SetText('')
-	frame.primary:Show()
-	frame.primary:SetKeyText('Import')
-	Status('')
-	frame.primary.onClick = function()
-		local data, profile = UI:DecodeProfile(frame.edit:GetText())
-		if not data then
-			Status(profile, 'red')
-			Kit:Play('error')
-			return
-		end
-		local name = UniqueName(profile)
-		Live().profiles[name] = data
-		Kit:Play('success')
-		Kit:Close(frame)
-		Kit:AlertDialog({title = 'Profile imported', text = format('Saved as "%s". Use it on this character now?', name),
-			confirm = 'Use it', onConfirm = function() UI:SwitchProfile(name) end})
-		Kit:Apply()
-	end
-	Kit:Open(frame)
-	frame.edit:SetFocus()
-end
+-- The store's own helpers, for the import preview, the text sheet and the
+-- automatic profiles (ProfilesImport.lua).
+UI.ProfileStore = {Copy = Copy, Fill = Fill, StripPrivate = StripPrivate, LoadInto = LoadInto, Live = Live, Exists = Exists,
+	UniqueName = UniqueName, CharKey = CharKey, PRIVATE = PRIVATE, DEFAULT = DEFAULT, Reserved = Reserved}
 
 -- Hub page -----------------------------------------------------------------------------
 local function OtherProfiles()
@@ -597,6 +528,13 @@ end
 local function AllProfiles()
 	local items = {}
 	for _, profile in ipairs(UI:ProfileNames()) do items[#items + 1] = {profile, profile} end
+	return items
+end
+
+-- The automatic profile for the specialization in use (ProfilesImport.lua).
+local function SpecItems()
+	local items = {{'__none', 'None (off)'}}
+	for _, item in ipairs(AllProfiles()) do items[#items + 1] = item end
 	return items
 end
 
@@ -618,7 +556,22 @@ UI:RegisterPage('profiles', {title = 'Profiles', order = 4, since = '0.5.0', car
 			set = function(profile) UI:DeleteProfile(profile) end, note = 'The profile in use cannot be deleted.'},
 	}},
 	{title = 'Share', rows = {
-		{'button', 'Export', 'Export', function() UI:ShowExport() end, 'This profile as a line of text to copy.'},
-		{'button', 'Import', 'Import', function() UI:ShowImport() end, 'Paste a profile string to save it as a new profile.'},
+		{'button', 'Export', 'Export', function() UI:ShowExport() end, 'This profile as a line of text to copy, with or without frame positions.'},
+		{'button', 'Import', 'Import', function() UI:ShowImport() end,
+			'Paste a profile string to see what it would change, then apply it here or save it as a new profile.'},
+		{'button', 'Undo import', 'Undo', function() UI:UndoImport() end, since = '0.6.0',
+			note = 'Put back the settings from before the last import. They are also kept as a "Before import" profile.',
+			hidden = function() return not (UI.LastImport and UI:LastImport()) end},
+	}},
+	{title = 'Automatic', since = '0.6.0', rows = {
+		{'note', 'Each specialization of this character can load a profile of its own: change specialization (out of combat) and the addon offers the reload that loads it.',
+			since = '0.6.0', hidden = function() return not (UI.SpecProfilesAvailable and UI:SpecProfilesAvailable()) end},
+		{'dropdown', 'For this specialization', nil, items = SpecItems, since = '0.6.0',
+			get = function() return UI.SpecProfile and UI:SpecProfile() or '__none' end,
+			set = function(profile) if UI.SetSpecProfile then UI:SetSpecProfile(profile) end end,
+			note = 'The profile used in the specialization you are in now. Set one in each specialization; None leaves the choice to "This character uses".',
+			hidden = function() return not (UI.SpecProfilesAvailable and UI:SpecProfilesAvailable()) end},
+		{'note', 'Specializations are not available on this game client.',
+			hidden = function() return UI.SpecProfilesAvailable and UI:SpecProfilesAvailable() end},
 	}},
 }})

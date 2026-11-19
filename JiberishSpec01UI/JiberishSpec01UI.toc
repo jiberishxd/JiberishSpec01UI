@@ -30,6 +30,7 @@ Modules\EditMode.lua
 Modules\Layouts.lua
 Modules\DefaultProfile.lua
 Modules\Profiles.lua
+Modules\ProfilesImport.lua
 Modules\Setup.lua
 Modules\Runtime.lua
 Modules\Drawer.lua
