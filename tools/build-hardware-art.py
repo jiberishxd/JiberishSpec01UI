@@ -324,7 +324,7 @@ def menu_icon_shapes(name):
     return table[name]
 
 
-# Micro menu and bag bar glyphs in atlas order. ActionBars.lua lists the same names.
+# Micro menu and bag bar glyphs in atlas order. ActionBarsMenu.lua lists the same names.
 MENU_ICONS = ('character', 'spellbook', 'talents', 'professions', 'achievements', 'legacy', 'quest', 'guild',
               'social', 'finder', 'journal', 'collections', 'menu', 'help', 'store', 'house',
               'map', 'pvp', 'backpack', 'bag', 'reagent', 'key', 'mount', 'hearth',

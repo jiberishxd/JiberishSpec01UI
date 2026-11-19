@@ -138,7 +138,7 @@ class HardwareMedia(unittest.TestCase):
         self.assertLessEqual(used, set(FIXTURE['icons']), sorted(used - set(FIXTURE['icons'])))
 
     def test_menu_glyph_atlas_order_matches_the_lua_lookup(self):
-        source = (ADDON / 'Modules/ActionBars.lua').read_text()
+        source = (ADDON / 'Modules/ActionBarsMenu.lua').read_text()
         block = re.search(r"local MENU_ICONS = \{(.*?)\}", source, re.S)[1]
         names = re.findall(r"'([\w-]+)'", block)
         self.assertEqual(names, FIXTURE['menuIcons'])

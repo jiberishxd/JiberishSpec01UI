@@ -1,0 +1,538 @@
+{
+ "movers": {
+  "ab.bags": {
+   "1": -15,
+   "2": 215.5,
+   "anchor": "BOTTOMRIGHT"
+  },
+  "ab.console": {
+   "1": 0,
+   "2": 11,
+   "anchor": "BOTTOM"
+  },
+  "ab.extra": {
+   "1": -224,
+   "2": -206,
+   "anchor": "CENTER"
+  },
+  "ab.menu": {
+   "1": -980.04,
+   "2": 140.8,
+   "anchor": "BOTTOMRIGHT",
+   "scale": 0.75
+  },
+  "ab.side": {
+   "1": -6,
+   "2": -40,
+   "anchor": "RIGHT"
+  },
+  "ab.zone": {
+   "1": -291.6,
+   "2": -206,
+   "anchor": "CENTER"
+  },
+  "bags.bags": {
+   "1": -15,
+   "2": -559.2,
+   "anchor": "RIGHT"
+  },
+  "bags.bank": {
+   "1": 12,
+   "2": -76.8,
+   "anchor": "TOPLEFT"
+  },
+  "cb.player": {
+   "1": -220.8,
+   "2": 323.4,
+   "anchor": "BOTTOM",
+   "scale": 0.84
+  },
+  "cb.target": {
+   "1": 220.8,
+   "2": 322.5,
+   "anchor": "BOTTOM",
+   "scale": 0.9
+  },
+  "cue.ring": {
+   "1": -28,
+   "2": -22.8,
+   "anchor": "CENTER"
+  },
+  "cue.status": {
+   "1": 0,
+   "2": -94,
+   "anchor": "TOP"
+  },
+  "dm.own": {
+   "1": -6,
+   "2": -490,
+   "anchor": "RIGHT"
+  },
+  "drawer.tab": {
+   "1": -1044.91,
+   "2": -4.8,
+   "anchor": "BOTTOMRIGHT",
+   "scale": 1.28
+  },
+  "gadget.timer": {
+   "1": 705,
+   "2": -142.5,
+   "anchor": "CENTER"
+  },
+  "group.arena": {
+   "1": -110.67,
+   "2": 9.5,
+   "anchor": "RIGHT"
+  },
+  "group.boss": {
+   "1": -110.67,
+   "2": 9.5,
+   "anchor": "RIGHT"
+  },
+  "group.large": {
+   "1": -1638.4,
+   "2": 286.4,
+   "anchor": "BOTTOMRIGHT",
+   "scale": 0.8
+  },
+  "group.small": {
+   "1": -1681.07,
+   "2": 286.4,
+   "anchor": "BOTTOMRIGHT",
+   "scale": 0.8
+  },
+  "ip.extra": {
+   "1": 17.33,
+   "2": -43.2,
+   "anchor": "TOPLEFT",
+   "scale": 0.9
+  },
+  "ip.hud": {
+   "1": -4.01,
+   "2": -56.8,
+   "anchor": "TOP"
+  },
+  "ip.main": {
+   "1": 738.66,
+   "2": -17.6,
+   "anchor": "TOPLEFT",
+   "scale": 0.9
+  },
+  "nt.banner": {
+   "1": 0,
+   "2": -146,
+   "anchor": "TOP"
+  },
+  "nt.loot": {
+   "1": -744.04,
+   "2": -64.8,
+   "anchor": "RIGHT"
+  },
+  "nt.lootwindow": {
+   "1": 1502.33,
+   "2": -396,
+   "anchor": "TOPLEFT"
+  },
+  "nt.rolls": {
+   "1": 280,
+   "2": 640,
+   "anchor": "BOTTOM"
+  },
+  "tl.player": {
+   "1": 0,
+   "2": -174.49,
+   "anchor": "CENTER",
+   "scale": 0.83
+  },
+  "uf.focus": {
+   "1": 1199.47,
+   "2": -22.8,
+   "anchor": "LEFT"
+  },
+  "uf.party1": {
+   "1": 300,
+   "2": 93.2,
+   "anchor": "LEFT"
+  },
+  "uf.party2": {
+   "1": 300,
+   "2": 43.2,
+   "anchor": "LEFT"
+  },
+  "uf.party3": {
+   "1": 300,
+   "2": -6.8,
+   "anchor": "LEFT"
+  },
+  "uf.party4": {
+   "1": 300,
+   "2": -56.8,
+   "anchor": "LEFT"
+  },
+  "uf.pet": {
+   "1": 746.67,
+   "2": 209,
+   "anchor": "BOTTOMLEFT"
+  },
+  "uf.player": {
+   "1": 745.07,
+   "2": 249.5,
+   "anchor": "BOTTOMLEFT",
+   "scale": 0.9
+  },
+  "uf.target": {
+   "1": -745.07,
+   "2": 249.5,
+   "anchor": "BOTTOMRIGHT",
+   "scale": 0.9
+  },
+  "uf.targettarget": {
+   "1": -746.67,
+   "2": 190,
+   "anchor": "BOTTOMRIGHT"
+  }
+ },
+ "actionbars": {
+  "abbreviate": true,
+  "art": false,
+  "bagGlyphsMoved": true,
+  "bagIcons": "glyphs",
+  "bagsColumns": 0,
+  "bagsEnable": true,
+  "bagsFade": false,
+  "bagsGlyph": 0.6,
+  "bagsHide": {},
+  "bagsHousing": true,
+  "bagsKeySize": 22,
+  "bagsLayout": "line",
+  "bagsOrient": "horizontal",
+  "bagsScale": 1,
+  "bagsSpacing": 3,
+  "bankAlign": "center",
+  "cdColor": {
+   "1": 1,
+   "2": 1,
+   "3": 1
+  },
+  "cdMin": 2,
+  "cdNumbers": true,
+  "cdSize": 0,
+  "consoleHeight": 0,
+  "consoleWidth": 640,
+  "countChip": true,
+  "countPoint": "BOTTOMRIGHT",
+  "countSize": 0,
+  "dock": false,
+  "emptyAlpha": 0.5,
+  "fn1": "mount",
+  "fn2": "hearth",
+  "fn3": "map",
+  "fn4": "bags",
+  "fn5": "drawer",
+  "fn6": "move",
+  "fn7": "calendar",
+  "fn8": "menu",
+  "fnKeys": true,
+  "fnMacro": "",
+  "fnSize": 22,
+  "glow": "pulse",
+  "honorColor": {
+   "1": 0.95,
+   "2": 0.6,
+   "3": 0.15
+  },
+  "hotkeyPoint": "TOPLEFT",
+  "hotkeySize": 0,
+  "hotkeys": true,
+  "housing": true,
+  "iconInset": 0,
+  "keyGap": 0,
+  "keyLed": true,
+  "keySize": 34,
+  "layout": "console",
+  "legendChip": true,
+  "lock": "game",
+  "look": "hardware",
+  "macroSize": 7,
+  "macros": false,
+  "manaColor": {
+   "1": 0.45,
+   "2": 0.58,
+   "3": 1
+  },
+  "menuColumns": 6,
+  "menuEdge": "bottom",
+  "menuEnable": true,
+  "menuFade": false,
+  "menuGlyph": 0.68,
+  "menuHide": {},
+  "menuHousing": true,
+  "menuIcons": "glyphs",
+  "menuKeySize": 22,
+  "menuLayout": "line",
+  "menuLine": true,
+  "menuOrient": "horizontal",
+  "menuScale": 1,
+  "menuSpacing": 3,
+  "meterColors": "theme",
+  "minimalDeck": true,
+  "padding": 0,
+  "panelDurability": false,
+  "panelGold": false,
+  "panelLatency": false,
+  "panelZone": false,
+  "pet": true,
+  "previewColor": {
+   "1": 1,
+   "2": 0.8,
+   "3": 0.2
+  },
+  "questPreview": false,
+  "rangeColor": {
+   "1": 1,
+   "2": 0.38,
+   "3": 0.32
+  },
+  "readout": "level",
+  "repColor": {
+   "1": 0.2,
+   "2": 0.75,
+   "3": 0.35
+  },
+  "restedColor": {
+   "1": 0.3,
+   "2": 0.55,
+   "3": 1
+  },
+  "restedOverlay": true,
+  "rows": 2,
+  "scale": 1,
+  "side": true,
+  "sideLayout": "columns",
+  "stance": true,
+  "stat1": "xph",
+  "stat2": "ttl",
+  "stat3": "levelTime",
+  "stat4": "session",
+  "stat5": "rested",
+  "stat6": "kills",
+  "stats": true,
+  "statsSize": "compact",
+  "statsStyle": "text",
+  "targetPlate": "plate",
+  "unusableColor": {
+   "1": 0.5,
+   "2": 0.5,
+   "3": 0.48
+  },
+  "xpColor": {
+   "1": 0.94,
+   "2": 0.25,
+   "3": 0.2
+  },
+  "xpHeight": 8,
+  "xpbar": true
+ },
+ "layout": {
+  "custom": {},
+  "density": "comfortable",
+  "grid": 8,
+  "preset": "cockpit",
+  "resolution": "auto",
+  "snap": true,
+  "suggest": true
+ },
+ "unitframes_units": {
+  "focus": {
+   "width": 176,
+   "height": 44,
+   "scale": 1,
+   "portrait": "off",
+   "shape": "default"
+  },
+  "party": {
+   "width": 176,
+   "height": 44,
+   "scale": 1,
+   "portrait": "off",
+   "shape": "default"
+  },
+  "pet": {
+   "width": 128,
+   "height": 30,
+   "scale": 1,
+   "portrait": "off",
+   "shape": "default"
+  },
+  "player": {
+   "width": 224,
+   "height": 70,
+   "scale": 1,
+   "portrait": "default",
+   "shape": "default"
+  },
+  "target": {
+   "width": 224,
+   "height": 70,
+   "scale": 1,
+   "portrait": "default",
+   "shape": "default"
+  },
+  "targettarget": {
+   "width": 128,
+   "height": 30,
+   "scale": 1,
+   "portrait": "off",
+   "shape": "default"
+  }
+ },
+ "unitframes_top": {
+  "arrive": true,
+  "auraLines": true,
+  "auras": true,
+  "avatarRing": "class",
+  "avatarStatus": true,
+  "barStyle": "bar",
+  "cast": {
+   "player": {
+    "height": 30,
+    "icon": true,
+    "name": true,
+    "position": "docked",
+    "time": true,
+    "width": 240
+   },
+   "target": {
+    "height": 30,
+    "icon": true,
+    "name": true,
+    "position": "docked",
+    "time": true,
+    "width": 224
+   }
+  },
+  "castMode": "key",
+  "castStyle": "bar",
+  "castTexture": "flat",
+  "castbar": true,
+  "combatSweep": false,
+  "digits": true,
+  "healthColor": "accent",
+  "healthDirection": "horizontal",
+  "healthEnd": {
+   "1": 0.47,
+   "2": 0.88,
+   "3": 0.45
+  },
+  "healthStart": {
+   "1": 0.1,
+   "2": 0.45,
+   "3": 0.28
+  },
+  "healthTexture": "flat",
+  "housing": "default",
+  "housingAlpha": 0.95,
+  "housingColor": {
+   "1": 0.11,
+   "2": 0.11,
+   "3": 0.1
+  },
+  "indicators": {
+   "dispel": true,
+   "leader": true,
+   "partyPets": false,
+   "partyTargets": false,
+   "raidTarget": true,
+   "readyCheck": true,
+   "resurrect": true,
+   "role": true,
+   "summon": true,
+   "targetOutline": true
+  },
+  "nameColor": "default",
+  "nameCustom": {
+   "1": 1,
+   "2": 1,
+   "3": 1
+  },
+  "party": true,
+  "portrait": "key",
+  "powerDigits": "off",
+  "powerDigitsSide": "outer",
+  "powerDigitsSize": 18,
+  "powerDirection": "horizontal",
+  "powerGradient": false,
+  "powerMode": "custom",
+  "powerMotion": "spark",
+  "powerTexture": "flat",
+  "scale": 1,
+  "shape": "device",
+  "sweepMoved": true,
+  "textColor": "default",
+  "textCustom": {
+   "1": 0.85,
+   "2": 0.89,
+   "3": 0.78
+  },
+  "track": "screen",
+  "trackAlpha": 0.9,
+  "trackColor": {
+   "1": 0.05,
+   "2": 0.05,
+   "3": 0.05
+  }
+ },
+ "scale_top": 1,
+ "style": {
+  "actionbars": "keys",
+  "bags": "device",
+  "buffs": "keys",
+  "chat": "display",
+  "group": "device",
+  "infopanel": "device",
+  "loot": "device",
+  "meters": "device",
+  "minimap": "navigator",
+  "nameplates": "dots",
+  "objectives": "device",
+  "tooltip": "display",
+  "unitframes": "dark",
+  "windows": "display"
+ },
+ "infopanel": {
+  "width": 720,
+  "height": 22,
+  "slots": 6,
+  "layout": "strips"
+ },
+ "group": {
+  "large": {
+   "columnSpacing": 3,
+   "groupBy": "GROUP",
+   "growth": "down_right",
+   "healthText": "none",
+   "height": 32,
+   "maxColumns": 8,
+   "power": "none",
+   "scale": 1,
+   "sortMethod": "INDEX",
+   "spacing": 3,
+   "unitsPerColumn": 5,
+   "width": 72
+  },
+  "small": {
+   "columnSpacing": 4,
+   "groupBy": "GROUP",
+   "growth": "down_right",
+   "healthText": "none",
+   "height": 42,
+   "maxColumns": 4,
+   "power": "healers",
+   "scale": 1,
+   "sortMethod": "INDEX",
+   "spacing": 4,
+   "unitsPerColumn": 5,
+   "width": 88
+  }
+ }
+}

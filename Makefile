@@ -2,7 +2,7 @@
 WOW ?= /Applications/World of Warcraft
 CLIENTS ?= _retail_ _forever_
 
-.PHONY: check lint test hooks install
+.PHONY: check lint test harness hooks install
 
 check:        ## every Lua check, then the unit tests
 	python3 tools/check.py
@@ -12,6 +12,9 @@ lint:         ## Lua checks only (pass FILES=... to limit)
 
 test:         ## unit tests only
 	python3 -m unittest discover -s tests -q
+
+harness:      ## offline harnesses with renders in build/harness/ (layouts, console editor, navigation)
+	python3 tests/harness/run_all.py
 
 hooks:        ## run the Lua checks on every commit
 	git config core.hooksPath tools/hooks
