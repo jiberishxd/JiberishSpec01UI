@@ -5,6 +5,8 @@
 ## Notes: The Blizzard interface reskinned in the SPEC-01/HARDWARE style: unit frames, action bars, chat, tooltips, sounds and motion. SPEC-01 by Shu Ding, MIT.
 ## SavedVariables: JiberishSpec01DB
 ## OptionalDeps: LibSharedMedia-3.0
+## X-License: MIT
+## X-Website: https://github.com/jiberishxd/JiberishSpec01UI
 ## DefaultState: Enabled
 
 Core.lua

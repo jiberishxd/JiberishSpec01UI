@@ -1,0 +1,43 @@
+name: Bug report
+description: Something is broken, errors, or looks wrong in game.
+labels: [bug]
+body:
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client
+      options: [Forever, Retail, Both]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Addon version
+      description: Shown on the hub's About page (/spec about), or in the addon list.
+      placeholder: 0.6.0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error text
+      description: The full error from BugSack/BugGrabber (or /console scriptErrors 1), if any.
+      render: text
+  - type: textarea
+    id: profile
+    attributes:
+      label: Profile string (optional)
+      description: Profiles page → Export, if the problem depends on your settings.
+      render: text
+  - type: textarea
+    id: addons
+    attributes:
+      label: Other addons
+      description: Other interface addons you run (ElvUI, Details!, Plater …), if any.

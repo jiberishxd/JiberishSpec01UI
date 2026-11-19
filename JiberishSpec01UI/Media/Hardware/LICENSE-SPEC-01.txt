@@ -2,7 +2,7 @@ The Hardware theme in this folder is based on SPEC-01/HARDWARE by Shu Ding
 (https://github.com/shuding/spec-01, https://spec-01.vercel.app), used under
 the MIT License below. The interaction sounds are rendered from its sound
 recipe and the control artwork is rendered from its stylesheet; both were
-adapted for World of Warcraft by the JiberishIcons authors.
+adapted for World of Warcraft by the Jiberish SPEC-01 UI authors.
 
 MIT License
 

@@ -1,0 +1,44 @@
+name: Release
+
+# Pushing a tag like v0.6.0 checks the code, then packages the addon folder into
+# JiberishSpec01UI-0.6.0.zip and attaches it to a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Checks
+        run: make check
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          toc_version="$(sed -n 's/^## Version: //p' JiberishSpec01UI/JiberishSpec01UI.toc | tr -d '\r')"
+          if [ "$version" != "$toc_version" ]; then
+            echo "Tag v$version does not match the TOC version $toc_version" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          zip -r -X "dist/JiberishSpec01UI-$version.zip" JiberishSpec01UI -x '*.DS_Store'
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Release notes from the changelog
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## " v "( |$)" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > dist/notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Jiberish SPEC-01 UI ${{ env.VERSION }}
+          body_path: dist/notes.md
+          files: dist/JiberishSpec01UI-${{ env.VERSION }}.zip

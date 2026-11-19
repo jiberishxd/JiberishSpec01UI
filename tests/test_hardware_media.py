@@ -282,6 +282,8 @@ class HardwareMedia(unittest.TestCase):
         self.assertLessEqual(used, baked, sorted(used - baked))
 
     def test_upstream_license_ships_with_the_art(self):
+        # The addon's own license ships inside the addon folder, identical to the repo's.
+        self.assertEqual((ADDON / 'LICENSE.txt').read_text(), (ADDON.parent / 'LICENSE').read_text())
         text = (ADDON / 'Media/Hardware/LICENSE-SPEC-01.txt').read_text()
         self.assertIn('MIT License', text)
         self.assertIn('Copyright (c) 2026 Shu Ding', text)
