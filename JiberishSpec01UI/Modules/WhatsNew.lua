@@ -15,6 +15,12 @@ local floor, max = math.floor, math.max
 -- Releases, newest first. Each highlight: area (the card's printed title), title,
 -- text (one line or two), page (the hub page Open goes to) or command (a /spec word).
 local RELEASES = {
+	{version = '0.6.3', date = '2026-11-18',
+		summary = 'The stance latch moves into the console\'s header, and edit mode can put it anywhere.',
+		entries = {
+			{area = 'Console', title = 'Stance latch in the console', command = 'edit',
+				text = 'A STANCE key in the console\'s header folds the stance keys away completely. Drag it anywhere in edit mode.'},
+		}},
 	{version = '0.6.2', date = '2026-11-18',
 		summary = 'A latch on the stance keys folds them away with a click, and brings them back.',
 		entries = {

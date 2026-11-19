@@ -440,6 +440,9 @@ local function WatchDocked(frame, relayout)
 end
 
 local LayoutConsole
+-- The stance latch and its placement (set with the stance keys, below).
+local latch, PlaceLatch
+
 local function LayoutConsoleNow()
 	local db = DB()
 	local PAD = HPad()
@@ -954,6 +957,8 @@ function LayoutConsole()
 	local ok, problem = pcall(LayoutConsoleNow)
 	P.console.laying = nil
 	if not ok then error(problem, 0) end
+	-- The latch's default spot is in the header: it follows the console (next frame, once placed).
+	if latch then C_Timer.After(0, function() UI:Safe(PlaceLatch) end) end
 end
 
 local function BuildConsole()
@@ -1157,41 +1162,100 @@ local function BuildPet()
 	if not Docking() then UI:RegisterMover(P.petModule, 'ab.pet', 'Pet keys', {'BOTTOM', 200, 150}) end
 end
 
-local LATCH_W = 12
+-- The stance latch: a small key of its own (STANCE, with a lamp lit while the
+-- stance keys show) that folds the stance keys away and brings them back, with
+-- a latch sound. It sits in the console's header by default and has its own
+-- handle in edit mode (/spec move), so it can go anywhere. It is not secure,
+-- so it works in combat; the fold itself waits for the fight to end.
+local function Folded() return DB().stanceFolded and true or false end
+
+local function PaintLatch(pending)
+	if not latch then return end
+	local shown = not Folded()
+	latch:SetChecked(shown)
+	Kit:SetLed(latch.led, shown or pending, pending and 'amber' or nil)
+end
+
+-- Its default spot: in the console's header, after the model and title.
+local function LatchDefault()
+	local console = P.console
+	if not (console and console:IsShown() and console:GetLeft()) then return {'BOTTOM', -200, 196} end
+	local ce, ue = console:GetEffectiveScale(), UIParent:GetEffectiveScale()
+	local x = 120
+	if console.model and console.model:GetLeft() and console.title then
+		x = console.model:GetLeft() - console:GetLeft() + console.model:GetStringWidth() + 5 + console.title:GetStringWidth() + 14
+	end
+	local ratio = ce / ue
+	return {'TOPLEFT', (console:GetLeft() + x) * ratio, (console:GetTop() - (HEAD - latch:GetHeight()) / 2) * ratio - UIParent:GetTop()}
+end
+
+function PlaceLatch()
+	if not latch then return end
+	local forms = GetNumShapeshiftForms and GetNumShapeshiftForms() or 0
+	local parent = P.console or UIParent
+	if latch:GetParent() ~= parent then latch:SetParent(parent) end
+	latch:SetFrameStrata(parent:GetFrameStrata())
+	latch:SetFrameLevel(parent:GetFrameLevel() + 12)
+	Kit:Relevel(latch)
+	latch:SetShown(forms > 0)
+	PaintLatch()
+	UI:RegisterMover(latch, 'ab.stancelatch', 'Stance latch', LatchDefault(), {page = 'actionbars'})
+end
 
 local function LayoutStance()
 	if not P.stanceModule then return end
 	if InCombatLockdown() then return UI:AfterCombat(LayoutStance, 'ab.stance') end
 	local forms = GetNumShapeshiftForms and GetNumShapeshiftForms() or 0
+	local folded = Folded()
 	for index, button in ipairs(stanceKeys) do button:SetShown(index <= forms) end
-	P.stanceModule:SetShown(forms > 0)
+	P.stanceModule:SetShown(forms > 0 and not folded)
 	local spot = Deck.CustomLayout() and Deck.CustomLayout().stance
 	if forms > 0 then Deck.LayoutMini(P.stanceModule, stanceKeys, forms, type(spot) == 'table' and tonumber(spot.columns) or nil) end
 	UpdateStance()
-	-- Set into the console, the stance keys take room only while there are stances.
-	if P.console and P.stanceModule.forms ~= nil and (P.stanceModule.forms > 0) ~= (forms > 0) then LayoutConsole() end
-	P.stanceModule.forms = forms
+	-- Set into the console, the stance keys take room only while there are stances (and they aren't folded).
+	local present = forms > 0 and not folded
+	if P.console and P.stanceModule.present ~= nil and P.stanceModule.present ~= present then LayoutConsole() end
+	P.stanceModule.forms, P.stanceModule.present = forms, present
+	PlaceLatch()
 end
 
--- Fold the stance keys away behind their latch, or bring them back (nil: the
--- other way). The keys are secure, so in combat the fold waits for the fight
--- to end; the latch shows it amber until then.
+-- Fold the stance keys away, or bring them back (nil: the other way). The keys
+-- are secure, so in combat the fold waits for the fight to end; the latch's
+-- lamp shows amber until then.
 function UI:FoldStance(folded)
-	if folded == nil then folded = not DB().stanceFolded end
+	if folded == nil then folded = not Folded() end
 	folded = folded and true or false
-	if DB().stanceFolded == folded and not InCombatLockdown() then return end
+	if Folded() == folded and not InCombatLockdown() then return PaintLatch() end
 	DB().stanceFolded = folded
 	Kit:Play(folded and 'latch-down' or 'latch-up')
-	local latch = P.stanceModule and P.stanceModule.latch
 	if InCombatLockdown() then
-		if latch then Kit:SetLed(latch.led, true, 'amber') end
-		return UI:AfterCombat(function() UI:FoldStance(DB().stanceFolded); LayoutStance(); if P.console then LayoutConsole() end end,
-			'ab.stancefold')
+		PaintLatch(true)
+		return UI:AfterCombat(function() LayoutStance(); if P.console then LayoutConsole() end end, 'ab.stancefold')
 	end
 	LayoutStance()
 	if P.console then LayoutConsole() end
 end
-function UI:StanceFolded() return DB().stanceFolded and true or false end
+function UI:StanceFolded() return Folded() end
+
+local function BuildLatch()
+	if latch then return end
+	latch = Kit:Key(P.console or UIParent, {width = 60, height = 15, text = 'Stance', textSize = 6, toggle = true, sound = false})
+	latch.led:ClearAllPoints()
+	latch.led:SetPoint('LEFT', 7, 0)
+	latch.text:ClearAllPoints()
+	latch.text:SetPoint('LEFT', latch.led, 'RIGHT', 5, 0)
+	latch:SetKeyText('Stance')
+	latch.onClick = function() UI:FoldStance() end
+	latch:HookScript('OnEnter', function(self)
+		GameTooltip:SetOwner(self, 'ANCHOR_TOP')
+		GameTooltip:AddLine(Folded() and 'Show stance keys' or 'Fold stance keys', 1, 1, 1)
+		GameTooltip:AddLine('Click to fold the stance keys away or bring them back (/spec stance). Move this key in edit mode (/spec move).',
+			0.85, 0.85, 0.82, true)
+		GameTooltip:Show()
+	end)
+	latch:HookScript('OnLeave', function() GameTooltip:Hide() end)
+	latch:Hide()
+end
 
 local function BuildStance()
 	local size = BarSize('Stance', max(20, floor(KeySize() * 0.72)))
@@ -1199,22 +1263,7 @@ local function BuildStance()
 	P.stanceModule.size, P.stanceModule.keySize, P.stanceModule.spacingId = size, size, 'Stance'
 	P.stanceModule:SetHeight(size + 16 + (HW.On() and HW.BANK_H or 0))
 	HW.MiniLegend(P.stanceModule, 'Stance')
-	-- The latch: a slim key at the left end. A click folds the keys away behind
-	-- it, with a latch sound; another brings them back (see Deck.LayoutMini).
-	local latch = Kit:Key(P.stanceModule, {width = LATCH_W, height = size, toggle = true, icon = 'chevron-left', iconSize = 8,
-		sound = false})
-	latch.led:ClearAllPoints()
-	latch.led:SetPoint('TOP', 0, -3)
-	latch.onClick = function() UI:FoldStance() end
-	latch:HookScript('OnEnter', function(self)
-		GameTooltip:SetOwner(self, 'ANCHOR_TOP')
-		GameTooltip:AddLine(DB().stanceFolded and 'Show stance keys' or 'Fold stance keys', 1, 1, 1)
-		GameTooltip:AddLine('Click to fold the stance keys away behind this latch, or bring them back. /spec stance does the same.',
-			0.85, 0.85, 0.82, true)
-		GameTooltip:Show()
-	end)
-	latch:HookScript('OnLeave', function() GameTooltip:Hide() end)
-	P.stanceModule.latch = latch
+	BuildLatch()
 	for index = 1, (NUM_STANCE_SLOTS or 10) do
 		local button = CreateFrame('CheckButton', 'JiberishSpec01StanceKey'..index, P.stanceModule, 'StanceButtonTemplate')
 		button:SetID(index)
@@ -1239,27 +1288,13 @@ function Deck.LayoutMini(module, keys, count, columns)
 	local keysW, keysH = across * size + (across - 1) * spacing, lines * size + (lines - 1) * spacing
 	local height = keysH + 16 + (HW.On() and HW.BANK_H or 0)
 	local top = (height - keysH) / 2 - ((Docking() and 4 or 0) - (HW.On() and HW.BANK_H / 2 or 0))
-	-- A latch (the stance keys') sits at the left end; folded, only it shows.
-	local latch = module.latch
-	local folded = latch and DB().stanceFolded and true or false
-	local lead = latch and LATCH_W + spacing or 0
-	module:SetSize(PAD * 2 + (folded and LATCH_W or lead + keysW), height)
-	if latch then
-		latch:ClearAllPoints()
-		latch:SetSize(LATCH_W, keysH)
-		latch:SetPoint('TOPLEFT', module, 'TOPLEFT', PAD, -top)
-		latch:SetChecked(folded)
-		Kit:SetIcon(latch.icon, folded and 'chevron-right' or 'chevron-left')
-		Kit:SetLed(latch.led, folded, folded and 'lamp' or nil)
-		latch:Show()
-	end
+	module:SetSize(PAD * 2 + keysW, height)
 	for index = 1, count do
 		local button = keys[index]
 		if button then
 			local line, place = floor((index - 1) / across), (index - 1) % across
 			button:ClearAllPoints()
-			button:SetPoint('TOPLEFT', module, 'TOPLEFT', PAD + lead + place * (size + spacing), -(top + line * (size + spacing)))
-			if latch then button:SetShown(not folded) end
+			button:SetPoint('TOPLEFT', module, 'TOPLEFT', PAD + place * (size + spacing), -(top + line * (size + spacing)))
 		end
 	end
 end
@@ -1271,7 +1306,8 @@ function Deck.Minis()
 	local list = {}
 	if P.stanceModule then
 		list[#list + 1] = {key = 'stance', module = P.stanceModule, mover = 'ab.stance', label = 'Stance keys', at = {'BOTTOM', -200, 150},
-			count = GetNumShapeshiftForms and GetNumShapeshiftForms() or 0, size = P.stanceModule.keySize, keysList = stanceKeys}
+			count = not Folded() and GetNumShapeshiftForms and GetNumShapeshiftForms() or 0, size = P.stanceModule.keySize,
+			keysList = stanceKeys}
 	end
 	if P.petModule then
 		list[#list + 1] = {key = 'petbar', module = P.petModule, mover = 'ab.pet', label = 'Pet keys', at = {'BOTTOM', 200, 150},

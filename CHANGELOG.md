@@ -3,6 +3,15 @@
 What changed in each version of Jiberish SPEC-01 UI, newest first. The in-game
 **What's new** page (`/spec whatsnew`) shows the highlights, with a key to each page.
 
+## 0.6.3 (2026-11-18)
+
+### Console
+- **The stance latch is now a key of its own,** set into the console's header by default
+  (after CX-1 CONSOLE), with a lamp lit while the stance keys show. Folding hides the stance
+  keys completely, with nothing left above the console, and the console gives back their
+  room. The latch has its own handle in edit mode (`/spec move`), so it can go anywhere;
+  until it's moved it follows the console.
+
 ## 0.6.2 (2026-11-18)
 
 ### Console
