@@ -2,9 +2,17 @@
 -- of sections; each section is a grid of numbered cards built from simple row
 -- descriptions that modules register with UI:RegisterPage.
 --
---   /spec            open the hub (last page)
---   /spec <page>     open a page: overview, theme, unitframes, actionbars, ...
+--   /spec            open the hub (last page; Quick setup the first time)
+--   /spec <page>     open a page: quick, whatsnew, theme, unitframes, actionbars, ...
+--   /spec <word>     open the hub searching for that word (Core.lua's command table)
 -- The sidebar's search field looks through every page's settings.
+--
+-- The header keeps three things for every page: Undo (also Ctrl+Z while the hub
+-- is up) takes back the last change made here, Reset page puts the page's
+-- settings back to their defaults, and one amber lamp with its Reload key
+-- lights while any change waits on a reload (hover the lamp for the list).
+-- Every change made through a row, or through UI:HubChange, is recorded for
+-- Undo and the reload lamp; the bookkeeping lives in HubHistory.lua.
 local _, UI = ...
 local Kit = UI.Kit
 
@@ -15,8 +23,11 @@ local hub
 local pages, pageOrder = {}, {}
 
 -- defaults:begin
-UI:RegisterDefaults('hub', {page = 'overview', advanced = false, describe = false, seen = {}, collapsed = {},
-	expanded = {}, group = false})
+-- seen: page key -> the version it was last opened in (its NEW lamps go out).
+-- landed: the hub has opened on Quick setup once (older saves start there once).
+-- told: the version the "updated" toast last spoke for (WhatsNew.lua).
+UI:RegisterDefaults('hub', {page = 'quick', advanced = false, describe = false, seen = {}, collapsed = {},
+	expanded = {}, group = false, landed = false, told = false})
 -- defaults:end
 local SIDEBAR, CONTENT_COLUMNS = 156, 4
 
@@ -30,7 +41,8 @@ local SIDEBAR, CONTENT_COLUMNS = 156, 4
 --       {'note', text} | {'header', text}         a paragraph, or a small printed divider
 -- Every row may also carry:
 --   reload = true      the change applies after a reload
---   since = '0.5.0'    a NEW marker while that is the addon's version
+--   since = '0.5.0'    a NEW lamp while that is the addon's version, until the page is
+--                      opened in that version (so set it to the release a row is new in)
 --   hidden = fn        the row is left out while fn() is true (the page rebuilds when that changes)
 --   disabled = fn      the row is dimmed and locked while fn() is true
 --   get = fn, set = fn read and write the value through these instead of the path
@@ -90,18 +102,35 @@ local function Read(path)
 end
 UI.ReadOption = Read
 
-function UI:NeedsReload()
-	self.reloadPending = true
-	if hub then
-		hub.reload:Show()
-		hub.reload:SetTone('primary')
-		if hub.layoutHeader then hub.layoutHeader() end
-		-- A lamp on the key blinks until the reload.
-		if hub.reload.led then
-			Kit:SetLed(hub.reload.led, true, 'amber')
-			if Kit:Faithful('breathe') then Kit:Blink(hub.reload.led, 0.8, true) end
+-- HubHistory.lua loads just after this file; it is only read once things run.
+local function Book() return UI.HubHistory end
+local PaintReload, PaintUndo -- the header's lamp and Undo key, once built
+
+-- A change that may owe a reload: listed while the setting differs from where it
+-- started, so changing it back (or Undo) puts the lamp out again.
+local function TrackReload(change, before, after)
+	local book = Book()
+	if not book then return end
+	if change.reload then book.FlagReload(change.path, change.where or change.label, before) end
+	if change.path then book.SettleReload(change.path, after) end
+	UI.reloadPending = book.ReloadCount() > 0 or nil
+	if PaintReload then PaintReload() end
+end
+
+-- Modules call this when something they changed only applies after a reload.
+-- reason: a short name for the list on the lamp (else the page it came from).
+function UI:NeedsReload(reason)
+	local book = Book()
+	if book then
+		local label = reason
+		if type(label) ~= 'string' then
+			local page = hub and hub:IsShown() and pages[UI.db.hub.page]
+			label = page and (page.title..' page') or 'Changes made outside this window'
 		end
+		book.FlagReload(nil, label)
 	end
+	self.reloadPending = true
+	if PaintReload then PaintReload() end
 end
 
 -- Rows -----------------------------------------------------------------------
@@ -141,6 +170,7 @@ local function Get(row)
 		local ok, value = pcall(row.get)
 		return ok and value or nil
 	end
+	if type(row[3]) ~= 'string' then return nil end
 	return Read(row[3])
 end
 
@@ -153,19 +183,44 @@ local function Items(row)
 end
 
 -- The control that made a change keeps animating; only the others refresh.
+-- Every change is recorded for Undo (a run of changes to one setting, like a
+-- slider drag, is one step) and for the reload lamp.
 local changedPaths, UpdateLCD = {}, nil
+local function Record(change)
+	local book = Book()
+	if not book then return end
+	book.Push(change, GetTime())
+	TrackReload(change, change.old, change.new)
+	if PaintUndo then PaintUndo() end
+end
+
 local function Changed(row, value, control)
-	changedPaths[row[3] or row] = true
+	local path = row[3]
+	local book = Book()
+	local old = book and book.Copy(Get(row))
+	changedPaths[path or row] = true
 	if UpdateLCD then UpdateLCD() end
 	UI.changing = control
 	if row.set then
 		UI:Safe(row.set, value)
 		Kit:Apply()
 	else
-		Kit:SetOption(row[3], value)
+		Kit:SetOption(path, value)
 	end
 	UI.changing = nil
-	if row.reload then UI:NeedsReload() end
+	local page = pages[UI.db.hub.page]
+	local label = row[2] or path or 'A setting'
+	Record({key = path or row, path = path, label = label, old = old, new = value, set = row.set, row = row,
+		reload = row.reload, where = page and page.key ~= 'quick' and (page.title..': '..label) or label})
+end
+
+-- For pages that build their own controls: change a setting the way a row does,
+-- with Undo, the change count and the reload lamp. opts: label, reload, set(value),
+-- get(), items / format (how Undo's toast names a value), control (the one changing).
+function UI:HubChange(path, value, opts)
+	opts = opts or {}
+	Changed({opts.kind or 'custom', opts.label or path, path, set = opts.set, get = opts.get, reload = opts.reload,
+		items = opts.items, format = opts.format}, value, opts.control)
 end
 
 -- A dimmed, locked row: its control is covered by a frame that takes the mouse.
@@ -188,7 +243,7 @@ end
 
 -- A wrapped note card for the hub's hovers (the kit's tooltip is one line).
 local noteTip
-local function ShowNote(anchor, title, text)
+local function ShowNote(anchor, title, text, below)
 	if not text or text == '' then return end
 	if not noteTip then
 		noteTip = Kit:Panel(Kit:Root(), {radius = 4, fill = 'glass', border = false, shadow = 0.5})
@@ -212,7 +267,8 @@ local function ShowNote(anchor, title, text)
 	local height = noteTip.text:GetStringHeight() + 20 + ((title and title ~= '') and 14 or 0)
 	noteTip:SetSize(width, height)
 	noteTip:ClearAllPoints()
-	noteTip:SetPoint('BOTTOMLEFT', anchor, 'TOPLEFT', 0, 6)
+	if below then noteTip:SetPoint('TOPRIGHT', anchor, 'BOTTOMRIGHT', 0, -6)
+	else noteTip:SetPoint('BOTTOMLEFT', anchor, 'TOPLEFT', 0, 6) end
 	noteTip:Show()
 	Kit:Animate(noteTip, 0.1, 0, 1, function(alpha) noteTip:SetAlpha(alpha) end)
 end
@@ -267,9 +323,15 @@ local function Header(card, row, y)
 	return ROW_HEIGHT.header
 end
 
--- New in this version, and the page not opened since: a small key-color lamp.
+-- Whether a page has been opened in this version (Book is loaded by then).
+local function Seen(key)
+	local book = Book()
+	return book and book.Seen(HubDB().seen, key, VERSION) or false
+end
+
+-- New in this version, and the page not opened in it yet: a small key-color lamp.
 local function ShowsNew(page, row)
-	return UI:IsNew(row.since) and not (HubDB().seen or {})[page.key]
+	return UI:IsNew(row.since) and not Seen(page.key)
 end
 
 -- Dropdowns open as a SPEC-01 drawer: a sheet that unrolls under the control
@@ -616,7 +678,7 @@ end
 
 -- The row's height as things stand, showing the parts that apply.
 local function UnitHeight(unit, card)
-	if unit.expander then return 32 end
+	if unit.expander then return 34 end
 	if unit.compact then
 		local full = card.preview or Advanced()
 		unit.compact:SetShown(not full)
@@ -650,9 +712,11 @@ local function PlanCard(page, card)
 	if skipped > 0 then
 		expander.want, expander.more = true, true
 		expander.key:SetKeyText(format('More options (%d)', skipped))
+		if expander.key.icon then Kit:SetIcon(expander.key.icon, 'chevron-down') end
 	elseif expanded and not advanced then
 		expander.want, expander.more = true, false
 		expander.key:SetKeyText('Fewer options')
+		if expander.key.icon then Kit:SetIcon(expander.key.icon, 'chevron-up') end
 	else
 		expander.want = false
 	end
@@ -834,10 +898,12 @@ local function BuildCards(content, page)
 			card.allUnits[#card.allUnits + 1] = unit
 		end
 		-- More options / Fewer options.
+		-- As wide as the card, with a chevron, so rows past the first few are plain to see.
 		local holder = CreateFrame('Frame', nil, card.body)
 		holder:SetSize(bodyWidth, 32)
 		holder:Hide()
-		local key = Kit:Key(holder, {text = 'More options', width = 140, height = 22, textSize = 8})
+		local key = Kit:Key(holder, {text = 'More options', icon = 'chevron-down', iconSize = 9, width = bodyWidth, height = 24,
+			textSize = 8})
 		key:SetPoint('TOPLEFT', 0, -4)
 		card.expander = {holder = holder, key = key, expander = true, row = {}}
 		key.onClick = function()
@@ -903,7 +969,7 @@ local function HideAreas(except)
 end
 
 local function SelectPage(key)
-	local page = pages[key] or pages.overview
+	local page = pages[key] or pages.quick or pages.overview
 	key = page.key
 	UI.db.hub.page = key
 	ClearSearch()
@@ -950,12 +1016,13 @@ local function SelectPage(key)
 	if hub.heading:GetText() ~= strupper(page.title) then Kit:PrintText(hub.heading, strupper(page.title)) end
 	MarkNav(key)
 	if UpdateLCD then UpdateLCD() end
-	-- NEW marks show until a page has been opened once.
-	if not UI.db.hub.seen[key] then
-		UI.db.hub.seen[key] = true
+	-- NEW marks show until a page has been opened once in this version.
+	local book = Book()
+	if book and book.MarkSeen(UI.db.hub.seen, key, VERSION) then
 		local entry = hub.nav and hub.nav[key]
 		if entry and entry.new then entry.new:Hide() end
 	end
+	if hub.PaintPageKeys then hub.PaintPageKeys(page) end
 	if hub.navGroup ~= nil and hub.navGroup ~= GroupOf(key) then
 		UI.db.hub.group = false
 		LayoutNav(true)
@@ -1082,6 +1149,7 @@ function Search(query)
 	end
 	hub.searching = true
 	HideAreas(nil)
+	if hub.PaintPageKeys then hub.PaintPageKeys(nil) end
 	local area = Results()
 	local matches = {}
 	for _, entry in ipairs(SearchEntries()) do
@@ -1121,17 +1189,26 @@ function ClearSearch()
 	if hub.searchTimer then hub.searchTimer:Cancel(); hub.searchTimer = nil end
 end
 
+-- /spec <word>: the hub opens with that word in the search field.
+function UI:SearchHub(query)
+	query = strtrim(tostring(query or ''))
+	self:ToggleHub(nil, true)
+	if not hub or not hub.search then return end
+	hub.search:SetValue(query)
+	UI:Safe(Search, query)
+end
+
 -- Sidebar ------------------------------------------------------------------------------
 -- Pages are grouped into a few sections. One section is open at a time (the
 -- current page's, or the one last clicked); the others fold to their headers.
 local GROUPS = {
-	{'general', 'General', {'overview', 'setup', 'theme', 'colors', 'housing', 'fonts', 'fade', 'motion', 'sounds', 'combatcue'}},
+	{'general', 'General', {'quick', 'whatsnew', 'overview', 'setup', 'theme', 'colors', 'housing', 'fonts', 'fade', 'motion', 'sounds', 'combatcue'}},
 	{'layout', 'Layout', {'layout', 'profiles'}},
 	{'frames', 'Frames', {'unitframes', 'group', 'nameplates', 'navbar', 'wiring'}},
 	{'bars', 'Bars and auras', {'actionbars', 'buffs', 'timeline', 'cooldowns', 'swingtimer'}},
 	{'interface', 'Interface', {'minimap', 'navigation', 'chat', 'windows', 'bags', 'objectives', 'infopanel', 'meters', 'banners',
 		'notifications', 'qol', 'away'}},
-	{'extras', 'Extras', {'drawer', 'calendar', 'components', 'about'}},
+	{'extras', 'Extras', {'drawer', 'calendar', 'components', 'commands', 'about'}},
 }
 local GROUP_OF = {}
 for _, group in ipairs(GROUPS) do
@@ -1158,7 +1235,7 @@ local function NavEntry(key, page)
 	entry.status = Lamp(entry, 5, false)
 	entry.status:SetPoint('RIGHT', -4, 0)
 	entry.status:Hide()
-	if PageIsNew(page) and not UI.db.hub.seen[key] then
+	if PageIsNew(page) and not Seen(key) then
 		entry.new = Lamp(entry, 4, true)
 		entry.new:SetPoint('RIGHT', -10, 0)
 	end
@@ -1227,7 +1304,7 @@ end
 function LayoutNav(animate)
 	if not hub.navHeads then return end
 	-- The open section: the one last clicked, else the current page's.
-	local current = GroupOf(UI.db.hub.page or 'overview')
+	local current = GroupOf(UI.db.hub.page or 'quick')
 	local open = UI.db.hub.group
 	if not hub.navOpenOverride or open == nil then open = current end
 	hub.navOpenOverride = nil
@@ -1303,10 +1380,10 @@ local function ForgetPages()
 end
 
 -- The header grid, right to left: close, sound | Move UI | finish | key colors |
--- Reload UI on the first row; Advanced, Descriptions | LCD on the second. Gaps
--- are fixed (4-6 px within a group, 12 between groups) and widths measured, so
--- nothing overlaps at any scale; when the first row would reach the brand, the
--- Reload key moves down to the second row.
+-- the reload lamp and key on the first row; Advanced, Descriptions | LCD |
+-- Reset page, Undo on the second. Gaps are fixed (4-6 px within a group, 12
+-- between groups) and widths measured, so nothing overlaps at any scale; when
+-- the first row would reach the brand, the reload lamp moves to the second row.
 local ROW1_Y, ROW2_Y, GAP_IN, GAP_OUT = -14, -54, 6, 12
 function LayoutHeader()
 	if not hub or not hub.close then return end
@@ -1328,15 +1405,18 @@ function LayoutHeader()
 		-- Centered on the keys' row.
 		Put(swatch, KEY_TOP - 4, index == #Kit.accentOrder and GAP_OUT + 4 or GAP_IN + 2)
 	end
+	local box = hub.reloadBox
 	local brandRight = Kit.PAD + 4 + (hub.brand:GetStringWidth() or 200) + 16
-	local reloadOnTop = hub.reload:IsShown() and (hub:GetWidth() + x - GAP_OUT - hub.reload:GetWidth()) > brandRight
-	if reloadOnTop then Put(hub.reload, KEY_TOP, GAP_OUT + 2) end
+	local reloadOnTop = (hub:GetWidth() + x - GAP_OUT - 2 - box:GetWidth()) > brandRight
+	if reloadOnTop then Put(box, KEY_TOP, GAP_OUT + 2) end
 	-- Second row.
 	x = -Kit.PAD
 	Put(hub.advanced, ROW2_Y, 0)
 	Put(hub.describe, ROW2_Y, GAP_IN)
 	Put(hub.lcd, ROW2_Y - 3, GAP_OUT)
-	if hub.reload:IsShown() and not reloadOnTop then Put(hub.reload, ROW2_Y + 1, GAP_OUT) end
+	Put(hub.resetPage, ROW2_Y, GAP_OUT)
+	Put(hub.undo, ROW2_Y, GAP_IN)
+	if not reloadOnTop then Put(box, ROW2_Y + 1, GAP_OUT) end
 end
 
 -- The sidebar's search: a black screen field drawn from code (a crisp 1 px
@@ -1375,6 +1455,215 @@ function SearchField(parent, width, onChange)
 	end
 	if Kit.Caret then Kit:Caret(edit) end
 	return field
+end
+
+-- Undo, Reset page and the reload lamp ---------------------------------------------
+-- Key colors as {value, name}, for anything that names one (Undo's toast).
+function UI.AccentItems()
+	local items = {}
+	for _, name in ipairs(Kit.accentOrder) do items[#items + 1] = {name, Kit.accents[name] and Kit.accents[name].name or name} end
+	items[#items + 1] = {'class', 'Class color'}
+	items[#items + 1] = {'custom', 'Custom'}
+	return items
+end
+
+-- How Undo's toast names a value: the row's own item name or format, on/off.
+local function ValueText(change, value)
+	local row = change.row or {}
+	if type(value) == 'boolean' then return value and 'on' or 'off' end
+	for _, item in ipairs(Items(row)) do
+		if type(item) == 'table' and item[1] == value then return tostring(item[2] or item[1]) end
+	end
+	if type(value) == 'number' then
+		if row.format then
+			local ok, text = pcall(row.format, value)
+			if ok and text then return tostring(text) end
+		end
+		return format('%g', value)
+	end
+	if type(value) == 'table' then return 'its earlier color' end
+	if value == nil or value == '' then return 'empty' end
+	return tostring(value)
+end
+
+-- Takes back the last change made in the hub (a page reset is one change).
+function UI:HubUndo()
+	local book = Book()
+	local entry = book and book.Pop()
+	if not entry then
+		Kit:Play('error')
+		return false
+	end
+	local changes = book.Changes(entry)
+	for _, change in ipairs(changes) do
+		local value = book.Copy(change.old)
+		changedPaths[change.path or change.key or change] = true
+		if change.set then
+			UI:Safe(change.set, value)
+		elseif change.path and not entry.changes then
+			UI:Safe(Kit.SetOption, Kit, change.path, value)
+		elseif change.path then
+			book.Write(UI.db, change.path, value)
+		end
+		TrackReload(change, change.new, change.old)
+	end
+	if entry.changes or entry.set then Kit:Apply() end
+	Kit:Play('latch-up')
+	local text = entry.changes and format('%s: %d %s put back as they were.', entry.label, #changes, #changes == 1 and 'setting' or 'settings')
+		or format('%s back to %s.', entry.label, ValueText(entry, entry.old))
+	Kit:Toast({title = 'Undone', text = text, sound = false,
+		action = book.Count() > 0 and {text = 'Undo', onClick = function() UI:HubUndo() end} or nil})
+	if PaintUndo then PaintUndo() end
+	if UpdateLCD then UpdateLCD() end
+	return true
+end
+
+-- Every setting on a page back to its registered default (UI.defaults), after a
+-- confirm; private settings (UI scale, frame positions, the hub's own) stay.
+function UI:HubResetPage(key)
+	local page = pages[key or UI.db.hub.page]
+	local book = Book()
+	if not (page and page.cards and book) then return Kit:Play('error') end
+	local plan = book.ResetPlan(page, UI.defaults, UI.db)
+	if #plan == 0 then
+		Kit:Toast({title = page.title, text = 'Every setting here is already at its default.'})
+		return
+	end
+	Kit:AlertDialog({title = 'Reset '..page.title,
+		text = format('%d %s on this page go back to their defaults. Undo brings them back.', #plan, #plan == 1 and 'setting' or 'settings'),
+		confirm = 'Reset', onConfirm = function()
+			for _, change in ipairs(plan) do
+				local row = change.row
+				change.set, change.reload = row.set, row.reload
+				change.where = page.title..': '..tostring(change.label)
+				if row.set then UI:Safe(row.set, book.Copy(change.new)) else book.Write(UI.db, change.path, change.new) end
+				changedPaths[change.path] = true
+				TrackReload(change, change.old, change.new)
+			end
+			book.Push({label = page.title..' reset', changes = plan}, GetTime())
+			Kit:Apply()
+			Kit:Play('success')
+			if PaintUndo then PaintUndo() end
+			if UpdateLCD then UpdateLCD() end
+			Kit:Toast({title = page.title..' reset', text = format('%d back to defaults.', #plan), tone = 'success', sound = false,
+				action = {text = 'Undo', onClick = function() UI:HubUndo() end}})
+		end})
+end
+
+function PaintUndo()
+	if not hub or not hub.undo then return end
+	local book = Book()
+	hub.undo:SetKeyEnabled(book ~= nil and book.Count() > 0)
+end
+
+function PaintReload()
+	local box = hub and hub.reloadBox
+	if not box then return end
+	local book = Book()
+	local labels = book and book.ReloadLabels() or {}
+	local waiting = #labels > 0
+	Kit:SetLed(box.lamp, waiting, 'amber')
+	local blink = waiting and Kit:Faithful('breathe') and true or false
+	if blink ~= box.blinking then
+		box.blinking = blink
+		Kit:Blink(box.lamp, 0.8, blink)
+	end
+	box.legend:SetText(waiting and format('%d TO APPLY', #labels) or 'UP TO DATE')
+	Kit:Tint(box.legend, waiting and 'ink' or 'dim')
+	hub.reload:SetTone(waiting and 'primary' or 'default')
+end
+
+-- The lamp's hover: what is waiting on the reload.
+local function ReloadNote(anchor)
+	local book = Book()
+	local labels = book and book.ReloadLabels() or {}
+	local text
+	if #labels == 0 then
+		text = 'Nothing is waiting on a reload. Settings that only apply after one light this lamp when you change them, and are listed here.'
+	else
+		local lines = {}
+		for index, label in ipairs(labels) do
+			if index > 12 then lines[#lines + 1] = format('... and %d more', #labels - 12) break end
+			lines[#lines + 1] = '- '..label
+		end
+		text = 'These apply after a reload:\n'..table.concat(lines, '\n')..'\n\nThe Reload key reloads the interface now (once out of combat).'
+	end
+	ShowNote(anchor, 'Reload', text, true)
+end
+
+-- The header's second row of keys: Undo, Reset page and the reload lamp.
+local function BuildTools(height)
+	hub.undo = Kit:Key(hub, {text = 'Undo', width = 72, height = 30, textSize = 8})
+	hub.undo.onClick = function() UI:HubUndo() end
+	Kit:AttachTooltip(hub.undo, function()
+		local top = Book() and Book().Peek()
+		return top and ('Undo '..top.label..'  (Ctrl+Z)') or 'Nothing to undo'
+	end)
+	hub.resetPage = Kit:Key(hub, {text = 'Reset page', width = 98, height = 30, textSize = 8})
+	hub.resetPage.onClick = function() UI:HubResetPage() end
+	Kit:AttachTooltip(hub.resetPage, 'This page\'s settings back to their defaults')
+	hub.PaintPageKeys = function(page)
+		hub.resetPage:SetKeyEnabled(page and page.cards and not page.noReset and true or false)
+	end
+	-- One lamp for every change that waits on a reload, and the key that does it.
+	local box = CreateFrame('Frame', nil, hub)
+	box.lamp = Lamp(box, 6, false)
+	box.lamp:SetPoint('LEFT', 2, 0)
+	box.legend = Kit:Label(box, 'UP TO DATE', 'dim', 8, true)
+	box.legend:SetPoint('LEFT', box.lamp, 'RIGHT', 6, 0)
+	box.legend:SetWidth(68)
+	box.legend:SetJustifyH('LEFT')
+	box.legend:SetWordWrap(false)
+	hub.reload = Kit:Key(box, {text = 'Reload', width = 76, height = height})
+	hub.reload:SetPoint('RIGHT', box, 'RIGHT', 0, 0)
+	Kit:ReloadKey(hub.reload, true)
+	-- Another Reload key (a dialog's, a toast's) may have taken the shared secure
+	-- cover since; pointing at this one puts it back over this key.
+	hub.reload:HookScript('OnEnter', function(self) if self.kitReload and not InCombatLockdown() then Kit:ReloadKey(self, true) end end)
+	box:SetSize(2 + 6 + 6 + 68 + 6 + hub.reload:GetWidth(), height)
+	box.hit = CreateFrame('Frame', nil, box)
+	box.hit:SetPoint('TOPLEFT', box, 'TOPLEFT', 0, 0)
+	box.hit:SetPoint('BOTTOMRIGHT', hub.reload, 'BOTTOMLEFT', -2, 0)
+	box.hit:EnableMouse(true)
+	box.hit:SetScript('OnEnter', function(self) ReloadNote(self) end)
+	box.hit:SetScript('OnLeave', HideNote)
+	hub.reloadBox = box
+	PaintReload()
+	PaintUndo()
+end
+
+-- Ctrl+Z while the hub is up. Keys pass on to the game as usual; only Ctrl+Z is
+-- kept. The keyboard is protected in combat: it is let go as a fight starts and
+-- taken again after, and nothing here touches it during one.
+local function Keyboard(on)
+	if not hub or InCombatLockdown() then return end
+	hub:EnableKeyboard(on and true or false)
+	hub:SetPropagateKeyboardInput(true)
+end
+
+local keyWatch = CreateFrame('Frame')
+keyWatch:RegisterEvent('PLAYER_REGEN_DISABLED')
+keyWatch:RegisterEvent('PLAYER_REGEN_ENABLED')
+keyWatch:SetScript('OnEvent', function(_, event)
+	if not hub then return end
+	if event == 'PLAYER_REGEN_DISABLED' then
+		-- Lockdown starts after this event, so this is still allowed.
+		hub:SetPropagateKeyboardInput(true)
+		hub:EnableKeyboard(false)
+	elseif hub:IsShown() then
+		Keyboard(true)
+	end
+end)
+
+local function OnKeyDown(self, key)
+	if InCombatLockdown() then return end
+	local undo = key == 'Z' and IsControlKeyDown() and not IsAltKeyDown()
+	self:SetPropagateKeyboardInput(not undo)
+	if undo then UI:HubUndo() end
+end
+
+local function OnKeyUp(self)
+	if not InCombatLockdown() then self:SetPropagateKeyboardInput(true) end
 end
 
 local function Build()
@@ -1450,7 +1739,7 @@ local function Build()
 		if self.icon then Kit:Tint(self.icon, self.checked and 'ink' or 'dim') end
 	end
 	Kit:AttachTooltip(hub.sound, 'Sounds')
-	-- Move UI: closes the hub and unlocks every frame; lit while frames are unlocked.
+	-- Move UI: closes the hub and opens edit mode; lit while edit mode is on.
 	hub.move = Kit:Key(hub, {text = 'Move UI', icon = 'grip', iconSize = 11, width = 112, height = KEY_H, led = true})
 	if hub.move.led then
 		hub.move.led:ClearAllPoints()
@@ -1470,7 +1759,7 @@ local function Build()
 		Kit:Play('latch-down')
 		Kit:Close(hub, function() if UI.ToggleMovers then UI:ToggleMovers(false) end end)
 	end
-	Kit:AttachTooltip(hub.move, 'Unlock mode: drag, resize and nudge every frame')
+	Kit:AttachTooltip(hub.move, 'Edit mode: drag, snap and nudge every frame; a handle\'s gear opens its settings')
 	if UI.OnMoversChanged then
 		UI:OnMoversChanged(function(what)
 			if what == '__lock' and hub.move.led then Kit:SetLed(hub.move.led, UI:MoversUnlocked() and true or false) end
@@ -1486,9 +1775,8 @@ local function Build()
 			if hub.finish.value == index then return end
 			Kit:Play('latch-down')
 			hub.finish:SetValue(index)
-			UI.changing = hub.finish
-			Kit:SetOption('finish', finishes[index])
-			UI.changing = nil
+			UI:HubChange('finish', finishes[index], {label = 'Finish', control = hub.finish,
+				items = {{'paper', 'Paper'}, {'graphite', 'Graphite'}}})
 		end
 		hub.finish.keys[index] = key
 	end
@@ -1532,14 +1820,13 @@ local function Build()
 		end)
 		swatch:SetScript('OnEnter', function(self) self.cap:SetAlpha(0.85) end)
 		swatch:SetScript('OnLeave', function(self) self.cap:SetAlpha(1) end)
-		swatch:SetScript('OnClick', function() Kit:SetOption('accent', name) end)
+		swatch:SetScript('OnClick', function()
+			if UI.db.accent ~= name then UI:HubChange('accent', name, {label = 'Key color', items = UI.AccentItems}) end
+		end)
 		Kit:AttachTooltip(swatch, Kit.accents[name] and Kit.accents[name].name or name)
 		hub.accents[name] = swatch
 	end
-	hub.reload = Kit:Key(hub, {text = 'Reload UI', width = 112, height = KEY_H, led = true})
-	Kit:ReloadKey(hub.reload, true)
-	Kit:AttachTooltip(hub.reload, 'Style changes apply after a reload')
-	hub.reload:SetShown(UI.reloadPending and true or false)
+	BuildTools(KEY_H)
 	-- How much each page shows: every option (Advanced), and a line of description.
 	hub.advanced = Kit:Key(hub, {text = 'Advanced', width = 104, height = 30, textSize = 8, toggle = true,
 		checked = UI.db.hub.advanced and true or false})
@@ -1595,10 +1882,14 @@ local function Build()
 	BuildNav()
 
 	hub:SetScale(UI.db.scale or 1)
+	hub:SetScript('OnKeyDown', OnKeyDown)
+	hub:SetScript('OnKeyUp', OnKeyUp)
 	hub:SetScript('OnShow', function()
+		Keyboard(true)
 		UI:UpdateHub()
 	end)
 	hub:SetScript('OnHide', function(self)
+		Keyboard(false)
 		self:StopMovingOrSizing()
 		local page = pages[UI.db.hub.page]
 		if page and page.area and page.onHide then page.onHide(page.area) end
@@ -1648,7 +1939,15 @@ function UI:UpdateHub()
 end
 
 function UI:ToggleHub(key, show)
-	if not hub then Build() end
+	if not hub then
+		-- Saves from before Quick setup open on it once.
+		local db = UI.db.hub
+		if not db.landed then
+			db.landed = true
+			if db.page == 'overview' then db.page = 'quick' end
+		end
+		Build()
+	end
 	if key and not pages[key] then key = nil end
 	if show == nil then show = key and true or not hub:IsShown() end
 	if show then
@@ -1721,8 +2020,7 @@ UI:RegisterPage('overview', {title = 'Overview', order = 1, span = 4,
 				if item[1] == UI:Style(area[1]) then current = i end
 			end
 			local picker = Kit:Segmented(card.body, {items = names, width = 300, value = current, onChange = function(i)
-				Kit:SetOption('style.'..area[1], values[i])
-				UI:NeedsReload()
+				UI:HubChange('style.'..area[1], values[i], {label = area[2]..' style', reload = true, items = area[3]})
 				page.refresh()
 			end})
 			picker:SetPoint('TOPRIGHT', 0, y)
@@ -1762,6 +2060,6 @@ UI:RegisterPage('about', {title = 'About', order = 99, cards = {
 	{title = 'Jiberish SPEC-01 UI', rows = {
 		{'note', 'A reskin of the Blizzard interface in the style of SPEC-01/HARDWARE by Shu Ding (github.com/shuding/spec-01), used under the MIT license. Its control art is rendered from the reference stylesheet and its sounds from the reference sound recipe. The license notice is in Media/Hardware/LICENSE-SPEC-01.txt.'},
 		{'note', 'Typeface: IBM Plex Mono, Copyright 2017 IBM Corp., SIL Open Font License 1.1 (Media/Fonts/OFL.txt).'},
-		{'note', 'Commands: /spec opens this window. /spec move unlocks the unit frames. /spec reset restores their positions. /spec sound tests sound playback.'},
+		{'note', 'Commands: /spec opens this window and /spec help lists every command (Extras > Commands). /spec followed by any other word searches the settings for it.'},
 	}},
 }})

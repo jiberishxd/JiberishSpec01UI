@@ -1260,7 +1260,7 @@ STEPS[#STEPS + 1] = {key = 'placement', title = 'Placement', short = 'Place',
 				step.choice = value
 				if value == 'place' then C_Timer.After(Reduced() and 0 or 0.35, function() UI:Safe(UI.SetupPlace, UI) end) end
 			end})
-		local tips = Kit:Text(body, 'In unlock mode: drag a frame to move it, the corner grip resizes, the wheel scales and Ctrl+wheel sets opacity. Arrow keys nudge, Ctrl+Z undoes. The console at the top of the screen has grid, snap and reset.', 9, 'dim')
+		local tips = Kit:Text(body, 'In edit mode: drag a frame to move it, the corner grip resizes, the wheel scales and Ctrl+wheel sets opacity. Arrow keys nudge, Ctrl+Z undoes. A handle\'s gear (or a right-click) opens that frame\'s settings; the strip at the top of the screen has grid, snap, undo, reset and Done.', 9, 'dim')
 		tips:SetPoint('TOPLEFT', body, 'TOPLEFT', 0, -172)
 		tips:SetWidth(CONTENT_W)
 		tips:SetJustifyH('LEFT')

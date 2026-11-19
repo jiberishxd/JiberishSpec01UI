@@ -35,7 +35,7 @@ local defaults = {
 		classColor = true, threat = true},
 	objectives = {scale = 1, collapsed = false},
 	buffs = {size = 30, perRow = 12, scale = 1},
-	hub = {page = 'overview'},
+	hub = {page = 'quick'},
 	-- The UI scale, saved and put back whenever the client changes it.
 	-- false until the first login captures the game's own scale.
 	uiScale = false, uiScaleLocked = true,
@@ -229,32 +229,127 @@ driver:SetScript('OnEvent', function(_, event, name)
 	end
 end)
 
-SLASH_JIBERISHSPEC1, SLASH_JIBERISHSPEC2, SLASH_JIBERISHSPEC3 = '/spec', '/spec01', '/jspec'
-SlashCmdList.JIBERISHSPEC = function(input)
-	local command, rest = (input or ''):match('^%s*(%S*)%s*(.-)%s*$')
-	command = command:lower()
-	local Kit = UI.Kit
-	if command == 'deck' then UI:ToggleHub('components')
-	elseif command == 'sound' then Kit:SoundReport()
-	elseif command == 'toast' then Kit:Toast({title = rest ~= '' and rest or 'Test toast'})
-	elseif command == 'setup' and UI.OpenSetup then UI:OpenSetup()
-	elseif command == 'move' or command == 'unlock' or command == 'lock' then
-		local lock
-		if command == 'unlock' then lock = false elseif command == 'lock' then lock = true end
-		if UI.ToggleMovers then UI:ToggleMovers(lock) end
-	elseif (command == 'drawer' or command == 'timer' or command == 'volume' or command == 'cpu') and UI.ToggleDrawer then
-		UI:ToggleDrawer(command ~= 'drawer' and command or nil)
-	elseif command == 'console' and UI.EditConsole then UI:EditConsole()
-	elseif command == 'calendar' and UI.OpenCalendar then UI:OpenCalendar()
-	elseif command == 'afk' and UI.PreviewAway then UI:PreviewAway()
-	elseif command == 'map' and UI.ToggleOverlayMap then UI:ToggleOverlayMap()
-	elseif command == 'reset' then
-		if UI.ResetMovers then UI:ResetMovers() end
-	elseif UI.ToggleHub then UI:ToggleHub(command ~= '' and command or nil)
+-- Slash commands ---------------------------------------------------------------------
+-- One table that both the dispatcher below and the hub's Commands page (/spec
+-- help) read, so what the help says and what runs can never drift apart.
+--   word, aliases  what follows /spec
+--   args           a printed hint for what may follow the word
+--   text           the help's one line
+--   needs          a UI method (or a list, any of which will do) the command
+--                  calls; while it is missing the command is listed as off and
+--                  the word falls through to a page or a search
+--   run(rest)      what it does
+-- Entries without a word document /spec itself.
+local COMMANDS = {
+	{usage = '/spec', text = 'Open or close the settings hub, on the page you used last.'},
+	{usage = '/spec <page>', text = 'Open one page: theme, fonts, layout, unitframes, nameplates, chat, fade ...'},
+	{usage = '/spec <word>', text = 'Anything else opens the hub and searches every setting for that word.'},
+	{word = 'help', aliases = {'commands', '?'}, text = 'This list of commands.', needs = 'ToggleHub',
+		run = function() UI:ToggleHub('commands', true) end},
+	{word = 'whatsnew', aliases = {'new', 'changes'}, text = 'What changed in this version, with keys to each page.', needs = 'ToggleHub',
+		run = function() UI:ToggleHub('whatsnew', true) end},
+	{word = 'quick', text = 'Quick setup: layout, finish, key color, typeface, scale, fade, sounds and motion.', needs = 'ToggleHub',
+		run = function() UI:ToggleHub('quick', true) end},
+	{word = 'setup', aliases = {'install'}, text = 'Run the installer again, one part of the interface per step.', needs = 'OpenSetup',
+		run = function() UI:OpenSetup() end},
+	{word = 'edit', text = 'Edit mode: move and arrange every frame.', needs = {'EditMode', 'ToggleMovers'},
+		run = function()
+			if UI.EditMode then UI:EditMode() else UI:ToggleMovers(false) end
+		end},
+	{word = 'move', aliases = {'unlock'}, text = 'Edit mode: unlock every frame to drag, resize and nudge it.', needs = 'ToggleMovers',
+		run = function(_, word)
+			if word == 'unlock' then UI:ToggleMovers(false) else UI:ToggleMovers() end
+		end},
+	{word = 'lock', text = 'Leave edit mode and lock the frames.', needs = 'ToggleMovers', run = function() UI:ToggleMovers(true) end},
+	{word = 'reset', text = 'Put every frame back in its default spot.', needs = 'ResetMovers', run = function() UI:ResetMovers() end},
+	{word = 'console', text = 'Edit the console: drag its banks, keys and bays.', needs = 'EditConsole', run = function() UI:EditConsole() end},
+	{word = 'drawer', text = 'Open or close the drawer of gadgets.', needs = 'ToggleDrawer', run = function() UI:ToggleDrawer() end},
+	{word = 'timer', text = 'Open the drawer on the timer.', needs = 'ToggleDrawer', run = function() UI:ToggleDrawer('timer') end},
+	{word = 'volume', text = 'Open the drawer on the volume mixer.', needs = 'ToggleDrawer', run = function() UI:ToggleDrawer('volume') end},
+	{word = 'cpu', text = 'Open the drawer on the CPU and memory meter.', needs = 'ToggleDrawer', run = function() UI:ToggleDrawer('cpu') end},
+	{word = 'calendar', text = 'Open the calendar.', needs = 'OpenCalendar', run = function() UI:OpenCalendar() end},
+	{word = 'map', text = 'Show or hide the overlay map.', needs = 'ToggleOverlayMap', run = function() UI:ToggleOverlayMap() end},
+	{word = 'afk', text = 'Preview the away screen.', needs = 'PreviewAway', run = function() UI:PreviewAway() end},
+	{word = 'deck', text = 'The component deck: every SPEC-01 part on one page.', needs = 'ToggleHub',
+		run = function() UI:ToggleHub('components', true) end},
+	{word = 'sound', text = 'Play a test sound and print what the game did with it.', run = function() UI.Kit:SoundReport() end},
+	{word = 'toast', args = '[text]', text = 'Show a test toast.',
+		run = function(rest) UI.Kit:Toast({title = rest ~= '' and rest or 'Test toast'}) end},
+}
+UI.commands = COMMANDS
+
+local commandByWord = {}
+for _, command in ipairs(COMMANDS) do
+	if command.word then
+		command.usage = command.usage or ('/spec '..command.word..(command.args and (' '..command.args) or ''))
+		commandByWord[command.word] = command
+		for _, alias in ipairs(command.aliases or {}) do commandByWord[alias] = command end
 	end
 end
 
--- Key bindings (Bindings.xml): the drawer, unlock mode and the overlay map.
+-- Whether a command can run: it has something to run and what it calls is loaded.
+function UI:CommandAvailable(command)
+	if type(command) ~= 'table' or not command.run then return false end
+	local needs = command.needs
+	if needs == nil then return true end
+	if type(needs) == 'string' then return self[needs] ~= nil end
+	for _, name in ipairs(needs) do
+		if self[name] ~= nil then return true end
+	end
+	return false
+end
+
+function UI:Command(word) return commandByWord[strlower(word or '')] end
+
+-- The help as printed lines, for the chat frame.
+function UI:CommandLines()
+	local lines = {}
+	for _, command in ipairs(COMMANDS) do
+		local usage = command.usage
+		if command.aliases and command.aliases[1] then usage = usage..'  (also '..table.concat(command.aliases, ', ')..')' end
+		lines[#lines + 1] = {usage = usage, text = command.text, off = command.word ~= nil and not self:CommandAvailable(command)}
+	end
+	return lines
+end
+
+function UI:PrintCommands()
+	for _, line in ipairs(self:CommandLines()) do
+		self:Print('|cffffffff'..line.usage..'|r  '..line.text..(line.off and ' (not loaded)' or ''))
+	end
+end
+
+-- /spec <word> [rest]: a command, else a page, else a search for the whole line.
+-- Returns what it did: 'command', 'hub', 'page', 'search' or nil.
+function UI:RunCommand(input)
+	input = input or ''
+	local word, rest = input:match('^%s*(%S*)%s*(.-)%s*$')
+	local lower = strlower(word)
+	local command = commandByWord[lower]
+	if command and self:CommandAvailable(command) then
+		command.run(rest, lower)
+		return 'command'
+	end
+	if not self.ToggleHub then return nil end
+	if lower == '' then
+		self:ToggleHub()
+		return 'hub'
+	end
+	if rest == '' and self.GetPage and self:GetPage(lower) then
+		self:ToggleHub(lower, true)
+		return 'page'
+	end
+	if self.SearchHub then
+		self:SearchHub(strtrim(input))
+		return 'search'
+	end
+	self:ToggleHub()
+	return 'hub'
+end
+
+SLASH_JIBERISHSPEC1, SLASH_JIBERISHSPEC2, SLASH_JIBERISHSPEC3 = '/spec', '/spec01', '/jspec'
+SlashCmdList.JIBERISHSPEC = function(input) UI:RunCommand(input) end
+
+-- Key bindings (Bindings.xml): the drawer, edit mode and the overlay map.
 BINDING_HEADER_JIBERISHSPEC = 'Jiberish SPEC-01 UI'
 BINDING_NAME_JIBERISHSPEC_DRAWER = 'Open or close the drawer'
 BINDING_NAME_JIBERISHSPEC_UNLOCK = 'Unlock or lock frames'

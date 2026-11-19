@@ -22,10 +22,13 @@ Copy the `JiberishSpec01UI` folder into `Interface/AddOns` and restart the game.
 `/spec` opens the hub, the one place to set everything up, like ElvUI's options. A sidebar
 lists the sections; each section has a style picker and its options:
 
+- **Quick setup** (where the hub opens): layout, finish, key color, typeface, UI scale, fade,
+  sounds and motion, each on one device. **What's new** lists this version's changes with a key
+  to each page; **Commands** lists every `/spec` command.
 - **Overview**: the style for every part of the interface at once, with a status lamp per
   part (green running, red failed to start with the reason, gray off).
 - **Search** (top of the sidebar) finds any option on any page. Options new in this version
-  carry a NEW mark.
+  carry a NEW lamp until you open their page in this version.
 - **Theme**:
   - Finish, key color (or your own), typeface, text scale, outline and shadow.
   - Borders, corner rounding, shadows, housing opacity, color softness, bar brightness.
@@ -37,13 +40,15 @@ lists the sections; each section has a style picker and its options:
   - Presets: Console, Classic, Healer, Tank/DPS centre, Minimal and Widescreen.
   - Screen layouts for 1080p, 1440p and 4K (compact or comfortable), picked automatically or by hand.
   - Saved layouts of your own.
-  - **Unlock mode** (`/spec unlock`, or **Unlock mode** on this page): a handle on every frame
-    and a UM-1 console at the top of the screen.
+  - **Edit mode** (`/spec edit`, `/spec move`, or **Move UI** in the hub's header): a handle on
+    every frame and an EDIT MODE strip at the top of the screen.
     - Drag a frame to move it. Drag its corner grip to resize it.
     - The wheel scales a frame; Ctrl+wheel changes its opacity.
     - Arrow keys nudge the selected frame. Ctrl+Z undoes, and Esc locks.
-    - The console has grid, snap and grid size; undo, reset all, and lock.
-    - For the selected frame, the console sets scale, opacity, anchor, hide and reset.
+    - The strip has grid size, snap and guides, the console editor, the layout map, undo,
+      reset all, and Done.
+    - A handle's gear (or a right-click on it) opens that frame's settings page; the selected
+      frame's inspector chip sets its anchor, position, scale and opacity, hides it or resets it.
 - **Profiles**: per-character profiles, copy and reset, and export and import as a text string.
 - **Setup**: the first-run guide (`/spec setup`) and a short tour of the hub.
 - **Sounds**: every kind of sound (windows, menus, tabs, checkboxes, buttons, errors, quest
@@ -55,7 +60,10 @@ lists the sections; each section has a style picker and its options:
   sizes, text formats, colors and aura filters to per-bar fading.
 - **Components** (all 52 SPEC-01 elements, live) and **About**.
 
-Style changes take effect after a reload; the hub shows a Reload UI key when one is needed.
+Style changes take effect after a reload: the amber lamp in the hub's header lights and lists
+them (hover it), and its Reload key reloads. **Undo** (or Ctrl+Z) takes back the last change
+made in the hub and **Reset page** puts a page back to its defaults. `/spec help` lists every
+command; `/spec` followed by any other word searches the settings.
 
 ## Foundation (0.3)
 
@@ -68,8 +76,9 @@ Style changes take effect after a reload; the hub shows a Reload UI key when one
   closing): fades ease with a sine, movement with a cubic. Windows rise 8 px as they open and
   sink 4 px as they close. Nothing runs while nothing moves.
 - **Placement.** `/spec move` shows a handle over every SPEC-01 frame. Frames snap to an
-  8-unit grid and to the edges and centres of other frames; hold Shift to place freely,
-  right-click a handle to put that frame back. A fight starting locks everything.
+  8-unit grid and to the edges and centres of other frames; hold Shift to place freely.
+  (Since 0.6.0 this is edit mode: right-click a handle for that frame's settings, and reset it
+  from its inspector chip.) A fight starting locks everything.
 - **Sounds** never double up: the same sound plays at most once per 0.1 s.
 
 ## Unit frames

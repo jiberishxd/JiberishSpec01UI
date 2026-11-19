@@ -1,7 +1,7 @@
 ## Interface: 120105, 16001
 ## Title: |cffff3b30Jiberish|r SPEC-01 UI
 ## Author: Jiberish
-## Version: 0.5.2
+## Version: 0.6.0
 ## Notes: The Blizzard interface reskinned in the SPEC-01/HARDWARE style: unit frames, action bars, chat, tooltips, sounds and motion. SPEC-01 by Shu Ding, MIT.
 ## SavedVariables: JiberishSpec01DB
 ## OptionalDeps: LibSharedMedia-3.0
@@ -23,6 +23,9 @@ Kit\Calendar.lua
 Kit\Deck.lua
 
 Modules\Hub.lua
+Modules\HubHistory.lua
+Modules\QuickSetup.lua
+Modules\WhatsNew.lua
 Modules\Appearance.lua
 Modules\Motion.lua
 Modules\Movers.lua
