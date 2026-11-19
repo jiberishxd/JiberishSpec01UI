@@ -15,6 +15,18 @@ local floor, max = math.floor, math.max
 -- Releases, newest first. Each highlight: area (the card's printed title), title,
 -- text (one line or two), page (the hub page Open goes to) or command (a /spec word).
 local RELEASES = {
+	{version = '0.6.1', date = '2026-11-18',
+		summary = 'Movement keys work with the hub and editors open, the stance and pet keys slide along the console, and unit frames get portrait and text placement.',
+		entries = {
+			{area = 'Unit frames', title = 'Portrait size and side', page = 'unitframes',
+				text = 'Each frame\'s portrait can be its own size, on the left or the right.'},
+			{area = 'Unit frames', title = 'Place the name and digits', page = 'unitframes',
+				text = 'Nudge the name and the digits anywhere on the frame, and set the digits left, centre or right in the LCD.'},
+			{area = 'Console', title = 'Taller or shorter bays', command = 'console',
+				text = 'Select a docked frame in the console editor and use HEIGHT - and HEIGHT +; the frame follows its bay.'},
+			{area = 'Console', title = 'Stance and pet keys along the edge', command = 'console',
+				text = 'Drag them anywhere along the console\'s top edge, or into the console where there is room.'},
+		}},
 	{version = '0.6.0', date = '2026-11-18',
 		summary = 'Two layouts and a console you can edit block by block, a compass and map, new quest tracker, chat and away screen, and an easier settings hub.',
 		entries = {

@@ -64,11 +64,18 @@ local function FrameCards(info)
 		{'dropdown', 'Shape', P('shape'), items = FRAME_SHAPES, note = 'Page default follows the Style card.',
 			set = function(value) UI:SetUnitFrameShape(value, key) end},
 		{'slider', 'Width', P('width'), 32, 320, 2, nil, format = Int},
-		{'slider', 'Height', P('height'), 12, 110, 1, nil, format = Int},
+		{'slider', 'Height', P('height'), 12, 110, 1, 'Set into a console bay, the bay sets the size: H - and H + in the console editor.',
+			format = Int},
 		{'slider', 'Scale', P('scale'), 0.5, 2, 0.05, 'On top of the page\'s scale.', format = Percent},
 		{'dropdown', 'Portrait', P('portrait'), items = PORTRAITS, disabled = NotDevice,
 			note = 'LED avatar: SPEC-01\'s avatar, a glyph lit from the name behind a round lens. Monogram: initials on the lens. '..
 			'Round, class and key avatars: the portrait or class icon in a ringed lens or on a key. None collapses the box.'},
+		{'slider', 'Portrait size', P('portraitSize'), 0, 110, 1, 'Auto: as tall as the readout and meters. It never outgrows the frame.',
+			format = function(value) return value <= 0 and 'AUTO' or Int(value) end, since = '0.6.1',
+			disabled = function() return NotDevice() or Get('portrait') == 'off' end},
+		{'segmented', 'Portrait side', P('portraitSide'), items = {{'auto', 'Auto'}, {'left', 'Left'}, {'right', 'Right'}},
+			note = 'Auto: the frame\'s outer side (the target mirrors the player).', since = '0.6.1',
+			disabled = function() return NotDevice() or Get('portrait') == 'off' end},
 		{'segmented', 'Meters', P('barStyle'), items = METERS, reload = true},
 		{'dropdown', 'Health texture', P('healthTexture'), items = function() return UI.BarLooks.FillItems(true) end, since = '0.5.1'},
 		{'dropdown', 'Health color', P('healthColor'), items = COLORS},
@@ -124,6 +131,15 @@ local function FrameCards(info)
 	text[#text + 1] = {'switch', 'Short numbers', P('shortNumbers'), '12.4k rather than 12,400.'}
 	text[#text + 1] = {'slider', 'Name size', P('nameSize'), 6, 16, 1, nil, format = Int}
 	text[#text + 1] = {'slider', 'Digits size', P('digitsSize'), 6, 22, 1, nil, format = Int}
+	if info.large then
+		text[#text + 1] = {'segmented', 'Digits align', P('digitsAlign'), items = {{'left', 'Left'}, {'center', 'Centre'}, {'right', 'Right'}},
+			note = 'Where the digits sit in the LCD; the LCD label takes the other end.', since = '0.6.1'}
+	end
+	text[#text + 1] = {'slider', 'Name across', P('nameX'), -60, 60, 1, 'Moves the name from where the shape puts it.', format = Int,
+		since = '0.6.1'}
+	text[#text + 1] = {'slider', 'Name up', P('nameY'), -30, 30, 1, nil, format = Int, since = '0.6.1'}
+	text[#text + 1] = {'slider', 'Digits across', P('digitsX'), -60, 60, 1, nil, format = Int, since = '0.6.1'}
+	text[#text + 1] = {'slider', 'Digits up', P('digitsY'), -30, 30, 1, nil, format = Int, since = '0.6.1'}
 
 	local cards = {{title = info.title, rows = look}, {title = info.title..' text', rows = text}}
 	if info.auras then

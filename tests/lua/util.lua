@@ -21,6 +21,25 @@ local function Load(ui)
 	return ui.Util
 end
 
+-- Frames and override bindings, for Util.Keys.
+local frames, bound = {}, {}
+CreateFrame = function(_, name)
+	local frame = {scripts = {}}
+	function frame:RegisterEvent() end
+	function frame:RegisterForClicks() end
+	function frame:SetScript(script, fn) self.scripts[script] = fn end
+	function frame:GetName() return name end
+	if name then frames[name] = frame end
+	return frame
+end
+InCombatLockdown = function() return false end
+SetOverrideBindingClick = function(_, _, key, name) bound[key] = name end
+ClearOverrideBindings = function() for key in pairs(bound) do bound[key] = nil end end
+local function Press(key, down)
+	local frame = frames[bound[key]]
+	frame.scripts.OnClick(frame, 'LeftButton', down)
+end
+
 local UI = {}
 local Util = Load(UI)
 check('exposed as UI.Util', UI.Util, Util)
@@ -116,6 +135,23 @@ check('Int negative', Util.Int(-3), '-3')
 check('Percent', Util.Percent(0.5), '50%')
 check('Percent rounds', Util.Percent(0.255), '26%')
 check('Percent whole', Util.Percent(1), '100%')
+
+-- Keys: only the named keys are bound; a press runs once; priority wins; nil gives them back.
+local ran = {}
+Util.Keys('low', {LEFT = function() ran[#ran + 1] = 'low-left' end, ['CTRL-Z'] = function() ran[#ran + 1] = 'low-z' end}, 1)
+Util.Keys('high', {['CTRL-Z'] = function() ran[#ran + 1] = 'high-z' end}, 3)
+check('Keys binds only its keys', bound.LEFT ~= nil and bound['CTRL-Z'] ~= nil and bound.W == nil, true)
+Press('LEFT', true); Press('LEFT', false)
+check('Keys runs once per press', #ran == 1 and ran[1] == 'low-left', true)
+Press('CTRL-Z', true); Press('CTRL-Z', false)
+check('Keys priority', ran[2], 'high-z')
+Press('LEFT', false)
+check('Keys up-only press runs', ran[3], 'low-left')
+Util.Keys('high', nil)
+Press('CTRL-Z', true)
+check('Keys falls back', ran[4], 'low-z')
+Util.Keys('low', nil)
+check('Keys gives every key back', next(bound), nil)
 
 -- A client without secret values.
 issecretvalue = nil

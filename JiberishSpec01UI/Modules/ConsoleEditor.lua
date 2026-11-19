@@ -159,7 +159,8 @@ local BLOCK_PAGE = {bank = 'actionbars', fn = 'actionbars', menu = 'actionbars',
 	unit = 'unitframes', cast = 'unitframes'}
 
 local editing, selected, drag, fromEditMode = false, nil, nil, false
-local overlay, inspector, keyboard
+local overlay, inspector
+local Keyboard -- set below
 local blockFrames, guides = {}, {}
 local current, currentBounds = {}, nil
 local Draw -- set below
@@ -234,12 +235,14 @@ local function Relayout()
 	return true
 end
 
--- Change a block's saved fields (nil values are left as they are).
+-- Change a block's saved fields (false clears one; the rest are left as they are).
 local function Commit(key, changes)
 	if InCombatLockdown() then return false end
 	local layout = Snapshot()
 	local spot = type(layout[key]) == 'table' and layout[key] or {}
-	for field, value in pairs(changes) do spot[field] = value end
+	for field, value in pairs(changes) do
+		if value == false then spot[field] = nil else spot[field] = value end
+	end
 	-- The block just edited keeps its spot; others make room for it.
 	local rank = 0
 	for _, other in pairs(layout) do if type(other) == 'table' then rank = max(rank, tonumber(other.rank) or 0) end end
@@ -273,6 +276,7 @@ local function Select(key)
 	selected = key
 	PaintAll()
 	if UpdateInspector then UpdateInspector() end
+	if editing and Keyboard then Keyboard(true) end
 end
 
 local function HideGuides() for _, line in ipairs(guides) do line:Hide() end end
@@ -312,6 +316,17 @@ local function Place(frame, x, y)
 	frame:SetPoint('TOPLEFT', Console(), 'TOPLEFT', x, -y)
 end
 
+-- The stance and pet keys can also ride the console's top edge, anywhere along
+-- it: a drop with its middle above the body puts them there (saved as edgeX).
+local function OnEdge(block, y)
+	return block.kind == 'mini' and y + block.h / 2 < (currentBounds and currentBounds.top or 24)
+end
+local function EdgeSpot(block, x)
+	local console = Console()
+	local width = console and console:GetWidth() or MAX_W
+	return Kit:Clamp(Grid.Snap(x, Px()), 0, max(width - block.w, 0)), 8 - block.h
+end
+
 local function Cursor()
 	local x, y = GetCursorPosition()
 	local scale = Console():GetEffectiveScale()
@@ -328,9 +343,11 @@ local function DragUpdate(frame)
 	local gx, gy
 	x, y, gx, gy = Grid.Magnet(block, x, y, current, MAGNET * px, Console():GetWidth() / 2)
 	x, y = Grid.Snap(x, px), Grid.Snap(y, px)
+	drag.edge = OnEdge(block, y)
+	if drag.edge then x, y = EdgeSpot(block, x) end
 	drag.nx, drag.ny = x, y
 	Place(frame, x, y)
-	drag.valid = Grid.Free({key = block.key, x = x, y = y, w = block.w, h = block.h}, current, Limits())
+	drag.valid = drag.edge or Grid.Free({key = block.key, x = x, y = y, w = block.w, h = block.h}, current, Limits())
 	Paint(frame, not drag.valid)
 	ShowGuides(gx, gy)
 end
@@ -363,7 +380,8 @@ local function BlockUp(frame, button)
 		Paint(frame)
 		return
 	end
-	if moved.valid and Commit(moved.block.key, {x = moved.nx, y = moved.ny}) then
+	local changes = moved.edge and {edgeX = moved.nx, x = false, y = false} or {x = moved.nx, y = moved.ny, edgeX = false}
+	if moved.valid and Commit(moved.block.key, changes) then
 		Kit:Play('latch-down')
 		return
 	end
@@ -398,7 +416,9 @@ local function BlockFrame(index)
 		GameTooltip:AddLine('Drag to move it. Arrow keys nudge one pixel, Shift one grid step. Right-click: its settings.', 0.8, 0.8, 0.78, true)
 		if self.block.tucked then
 			GameTooltip:AddLine(self.block.header and 'In the console\'s header: drag it into the body to place it freely. Reset block puts it back.'
-				or 'Tucked on the console\'s top edge: drag it into the console to set it in. Reset block tucks it back.', 0.8, 0.8, 0.78, true)
+				or 'On the console\'s top edge: drag it along the edge, or into the console to set it in. Reset block puts it back.', 0.8, 0.8, 0.78, true)
+		elseif self.block.kind == 'mini' then
+			GameTooltip:AddLine('Drag it above the console to put it back on the top edge.', 0.8, 0.8, 0.78, true)
 		end
 		GameTooltip:Show()
 	end)
@@ -426,6 +446,7 @@ function Draw()
 	for index = #current + 1, #blockFrames do blockFrames[index]:Hide() end
 	if selected and not Find(selected) then selected = nil end
 	if UpdateInspector then UpdateInspector() end
+	Keyboard(true)
 end
 
 -- Changes from the inspector and the keyboard ------------------------------------------
@@ -433,6 +454,12 @@ local function Nudge(dx, dy, step)
 	local block = Find(selected)
 	if not block or InCombatLockdown() then return end
 	step = step or Px()
+	if block.tucked and block.kind == 'mini' then
+		-- On the top edge: left and right along it.
+		local x = EdgeSpot(block, block.x + dx * step)
+		if dy == 0 and x ~= block.x and Commit(block.key, {edgeX = x}) then return Kit:Play('tick') end
+		return Kit:Play('error')
+	end
 	local x, y = Grid.Snap(block.x + dx * step, Px()), Grid.Snap(block.y + dy * step, Px())
 	if Grid.Free({key = block.key, x = x, y = y, w = block.w, h = block.h}, current, Limits()) and Commit(block.key, {x = x, y = y}) then
 		Kit:Play('tick')
@@ -450,6 +477,18 @@ local function Widen(sign)
 		return Kit:Play('error')
 	end
 	Commit(block.key, {w = width})
+	Kit:Play('tick')
+end
+
+-- A frame's bay height, two grid steps at a time (the frame inside follows it).
+local function Taller(sign)
+	local block = Find(selected)
+	if not (block and block.bay and block.kind == 'unit') then return end
+	local height = Grid.Snap(block.h + sign * GridStep() * 2, Px())
+	if height < 40 or not Grid.Free({key = block.key, x = block.x, y = block.y, w = block.w, h = height}, current, Limits()) then
+		return Kit:Play('error')
+	end
+	Commit(block.key, {h = height})
 	Kit:Play('tick')
 end
 
@@ -696,6 +735,10 @@ function UpdateInspector()
 			SetContext(1, 'WIDTH -', function() Widen(-1) end)
 			SetContext(2, 'WIDTH +', function() Widen(1) end)
 		end
+		if block.bay and block.kind == 'unit' then
+			SetContext(3, 'HEIGHT -', function() Taller(-1) end)
+			SetContext(4, 'HEIGHT +', function() Taller(1) end)
+		end
 		if REMOVABLE[block.kind] then SetContext(5, 'TAKE OUT', Remove) end
 	end
 	local console = Console()
@@ -717,40 +760,31 @@ function UpdateInspector()
 	end
 end
 
--- Keyboard: arrows nudge, Escape is Done; every other key goes on to the game.
--- Captured only while editing, and given back before combat (it can't be then).
+-- Keys: arrows nudge the selected block, Escape is Done. They are override
+-- bindings (UI.Util.Keys): no frame takes the keyboard, so every other key goes
+-- straight to the game, and they are let go in combat.
 local ARROWS = {LEFT = {-1, 0}, RIGHT = {1, 0}, UP = {0, -1}, DOWN = {0, 1}}
-local function Keyboard(on)
-	if not keyboard then
-		keyboard = CreateFrame('Frame', nil, UIParent)
-		keyboard:Hide()
-		keyboard:SetScript('OnKeyDown', function(self, key)
-			if InCombatLockdown() then return end
-			local arrow = ARROWS[key]
-			local hub = UI.HubFrame and UI:HubFrame()
-			if key == 'ESCAPE' and hub and hub:IsShown() then
-				-- The hub open over the editor takes Escape for itself.
-				self:SetPropagateKeyboardInput(true)
-			elseif key == 'ESCAPE' then
-				self:SetPropagateKeyboardInput(false)
-				UI:EditConsole(false)
-			elseif arrow and selected then
-				self:SetPropagateKeyboardInput(false)
-				Nudge(arrow[1], arrow[2], IsShiftKeyDown() and GridStep() or nil)
-			else
-				self:SetPropagateKeyboardInput(true)
-			end
-		end)
+local function Arrow(key)
+	local arrow = ARROWS[key:gsub('^SHIFT%-', '')]
+	if arrow and selected and not InCombatLockdown() then
+		Nudge(arrow[1], arrow[2], key:find('^SHIFT%-') and GridStep() or nil)
 	end
-	if InCombatLockdown() then return end
+end
+function Keyboard(on)
+	local map
 	if on then
-		keyboard:Show()
-		keyboard:EnableKeyboard(true)
-		keyboard:SetPropagateKeyboardInput(true)
-	else
-		keyboard:EnableKeyboard(false)
-		keyboard:Hide()
+		map = {ESCAPE = function()
+			if InCombatLockdown() then return end
+			-- The hub open over the editor takes Escape for itself.
+			local hub = UI.HubFrame and UI:HubFrame()
+			if hub and hub:IsShown() then return UI:ToggleHub(nil, false) end
+			UI:EditConsole(false)
+		end}
+		if selected then
+			for key in pairs(ARROWS) do map[key], map['SHIFT-'..key] = Arrow, Arrow end
+		end
 	end
+	UI.Util.Keys('console', map, 2)
 end
 
 local function BuildOverlay(console)

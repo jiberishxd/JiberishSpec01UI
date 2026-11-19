@@ -1442,17 +1442,12 @@ local function Build()
 	guide:RegisterForDrag('LeftButton')
 	guide:SetScript('OnDragStart', guide.StartMoving)
 	guide:SetScript('OnDragStop', function(self) self:StopMovingOrSizing(); Kit:ResetRest(self) end)
-	-- Esc asks before closing; every other key goes on to the game.
-	guide:EnableKeyboard(true)
-	guide:SetScript('OnKeyDown', function(self, key)
-		if InCombatLockdown() then return end
-		if key == 'ESCAPE' then
-			self:SetPropagateKeyboardInput(false)
-			ConfirmClose()
-		else
-			self:SetPropagateKeyboardInput(true)
-		end
-	end)
+	-- Esc asks before closing (an override binding: every other key goes
+	-- straight to the game).
+	local escape = {ESCAPE = function() if not InCombatLockdown() then ConfirmClose() end end}
+	guide:HookScript('OnShow', function() UI.Util.Keys('setup', escape, 4) end)
+	guide:HookScript('OnHide', function() UI.Util.Keys('setup', nil) end)
+	if guide:IsShown() then UI.Util.Keys('setup', escape, 4) end
 	Kit:SetLed(guide.lamp, true)
 
 	-- Header: the step counter LCD and the close key.
@@ -1626,12 +1621,6 @@ combat:RegisterEvent('PLAYER_REGEN_DISABLED')
 combat:RegisterEvent('PLAYER_REGEN_ENABLED')
 combat:SetScript('OnEvent', function(_, event)
 	if event == 'PLAYER_REGEN_DISABLED' then
-		-- Let go of the keyboard while that's still allowed (lockdown starts
-		-- after this event), so no key can be held back during the fight.
-		if guide then
-			guide:SetPropagateKeyboardInput(true)
-			guide:EnableKeyboard(false)
-		end
 		if guide and guide:IsShown() then
 			combat.paused = true
 			Fold('Paused for combat', false)
@@ -1641,7 +1630,6 @@ combat:SetScript('OnEvent', function(_, event)
 			pill.done:Hide()
 		end
 	elseif combat.paused or guide then
-		if guide then guide:EnableKeyboard(true) end
 		if not combat.paused then return end
 		combat.paused = nil
 		C_Timer.After(0.5, function()

@@ -3,6 +3,27 @@
 What changed in each version of Jiberish SPEC-01 UI, newest first. The in-game
 **What's new** page (`/spec whatsnew`) shows the highlights, with a key to each page.
 
+## 0.6.1 (2026-11-18)
+
+### Fixes
+- **You can move with the hub, edit mode or the console editor open.** They no longer take the
+  keyboard: their own keys (arrows, Escape, Ctrl+Z) are bound only while they're open, and
+  every other key goes straight to the game.
+- **Stance and pet keys move again in the console editor.** They slide anywhere along the
+  console's top edge (drag, or the arrow keys), and can still be dropped into the console
+  where there's room. Dragging one above the console puts it back on the edge.
+- **The flight map shows its map again** (Forever). The TX-2 skin had hidden the map picture
+  along with the window art, leaving only the flight points.
+
+### Unit frames
+- **Portrait size** (Auto, or a size up to the frame's height) and **portrait side** (Auto,
+  left or right) for each frame. A portrait taller than the readout keeps the readout and
+  meters centred beside it.
+- **Text placement:** move the name and the digits from where the shape puts them, and set
+  the digits left, centre or right in the LCD (the LCD label takes the other end).
+- **Bay height:** in the console editor a docked frame's bay has HEIGHT - and HEIGHT +; the
+  frame inside follows it. The Height setting notes that a bay sets the size.
+
 ## 0.6.0 (2026-11-18)
 
 ### Settings hub

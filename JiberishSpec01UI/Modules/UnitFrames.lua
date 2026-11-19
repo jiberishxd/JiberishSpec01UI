@@ -86,6 +86,8 @@ local FRAME_DEFAULTS = {
 	enable = true, width = 176, height = 44, scale = 1,
 	shape = 'default', -- 'default' | 'device' | 'bar' | 'square' | 'slim' | 'lcdstrip'
 	portrait = 'default', -- 'default' | 'model' | 'texture' | 'class' | 'off'
+	portraitSize = 0, -- 0: as tall as the readout and meters (compact: the frame); else its size
+	portraitSide = 'auto', -- 'auto' (the near side) | 'left' | 'right'
 	header = true, headerCode = true, headerLevel = true,
 	lcdTag = 'class', -- 'class' | 'power' | 'name' | 'none' (large frames)
 	healthText = 'percent', -- 'percent' | 'current' | 'both' | 'deficit' | 'none'
@@ -100,6 +102,9 @@ local FRAME_DEFAULTS = {
 	-- 'gradient2' on this frame: its own stops ('page' follows the page's).
 	healthStops = 'page', healthStart = {0.10, 0.45, 0.28}, healthEnd = {0.47, 0.88, 0.45}, healthDirection = 'horizontal',
 	healthHeight = 5, powerHeight = 3, nameSize = 10, digitsSize = 10,
+	-- Text placement over the shape's own: offsets (x right, y up) and the digits' alignment in the LCD.
+	nameX = 0, nameY = 0, digitsX = 0, digitsY = 0,
+	digitsAlign = 'right', -- 'right' | 'center' | 'left'
 	combatLamp = true, sweep = true, arrive = true, rangeFade = false, rangeAlpha = 0.45,
 	auras = false, buffs = true, debuffs = true, onlyMine = false, bossOnly = false,
 	auraSize = 22, auraMax = 8, auraPerRow = 8,

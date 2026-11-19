@@ -417,6 +417,14 @@ end
 
 local function Ink(frame) return Kit.INK[Style()] or Kit.INK.paper end
 
+-- The portrait's side: 'auto' is the frame's near side (fallback); 'left' or
+-- 'right' as chosen. Returns that side, the other one, and the inward sign.
+local function PortraitSide(cfg, fallback)
+	local side = cfg.portraitSide == 'left' and 'LEFT' or cfg.portraitSide == 'right' and 'RIGHT' or fallback
+	if side == 'LEFT' then return 'LEFT', 'RIGHT', 1 end
+	return 'RIGHT', 'LEFT', -1
+end
+
 -- Large frames (player, target): header row, portrait, LCD readout, meters.
 function LayoutLarge(frame, cfg)
 	local ink = Ink(frame)
@@ -474,17 +482,24 @@ function LayoutLarge(frame, cfg)
 	local powerTrack = frame.power and (cfg.powerHeight or 3) + frame.power.inset * 2 or 0
 	local body = lcdHeight + 3 + healthTrack + (frame.power and 2 + powerTrack or 0)
 	local hasPortrait = ApplyPortrait(frame)
-	local portraitSize = hasPortrait and max(16, min(body, cfg.height - top - 4)) or 0
+	-- The portrait: as tall as the readout and meters (size 0), or its own size up
+	-- to the frame's height; on the near side, or the side chosen.
+	local room = max(16, cfg.height - top - 4)
+	local want = tonumber(cfg.portraitSize) or 0
+	local portraitSize = hasPortrait and (want > 0 and min(max(want, 16), room) or max(16, min(body, room))) or 0
+	local pSide, pOther, pSign = PortraitSide(cfg, near)
 	local slot = frame.portraitSlot
 	slot:ClearAllPoints()
 	slot:SetSize(max(portraitSize, 1), max(portraitSize, 1))
-	slot:SetPoint('TOP'..near, sign * pad, -top)
+	slot:SetPoint('TOP'..pSide, pSign * pad, -top)
 	local column = max(width - pad * 2 - (hasPortrait and portraitSize + 6 or 0), 20)
+	-- A portrait taller than the column: the column sits centred beside it.
+	local drop = hasPortrait and max(0, floor((portraitSize - body) / 2)) or 0
 	local lcd = frame.lcd
 	lcd:Show()
 	lcd:ClearAllPoints()
 	lcd:SetSize(column, lcdHeight)
-	if hasPortrait then lcd:SetPoint('TOP'..near, slot, 'TOP'..far, sign * 6, 0)
+	if hasPortrait then lcd:SetPoint('TOP'..pSide, slot, 'TOP'..pOther, pSign * 6, -drop)
 	else lcd:SetPoint('TOP'..near, sign * pad, -top) end
 	frame.tag:SetWidth(max(column - 50, 10))
 	frame.tag:SetShown(cfg.lcdTag ~= 'none')
@@ -522,14 +537,22 @@ function LayoutCompact(frame, cfg)
 	if frame.power then frame.power.track:SetShown(not small) end
 	local pad, top = 7, small and 5 or 6
 	local hasPortrait = ApplyPortrait(frame)
-	local left = pad
+	local left, right = pad, pad
 	local slot = frame.portraitSlot
 	slot:ClearAllPoints()
 	if hasPortrait then
-		local size = max(12, height - 8)
+		-- As tall as the frame (size 0) or its own size; on the left, or the side chosen.
+		local want = tonumber(cfg.portraitSize) or 0
+		local size = want > 0 and min(max(want, 12), height - 4) or max(12, height - 8)
+		local side = PortraitSide(cfg, 'LEFT')
 		slot:SetSize(size, size)
-		slot:SetPoint('LEFT', 4, 0)
-		left = 4 + size + 5
+		if side == 'RIGHT' then
+			slot:SetPoint('RIGHT', -4, 0)
+			right = 4 + size + 5
+		else
+			slot:SetPoint('LEFT', 4, 0)
+			left = 4 + size + 5
+		end
 	end
 	local header = cfg.header
 	Kit:ShowLed(frame.lamp, header and cfg.combatLamp)
@@ -539,18 +562,18 @@ function LayoutCompact(frame, cfg)
 	if cfg.combatLamp then frame.nameText:SetPoint('LEFT', frame.lamp, 'RIGHT', 4, 0)
 	else frame.nameText:SetPoint('TOPLEFT', left, -top - 1) end
 	frame.nameText:SetShown(header)
-	frame.nameText:SetWidth(max(width - left - pad - 40, 20))
+	frame.nameText:SetWidth(max(width - left - right - 40, 20))
 	Kit:Font(frame.nameText, cfg.nameSize or (small and 8 or 9), nil, true)
 	Kit:Font(frame.digits, cfg.digitsSize or (small and 9 or 10), nil, true)
 	frame.digits:ClearAllPoints()
-	frame.digits:SetPoint('TOPRIGHT', -pad, -top)
+	frame.digits:SetPoint('TOPRIGHT', -right, -top)
 	local healthTrack = (cfg.healthHeight or 5) + frame.health.inset * 2
 	frame.health.track:ClearAllPoints()
-	frame.health.track:SetSize(max(width - left - pad, 20), healthTrack)
+	frame.health.track:SetSize(max(width - left - right, 20), healthTrack)
 	frame.health.track:SetPoint('TOPLEFT', left, header and -(top + 13) or -top)
 	if frame.power and not small then
 		frame.power.track:ClearAllPoints()
-		frame.power.track:SetSize(max(width - left - pad, 20), (cfg.powerHeight or 3) + frame.power.inset * 2)
+		frame.power.track:SetSize(max(width - left - right, 20), (cfg.powerHeight or 3) + frame.power.inset * 2)
 		frame.power.track:SetPoint('TOPLEFT', frame.health.track, 'BOTTOMLEFT', 0, -2)
 	end
 end
@@ -1235,6 +1258,69 @@ local function FitLamp(frame)
 	end
 end
 
+-- Your own text placement over each shape's: the digits' alignment in the LCD
+-- (left, centre or right; the LCD label moves to the other end), then the name
+-- and the digits nudged by their offsets (x right, y up). Kept in a block of its
+-- own: the main chunk may hold at most 200 locals.
+local PlaceText
+do
+	-- Each shifted region's anchors as last set, so a shift that the layout
+	-- didn't redo is taken back before the new one (never added twice).
+	local shifted = setmetatable({}, {__mode = 'k'})
+	local function Shift(region, dx, dy)
+		local count = region and region:GetNumPoints() or 0
+		if count == 0 then return end
+		local last, points = shifted[region], {}
+		local same = last and last.count == count
+		for index = 1, count do
+			local point, relative, relativePoint, x, y = region:GetPoint(index)
+			points[index] = {point, relative, relativePoint, x or 0, y or 0}
+			local was = same and last[index]
+			same = was and was[1] == point and was[2] == relative and was[3] == relativePoint and was[4] == (x or 0)
+				and was[5] == (y or 0) or false
+		end
+		local ox, oy = 0, 0
+		if same then ox, oy = last.dx, last.dy end
+		if ox == dx and oy == dy then return end
+		region:ClearAllPoints()
+		local record = {count = count, dx = dx, dy = dy}
+		for index, spot in ipairs(points) do
+			local x, y = spot[4] - ox + dx, spot[5] - oy + dy
+			region:SetPoint(spot[1], spot[2], spot[3], x, y)
+			record[index] = {spot[1], spot[2], spot[3], x, y}
+		end
+		shifted[region] = record
+	end
+
+	local function Align(frame, cfg)
+		local lcd, digits = frame.lcd, frame.digits
+		if not (lcd and digits and lcd:IsShown() and digits:GetNumPoints() > 0) then return end
+		local _, relative = digits:GetPoint(1)
+		if relative ~= lcd then return end
+		local align = cfg.digitsAlign == 'left' and 'LEFT' or cfg.digitsAlign == 'center' and 'CENTER' or nil
+		if frame.tag then
+			frame.tag:ClearAllPoints()
+			if align == 'LEFT' then frame.tag:SetPoint('RIGHT', lcd, 'RIGHT', -6, 0); frame.tag:SetJustifyH('RIGHT')
+			else frame.tag:SetPoint('LEFT', lcd, 'LEFT', 6, 0); frame.tag:SetJustifyH('LEFT') end
+		end
+		if not align then return end
+		for _, region in ipairs({digits, frame.ghost}) do
+			region:ClearAllPoints()
+			region:SetPoint(align, lcd, align, align == 'LEFT' and 6 or 0, 0)
+			region:SetJustifyH(align)
+		end
+	end
+
+	function PlaceText(frame, cfg)
+		Align(frame, cfg)
+		local nameX, nameY = tonumber(cfg.nameX) or 0, tonumber(cfg.nameY) or 0
+		local digitsX, digitsY = tonumber(cfg.digitsX) or 0, tonumber(cfg.digitsY) or 0
+		Shift(frame.nameText, nameX, nameY)
+		Shift(frame.digits, digitsX, digitsY)
+		Shift(frame.ghost, digitsX, digitsY)
+	end
+end
+
 local function Layout(frame)
 	-- Embedded in the console, the frame takes its bay's size and leaves its
 	-- header to the legend printed on the console (SetDocked).
@@ -1257,6 +1343,7 @@ local function Layout(frame)
 		PlaceStatus(frame, mirror and 'BOTTOMLEFT' or 'BOTTOMRIGHT', frame.face, mirror and 'TOPLEFT' or 'TOPRIGHT',
 			mirror and 2 or -2, 3, mirror and 'RIGHT' or 'LEFT')
 	end
+	PlaceText(frame, cfg)
 	SyncGhost(frame, cfg)
 	ApplyColors(frame)
 	LayoutLamps(frame, cfg)

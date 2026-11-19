@@ -765,6 +765,10 @@ local function LayoutConsoleNow()
 				if (block.kind == 'cast' or block.kind == 'deck' or block.bay) and tonumber(spot.w) then
 					block.w = Snap(max(tonumber(spot.w), block.bay and 96 or 40))
 				end
+				-- A frame's bay may also be made taller or shorter (the frame follows it).
+				if block.bay and block.kind == 'unit' and tonumber(spot.h) then
+					block.h = SnapUp(max(tonumber(spot.h), bank + 30))
+				end
 				block.x, block.y, block.saved, block.rank = Snap(tonumber(spot.x)), SnapUp(tonumber(spot.y)), true, tonumber(spot.rank)
 			end
 		end
@@ -917,7 +921,11 @@ local function LayoutConsoleNow()
 			Deck.FreeMini(mini)
 		elseif mini.state == 'tucked' then
 			local w, h = Measure(mini.module)
-			local x = mini.key == 'stance' and left - 8 or consoleWidth - left + 8 - w
+			-- Where the editor slid it along the edge (edgeX), or over the first bank's end.
+			local spot = custom and custom[mini.key]
+			local edgeX = type(spot) == 'table' and tonumber(spot.edgeX)
+			local x = edgeX and Kit:Clamp(Snap(edgeX), 0, max(consoleWidth - w, 0))
+				or mini.key == 'stance' and left - 8 or consoleWidth - left + 8 - w
 			local y = 8 - h
 			-- Never over the other one: the pet keys go above the stance keys if they would meet.
 			if stanceRect and mini.count > 0 and x < stanceRect.x + stanceRect.w + 4 and stanceRect.x < x + w + 4 then

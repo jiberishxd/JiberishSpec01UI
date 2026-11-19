@@ -94,3 +94,69 @@ end
 -- Slider labels: a whole number, and a 0-1 fraction as a percentage.
 function Util.Int(value) return format('%d', floor(value + 0.5)) end
 function Util.Percent(value) return format('%d%%', floor(value * 100 + 0.5)) end
+
+-- Keys --------------------------------------------------------------------------------------
+
+-- Util.Keys(source, map, priority): while map is set, each key it names ('LEFT',
+-- 'SHIFT-LEFT', 'CTRL-Z', 'ESCAPE' …) runs its function, through override bindings.
+-- No frame takes the keyboard, so every other key (movement first of all) goes
+-- straight to the game. Util.Keys(source, nil) gives the keys back. When two sources
+-- name the same key, the higher priority runs. Bindings can't change in combat: they
+-- are let go as a fight starts (lockdown begins after PLAYER_REGEN_DISABLED) and
+-- taken again after it.
+do
+	local SetOverrideBindingClick, ClearOverrideBindings = SetOverrideBindingClick, ClearOverrideBindings
+	local InCombatLockdown = InCombatLockdown
+	local owner = CreateFrame('Frame')
+	local sources, buttons, count = {}, {}, 0
+
+	local function Run(key)
+		local best, run
+		for _, source in pairs(sources) do
+			local fn = source.map[key]
+			if fn and (not best or source.priority > best) then best, run = source.priority, fn end
+		end
+		if run then run(key) end
+	end
+
+	-- One named button per key, for the CLICK binding. A key press arrives as a
+	-- down and an up click (or only one, on some clients); it runs once.
+	local function Button(key)
+		if buttons[key] then return buttons[key] end
+		count = count + 1
+		local button = CreateFrame('Button', 'JiberishSpec01Key'..count, owner)
+		button:RegisterForClicks('AnyDown', 'AnyUp')
+		button:SetScript('OnClick', function(self, _, down)
+			if down == false and self.held then self.held = nil return end
+			self.held = down and true or nil
+			Run(key)
+		end)
+		buttons[key] = button
+		return button
+	end
+
+	local function Apply()
+		if InCombatLockdown() then return end
+		ClearOverrideBindings(owner)
+		local seen = {}
+		for _, source in pairs(sources) do
+			for key in pairs(source.map) do
+				if not seen[key] then
+					seen[key] = true
+					SetOverrideBindingClick(owner, true, key, Button(key):GetName(), 'LeftButton')
+				end
+			end
+		end
+	end
+
+	function Util.Keys(source, map, priority)
+		sources[source] = map and next(map) and {map = map, priority = priority or 0} or nil
+		Apply()
+	end
+
+	owner:RegisterEvent('PLAYER_REGEN_DISABLED')
+	owner:RegisterEvent('PLAYER_REGEN_ENABLED')
+	owner:SetScript('OnEvent', function(_, event)
+		if event == 'PLAYER_REGEN_DISABLED' then ClearOverrideBindings(owner) else Apply() end
+	end)
+end

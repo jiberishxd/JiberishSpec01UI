@@ -662,12 +662,10 @@ end
 
 -- Arrow keys nudge the selected frame a pixel (Shift: a grid step) in edit
 -- mode, or while the hub's Layout page asks for them (UI:SetMoverKeys('hub',
--- true)); in edit mode Escape leaves and Ctrl+Z undoes. Every other key goes
--- on to the game. The console editor, open in place, has the keyboard instead.
--- Never held in combat (EnableKeyboard and SetPropagateKeyboardInput are protected then).
+-- true)); in edit mode Escape leaves and Ctrl+Z undoes. They are override
+-- bindings (UI.Util.Keys), so no frame takes the keyboard and every other key
+-- goes straight to the game. The console editor, open in place, has the keys instead.
 local keySources = {}
-local keyboard = CreateFrame('Frame', nil, UIParent)
-keyboard:Hide()
 local ARROWS = {LEFT = {-1, 0}, RIGHT = {1, 0}, UP = {0, 1}, DOWN = {0, -1}}
 
 local function Editing() return unlocked and not consoleMode end
@@ -678,40 +676,31 @@ local function HubShown()
 	return hub and hub:IsShown() and true or false
 end
 
-local function UpdateKeyboard()
-	if InCombatLockdown() then return end
-	local wanted = Editing() or (selected ~= nil and next(keySources) ~= nil)
-	if wanted then
-		keyboard:Show()
-		keyboard:EnableKeyboard(true)
-		keyboard:SetPropagateKeyboardInput(true)
-	elseif keyboard:IsShown() then
-		keyboard:EnableKeyboard(false)
-		keyboard:Hide()
-	end
+local function Arrow(key)
+	local arrow = ARROWS[key:gsub('^SHIFT%-', '')]
+	if not (arrow and selected) or InCombatLockdown() then return end
+	local step = key:find('^SHIFT%-') and GridStep() or Px()
+	UI:NudgeMover(selected, arrow[1] * step, arrow[2] * step)
 end
 
-keyboard:SetScript('OnKeyDown', function(self, key)
-	if InCombatLockdown() then return end
-	if Editing() and key == 'ESCAPE' and not HubShown() then
-		self:SetPropagateKeyboardInput(false)
-		UI:EditMode(false)
-		return
+local function UpdateKeyboard()
+	local map
+	if Editing() or (selected ~= nil and next(keySources) ~= nil) then
+		map = {}
+		if selected ~= nil then
+			for key in pairs(ARROWS) do map[key], map['SHIFT-'..key] = Arrow, Arrow end
+		end
+		if Editing() then
+			map.ESCAPE = function()
+				if InCombatLockdown() then return end
+				if HubShown() then return UI:ToggleHub(nil, false) end
+				UI:EditMode(false)
+			end
+			map['CTRL-Z'] = function() if not InCombatLockdown() then UI:UndoMover() end end
+		end
 	end
-	if Editing() and key == 'Z' and IsControlKeyDown() then
-		self:SetPropagateKeyboardInput(false)
-		UI:UndoMover()
-		return
-	end
-	local arrow = ARROWS[key]
-	if not arrow or not selected then
-		self:SetPropagateKeyboardInput(true)
-		return
-	end
-	self:SetPropagateKeyboardInput(false)
-	local step = IsShiftKeyDown() and GridStep() or Px()
-	UI:NudgeMover(selected, arrow[1] * step, arrow[2] * step)
-end)
+	UI.Util.Keys('movers', map, 1)
+end
 
 function UI:SetMoverKeys(source, on)
 	keySources[source] = on and true or nil
@@ -1055,11 +1044,6 @@ local driver = CreateFrame('Frame')
 driver:RegisterEvent('PLAYER_REGEN_DISABLED')
 driver:RegisterEvent('PLAYER_REGEN_ENABLED')
 driver:SetScript('OnEvent', function(_, event)
-	if event == 'PLAYER_REGEN_ENABLED' then return UpdateKeyboard() end
-	-- Lockdown starts after this event, so the keyboard can still be let go here;
-	-- first, so nothing below can leave it holding keys through the fight.
-	keyboard:SetPropagateKeyboardInput(true)
-	keyboard:EnableKeyboard(false)
-	keyboard:Hide()
+	if event == 'PLAYER_REGEN_ENABLED' then return end
 	if unlocked then UI:Safe(UI.ToggleMovers, UI, true) end
 end)

@@ -1561,6 +1561,21 @@ do
 		end
 	end
 
+	-- The flight map (TaxiFrame): the window strip hid the map picture itself,
+	-- leaving the nodes on a blank housing. The map and the route canvas stay
+	-- as the game draws them, and the walk never enters the route canvas.
+	local function TaxiPack(frame)
+		for _, map in ipairs({_G.TaxiMap, frame.TaxiMap, frame.Map, frame.map}) do
+			if Is(map, 'Texture') then
+				map:SetAlpha(1)
+				Own(map)
+			end
+		end
+		for _, canvas in ipairs({_G.TaxiRouteMap, frame.TaxiRouteMap}) do
+			if type(canvas) == 'table' and not Forbidden(canvas) then skip[canvas] = true end
+		end
+	end
+
 	local function TalentPack(frame)
 		local talents = frame.TalentsFrame
 		if type(talents) == 'table' then
@@ -1638,7 +1653,7 @@ do
 		{'RaidParentFrame', 'RD-1'}, {'GameMenuFrame', 'SY-1', header = false, after = Extra('GameMenuFrame')},
 		{'SettingsPanel', 'ST-1', after = Extra('SettingsPanel')},
 		{'AddonList', 'AD-1'}, {'MacroFrame', 'MC-1'}, {'MacroPopupFrame', 'MC-2'}, {'ItemTextFrame', 'TX-1'},
-		{'TaxiFrame', 'TX-2'}, {'ClassTrainerFrame', 'TN-1'}, {'InspectFrame', 'IN-1'}, {'DressUpFrame', 'DR-1'},
+		{'TaxiFrame', 'TX-2', after = TaxiPack}, {'ClassTrainerFrame', 'TN-1'}, {'InspectFrame', 'IN-1'}, {'DressUpFrame', 'DR-1'},
 		{'TimeManagerFrame', 'TM-1'}, {'StopwatchFrame', 'TM-2', header = false, radius = 6}, {'CalendarFrame', 'CA-1'},
 		{'HelpFrame', 'HP-1'}, {'ChatConfigFrame', 'CC-1'}, {'QuickKeybindFrame', 'KB-2'},
 		{'EditModeManagerFrame', 'EM-1', after = Extra('EditModeManagerFrame')},

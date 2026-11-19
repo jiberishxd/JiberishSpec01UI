@@ -1632,38 +1632,10 @@ local function BuildTools(height)
 	PaintUndo()
 end
 
--- Ctrl+Z while the hub is up. Keys pass on to the game as usual; only Ctrl+Z is
--- kept. The keyboard is protected in combat: it is let go as a fight starts and
--- taken again after, and nothing here touches it during one.
+-- Ctrl+Z while the hub is up, as an override binding: no frame takes the
+-- keyboard, so every other key goes straight to the game.
 local function Keyboard(on)
-	if not hub or InCombatLockdown() then return end
-	hub:EnableKeyboard(on and true or false)
-	hub:SetPropagateKeyboardInput(true)
-end
-
-local keyWatch = CreateFrame('Frame')
-keyWatch:RegisterEvent('PLAYER_REGEN_DISABLED')
-keyWatch:RegisterEvent('PLAYER_REGEN_ENABLED')
-keyWatch:SetScript('OnEvent', function(_, event)
-	if not hub then return end
-	if event == 'PLAYER_REGEN_DISABLED' then
-		-- Lockdown starts after this event, so this is still allowed.
-		hub:SetPropagateKeyboardInput(true)
-		hub:EnableKeyboard(false)
-	elseif hub:IsShown() then
-		Keyboard(true)
-	end
-end)
-
-local function OnKeyDown(self, key)
-	if InCombatLockdown() then return end
-	local undo = key == 'Z' and IsControlKeyDown() and not IsAltKeyDown()
-	self:SetPropagateKeyboardInput(not undo)
-	if undo then UI:HubUndo() end
-end
-
-local function OnKeyUp(self)
-	if not InCombatLockdown() then self:SetPropagateKeyboardInput(true) end
+	UI.Util.Keys('hub', on and {['CTRL-Z'] = function() UI:HubUndo() end} or nil, 3)
 end
 
 local function Build()
@@ -1882,8 +1854,6 @@ local function Build()
 	BuildNav()
 
 	hub:SetScale(UI.db.scale or 1)
-	hub:SetScript('OnKeyDown', OnKeyDown)
-	hub:SetScript('OnKeyUp', OnKeyUp)
 	hub:SetScript('OnShow', function()
 		Keyboard(true)
 		UI:UpdateHub()

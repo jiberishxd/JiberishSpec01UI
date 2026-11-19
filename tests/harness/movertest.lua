@@ -45,7 +45,11 @@ local function R(kind)
 	end})
 end
 
-function CreateFrame() return R('Frame') end
+function CreateFrame(_, name) local f = R('Frame') if name then f.GetName = function() return name end end return f end
+-- Override bindings: the keys edit mode holds (key -> button name).
+local bound = {}
+function SetOverrideBindingClick(_, _, key, name) bound[key] = name end
+function ClearOverrideBindings() for key in pairs(bound) do bound[key] = nil end end
 UIParent = R('UIParent')
 UIParent.size = {W, H}
 UIParent.shown = true
@@ -131,6 +135,8 @@ check('settings key opens the page', opened == 'unitframes', tostring(opened))
 -- Edit mode on: handles, keyboard, strip.
 UI:EditMode(true)
 check('edit mode on', UI:MoversUnlocked() == true and UI:EditModeActive() == true)
+check('edit mode binds Escape and Ctrl+Z only', bound.ESCAPE ~= nil and bound['CTRL-Z'] ~= nil and bound.W == nil
+	and bound.LEFT == nil)
 check('handle shown', UI:MoverHandle('uf.player') and UI:MoverHandle('uf.player'):IsShown())
 UI:ToggleMovers(false) -- /spec unlock while on: no change
 check('unlock while on keeps edit mode', UI:MoversUnlocked() == true)
@@ -174,6 +180,7 @@ check('undocked frame gets its handle back', UI:MoverHandle('uf.target'):IsShown
 -- Leaving.
 UI:EditMode(false)
 check('edit mode off', UI:MoversUnlocked() == false and not UI:MoverHandle('uf.player'):IsShown())
+check('edit mode off gives the keys back', next(bound) == nil)
 UI:ToggleMovers() -- /spec move toggles
 check('/spec move toggles on', UI:MoversUnlocked() == true)
 UI:ToggleMovers(true)
