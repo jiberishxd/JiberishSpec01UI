@@ -105,6 +105,8 @@ UI:RegisterDefaults('actionbars', {
 	-- The console's look: SPEC-01 hardware (keys in slots, printed banks,
 	-- page LCD) or the earlier classic look.
 	look = 'hardware',
+	-- The stance keys folded away behind their latch (a click on it brings them back).
+	stanceFolded = false,
 	-- The console's size, apart from its keys: 0 is Auto (sized to its keys and
 	-- frames). keyGap 0 keeps each bar's own spacing; banks sit centred, at the
 	-- left, or spread across the width.

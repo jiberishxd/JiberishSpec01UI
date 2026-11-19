@@ -3,6 +3,14 @@
 What changed in each version of Jiberish SPEC-01 UI, newest first. The in-game
 **What's new** page (`/spec whatsnew`) shows the highlights, with a key to each page.
 
+## 0.6.2 (2026-11-18)
+
+### Console
+- **Stance key latch.** A slim latch key at the stance keys' left end folds them away behind
+  it with a click (latch-down sound) and brings them back (latch-up). Folded, only the latch
+  shows and the console gives back the room. Also `/spec stance`, and **Folded** on the Action
+  bars page. In combat the fold waits for the fight to end (the latch lamp shows amber).
+
 ## 0.6.1 (2026-11-18)
 
 ### Fixes

@@ -331,6 +331,8 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 	}},
 	{title = 'Stance keys', rows = {
 		{'switch', 'Stance keys', 'actionbars.stance', 'Stances and forms on the console\'s top edge.', reload = true},
+		{'switch', 'Folded', 'actionbars.stanceFolded', 'Folded behind the latch at their left end. Click the latch (or /spec stance) to fold or show them.',
+			set = function(value) UI:FoldStance(value) end, since = '0.6.2'},
 		{'slider', 'Key size', 'actionbars.barStance.keySize', 0, 40, 1, nil, format = Auto, reload = true},
 		{'slider', 'Spacing', 'actionbars.barStance.spacing', 0, 12, 1, nil, reload = true},
 		{'switch', 'Fade out of combat', 'actionbars.barStance.fade'},

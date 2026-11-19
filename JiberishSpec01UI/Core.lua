@@ -250,6 +250,8 @@ local COMMANDS = {
 		run = function() UI:ToggleHub('whatsnew', true) end},
 	{word = 'quick', text = 'Quick setup: layout, finish, key color, typeface, scale, fade, sounds and motion.', needs = 'ToggleHub',
 		run = function() UI:ToggleHub('quick', true) end},
+	{word = 'stance', text = 'Fold the stance keys away behind their latch, or bring them back.', needs = 'FoldStance',
+		run = function() UI:FoldStance() end},
 	{word = 'setup', aliases = {'install'}, text = 'Run the installer again, one part of the interface per step.', needs = 'OpenSetup',
 		run = function() UI:OpenSetup() end},
 	{word = 'edit', text = 'Edit mode: move and arrange every frame.', needs = {'EditMode', 'ToggleMovers'},

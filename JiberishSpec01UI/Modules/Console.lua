@@ -1157,6 +1157,8 @@ local function BuildPet()
 	if not Docking() then UI:RegisterMover(P.petModule, 'ab.pet', 'Pet keys', {'BOTTOM', 200, 150}) end
 end
 
+local LATCH_W = 12
+
 local function LayoutStance()
 	if not P.stanceModule then return end
 	if InCombatLockdown() then return UI:AfterCombat(LayoutStance, 'ab.stance') end
@@ -1171,12 +1173,48 @@ local function LayoutStance()
 	P.stanceModule.forms = forms
 end
 
+-- Fold the stance keys away behind their latch, or bring them back (nil: the
+-- other way). The keys are secure, so in combat the fold waits for the fight
+-- to end; the latch shows it amber until then.
+function UI:FoldStance(folded)
+	if folded == nil then folded = not DB().stanceFolded end
+	folded = folded and true or false
+	if DB().stanceFolded == folded and not InCombatLockdown() then return end
+	DB().stanceFolded = folded
+	Kit:Play(folded and 'latch-down' or 'latch-up')
+	local latch = P.stanceModule and P.stanceModule.latch
+	if InCombatLockdown() then
+		if latch then Kit:SetLed(latch.led, true, 'amber') end
+		return UI:AfterCombat(function() UI:FoldStance(DB().stanceFolded); LayoutStance(); if P.console then LayoutConsole() end end,
+			'ab.stancefold')
+	end
+	LayoutStance()
+	if P.console then LayoutConsole() end
+end
+function UI:StanceFolded() return DB().stanceFolded and true or false end
+
 local function BuildStance()
 	local size = BarSize('Stance', max(20, floor(KeySize() * 0.72)))
 	P.stanceModule = Device('JiberishSpec01StanceKeys', 'ST-1', '', {header = false, radius = 9, level = 4})
 	P.stanceModule.size, P.stanceModule.keySize, P.stanceModule.spacingId = size, size, 'Stance'
 	P.stanceModule:SetHeight(size + 16 + (HW.On() and HW.BANK_H or 0))
 	HW.MiniLegend(P.stanceModule, 'Stance')
+	-- The latch: a slim key at the left end. A click folds the keys away behind
+	-- it, with a latch sound; another brings them back (see Deck.LayoutMini).
+	local latch = Kit:Key(P.stanceModule, {width = LATCH_W, height = size, toggle = true, icon = 'chevron-left', iconSize = 8,
+		sound = false})
+	latch.led:ClearAllPoints()
+	latch.led:SetPoint('TOP', 0, -3)
+	latch.onClick = function() UI:FoldStance() end
+	latch:HookScript('OnEnter', function(self)
+		GameTooltip:SetOwner(self, 'ANCHOR_TOP')
+		GameTooltip:AddLine(DB().stanceFolded and 'Show stance keys' or 'Fold stance keys', 1, 1, 1)
+		GameTooltip:AddLine('Click to fold the stance keys away behind this latch, or bring them back. /spec stance does the same.',
+			0.85, 0.85, 0.82, true)
+		GameTooltip:Show()
+	end)
+	latch:HookScript('OnLeave', function() GameTooltip:Hide() end)
+	P.stanceModule.latch = latch
 	for index = 1, (NUM_STANCE_SLOTS or 10) do
 		local button = CreateFrame('CheckButton', 'JiberishSpec01StanceKey'..index, P.stanceModule, 'StanceButtonTemplate')
 		button:SetID(index)
@@ -1201,13 +1239,27 @@ function Deck.LayoutMini(module, keys, count, columns)
 	local keysW, keysH = across * size + (across - 1) * spacing, lines * size + (lines - 1) * spacing
 	local height = keysH + 16 + (HW.On() and HW.BANK_H or 0)
 	local top = (height - keysH) / 2 - ((Docking() and 4 or 0) - (HW.On() and HW.BANK_H / 2 or 0))
-	module:SetSize(PAD * 2 + keysW, height)
+	-- A latch (the stance keys') sits at the left end; folded, only it shows.
+	local latch = module.latch
+	local folded = latch and DB().stanceFolded and true or false
+	local lead = latch and LATCH_W + spacing or 0
+	module:SetSize(PAD * 2 + (folded and LATCH_W or lead + keysW), height)
+	if latch then
+		latch:ClearAllPoints()
+		latch:SetSize(LATCH_W, keysH)
+		latch:SetPoint('TOPLEFT', module, 'TOPLEFT', PAD, -top)
+		latch:SetChecked(folded)
+		Kit:SetIcon(latch.icon, folded and 'chevron-right' or 'chevron-left')
+		Kit:SetLed(latch.led, folded, folded and 'lamp' or nil)
+		latch:Show()
+	end
 	for index = 1, count do
 		local button = keys[index]
 		if button then
 			local line, place = floor((index - 1) / across), (index - 1) % across
 			button:ClearAllPoints()
-			button:SetPoint('TOPLEFT', module, 'TOPLEFT', PAD + place * (size + spacing), -(top + line * (size + spacing)))
+			button:SetPoint('TOPLEFT', module, 'TOPLEFT', PAD + lead + place * (size + spacing), -(top + line * (size + spacing)))
+			if latch then button:SetShown(not folded) end
 		end
 	end
 end
