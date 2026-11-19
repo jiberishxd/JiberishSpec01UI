@@ -126,6 +126,7 @@ loader:SetScript('OnEvent', function(_, event, name)
 				-- The arrangement a new install starts with (UI.DEFAULT_LAYOUT), solved after login.
 				if type(db.layout) == 'table' and UI.DEFAULT_LAYOUT then db.layout.preset = UI.DEFAULT_LAYOUT end
 				UI.applyDefaultLayout = type(db.layout) == 'table' and db.layout.preset or nil
+				UI.applyDefaultEditMode = UI.DEFAULT_EDITMODE and true or nil
 			end
 		end
 		local wanted = Wanted(store)
@@ -139,6 +140,13 @@ loader:SetScript('OnEvent', function(_, event, name)
 		end
 	elseif event == 'PLAYER_LOGIN' then
 		-- The default profile's layout, solved for this screen once frames exist.
+		-- A new install also takes the matching Blizzard Edit Mode layout (quietly).
+		if UI.applyDefaultEditMode and UI.ApplyDefaultEditMode then
+			UI.applyDefaultEditMode = nil
+			C_Timer.After(3, function()
+				UI:AfterCombat(function() UI:Safe(UI.ApplyDefaultEditMode, UI, true) end, 'defaultEditMode')
+			end)
+		end
 		local preset = UI.applyDefaultLayout
 		if preset and UI.ApplyLayoutPreset then
 			UI.applyDefaultLayout = nil
@@ -546,6 +554,8 @@ UI:RegisterPage('profiles', {title = 'Profiles', order = 4, since = '0.5.0', car
 		{'input', 'Rename', nil, get = function() return UI:ActiveProfile() end, set = function(profile) UI:RenameProfile(profile) end,
 			'A new name for the profile in use.'},
 		{'button', 'Reset', 'Reset', function() UI:ResetProfile() end, 'Every setting in this profile back to its default.'},
+		{'button', 'Blizzard Edit Mode', 'Apply', function() UI:ApplyDefaultEditMode() end, since = '0.6.5',
+			note = 'Import the Jiberish SPEC-01 layout into Blizzard\'s Edit Mode (the frames this addon leaves to the game) and make it active. Also /spec editmode.'},
 	}},
 	{title = 'More profiles', rows = {
 		{'input', 'New profile', nil, get = function() return '' end, set = function(profile) UI:NewProfile(profile, true) end,

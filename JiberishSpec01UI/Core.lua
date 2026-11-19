@@ -273,6 +273,8 @@ local COMMANDS = {
 			if word == 'unlock' then UI:ToggleMovers(false) else UI:ToggleMovers() end
 		end},
 	{word = 'lock', text = 'Leave edit mode and lock the frames.', needs = 'ToggleMovers', run = function() UI:ToggleMovers(true) end},
+	{word = 'editmode', text = 'Import the Jiberish SPEC-01 layout into Blizzard\'s Edit Mode and make it active.',
+		needs = 'ApplyDefaultEditMode', run = function() UI:ApplyDefaultEditMode() end},
 	{word = 'reset', text = 'Put every frame back in its default spot.', needs = 'ResetMovers', run = function() UI:ResetMovers() end},
 	{word = 'console', text = 'Edit the console: drag its banks, keys and bays.', needs = 'EditConsole', run = function() UI:EditConsole() end},
 	{word = 'drawer', text = 'Open or close the drawer of gadgets.', needs = 'ToggleDrawer', run = function() UI:ToggleDrawer() end},

@@ -107,6 +107,8 @@ UI:RegisterDefaults('actionbars', {
 	look = 'hardware',
 	-- The stance keys folded away behind their latch (a click on it brings them back).
 	stanceFolded = false,
+	-- The menu keys and function keys set into the console: just their icons on the housing (no keycaps).
+	consoleBare = true,
 	-- The console's size, apart from its keys: 0 is Auto (sized to its keys and
 	-- frames). keyGap 0 keeps each bar's own spacing; banks sit centred, at the
 	-- left, or spread across the width.

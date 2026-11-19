@@ -98,6 +98,11 @@ local function PaintMenuButton(button)
 	local name = button:GetName()
 	local glyphs = GlyphsOn()
 	local isBag = BAG_ID[name] ~= nil or name == 'KeyRingButton'
+	-- Set into the console, a key can be just its icon on the housing (no keycap or slot).
+	local strip = P.console and P.console.menuStrip
+	local bare = glyphs and strip ~= nil and button:GetParent() == strip and DB().consoleBare ~= false
+	key.skin:SetShown(not bare)
+	if key.slotRing then HW.ShowSlot(key.slotRing, not bare) end
 	local showGlyph = glyphs
 	if isBag then
 		local icon = BagIcon(button)
@@ -116,11 +121,13 @@ local function PaintMenuButton(button)
 	key.glyph:SetShown(showGlyph)
 	if showGlyph then
 		local share = tonumber(DB()[isBag and 'bagsGlyph' or 'menuGlyph']) or (isBag and 0.6 or 0.68)
+		if bare then share = max(share, 0.84) end
 		local size = floor(min(button:GetWidth(), button:GetHeight()) * share + 0.5)
 		key.glyph:SetSize(size, size)
 		local enabled = not button.IsEnabled or button:IsEnabled()
 		local hovered = button.IsMouseOver and button:IsMouseOver()
-		Kit:Tint(key.glyph, LightCap() and 'ink' or 'darkInk', not enabled and 0.3 or ((hovered and 1) or 0.82))
+		local ink = bare and (P.Surface() == 'dark' and 'darkInk' or 'ink') or (LightCap() and 'ink' or 'darkInk')
+		Kit:Tint(key.glyph, ink, not enabled and 0.3 or ((hovered and 1) or (bare and 0.72 or 0.82)))
 	end
 	-- The lamp: amber and breathing on an alert, lit while the window is open.
 	local alert = alerting[button]

@@ -899,6 +899,9 @@ function Deck.ConfigureFn()
 		local button = key.button
 		for _, attribute in ipairs({'type', 'macrotext', 'item', 'clickbutton', 'macro'}) do button:SetAttribute(attribute, nil) end
 		key.def, key.secure = def, nil
+		-- Just the icon on the console's housing, or the icon on a keycap.
+		local bare = db.consoleBare ~= false
+		key.skin:SetShown(not bare)
 		if def then
 			if def.secure then
 				for attribute, value in pairs(def.secure) do button:SetAttribute(attribute, value) end
@@ -913,8 +916,9 @@ function Deck.ConfigureFn()
 			local index0 = Deck.MENU_INDEX and Deck.MENU_INDEX[def.glyph] or 0
 			local column, row = index0 % 8, floor(index0 / 8)
 			key.glyph:SetTexCoord(column / 8, (column + 1) / 8, row / 4, (row + 1) / 4)
-			key.glyph:SetSize(floor(size * 0.62 + 0.5), floor(size * 0.62 + 0.5))
-			Kit:Tint(key.glyph, LightCap() and 'ink' or 'darkInk', 0.85)
+			local glyphSize = floor(size * (bare and 0.86 or 0.62) + 0.5)
+			key.glyph:SetSize(glyphSize, glyphSize)
+			Kit:Tint(key.glyph, bare and (Surface() == 'dark' and 'darkInk' or 'ink') or (LightCap() and 'ink' or 'darkInk'), bare and 0.78 or 0.85)
 			local legend = def.legend
 			if def.macro and strtrim(db.fnMacro or '') ~= '' then legend = strsub(strtrim(db.fnMacro), 1, 6) end
 			key.legend:SetText(strupper(legend))

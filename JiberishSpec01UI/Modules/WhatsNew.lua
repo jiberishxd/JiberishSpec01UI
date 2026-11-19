@@ -15,6 +15,16 @@ local floor, max = math.floor, math.max
 -- Releases, newest first. Each highlight: area (the card's printed title), title,
 -- text (one line or two), page (the hub page Open goes to) or command (a /spec word).
 local RELEASES = {
+	{version = '0.6.5', date = '2026-11-18',
+		summary = 'A new standard profile with its Blizzard Edit Mode layout, icon-only keys in the console, and a horse for the mount key.',
+		entries = {
+			{area = 'Profiles', title = 'New standard profile', page = 'profiles',
+				text = 'New installs start from Jiberish\'s current setup, with the matching Blizzard Edit Mode layout (Apply on the Profiles page, or /spec editmode).'},
+			{area = 'Console', title = 'Icons only in the console', page = 'actionbars',
+				text = 'The menu and function keys set into the console are just their icons on the housing, with no keycaps.'},
+			{area = 'Console', title = 'A horse for Mount', page = 'actionbars',
+				text = 'The mount key\'s glyph is a horse\'s head.'},
+		}},
 	{version = '0.6.4', date = '2026-11-18',
 		summary = 'A frameless overlay map that reads as a projection over the world, and the game\'s own icons on the compass and map.',
 		entries = {

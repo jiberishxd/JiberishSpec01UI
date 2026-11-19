@@ -255,6 +255,8 @@ UI:RegisterPage('actionbars', {title = 'Action bars', order = 11, cards = {
 		{'note', 'Rates count from when you logged in. Time played is asked of the game once, quietly. Kills are counted from the XP messages, not read.'},
 	}},
 	{title = 'Function keys', rows = {
+		{'switch', 'Icons only', 'actionbars.consoleBare', 'The menu keys and function keys set into the console drop their keycaps: just their icons, printed on the housing.',
+			set = function(value) P.DB().consoleBare = value and true or false; P.Deck.ConfigureFn(); P.Deck.LayoutMenu() end, since = '0.6.5'},
 		{'switch', 'Function keys', 'actionbars.fnKeys', 'Small keys at the top of the console\'s side columns: mount, hearthstone, map and more.', since = '0.5.1'},
 		{'slider', 'Key size', 'actionbars.fnSize', 18, 32, 1, nil, since = '0.5.1'},
 		{'dropdown', 'Left 1', 'actionbars.fn1', items = Deck.FN_ITEMS, since = '0.5.1'},

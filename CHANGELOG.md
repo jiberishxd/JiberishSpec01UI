@@ -3,6 +3,23 @@
 What changed in each version of Jiberish SPEC-01 UI, newest first. The in-game
 **What's new** page (`/spec whatsnew`) shows the highlights, with a key to each page.
 
+## 0.6.5 (2026-11-18)
+
+### Profiles
+- **New standard profile.** New installs start from Jiberish's current setup (Graphite,
+  Audiowide, the green key color, the main layout at UI scale 0.64, the frameless map and
+  game icons, folded stance keys).
+- **Blizzard Edit Mode layout.** The matching Edit Mode layout ships with it and is imported as
+  **Jiberish SPEC-01** and made active on a new install. Existing installs can apply it with
+  **Blizzard Edit Mode → Apply** on the Profiles page or `/spec editmode` (a reload follows).
+  It was exported on Forever; a client that can't read it is left as it is.
+
+### Console
+- **Icons only.** The menu keys and function keys set into the console drop their keycaps and
+  slots: just their icons, printed on the housing. **Icons only** on the Action bars page brings
+  the keycaps back.
+- The **Mount** function key's glyph is now a horse's head.
+
 ## 0.6.4 (2026-11-18)
 
 ### Navigation
