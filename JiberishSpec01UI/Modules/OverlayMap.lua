@@ -30,12 +30,13 @@ local module = UI:RegisterModule('overlaymap', {always = true})
 -- defaults:begin
 UI:RegisterDefaults('overlaymap', {
 	enable = true, shown = false, -- shown: toggled on (saved)
-	shape = 'square', -- 'square' | 'round'
+	shape = 'round', -- 'square' | 'round'
 	size = 300, radius = 250, -- UI units; yards from you to the edge
-	opacity = 0.6, backdrop = 0.3, fade = true,
-	housing = 'bezel', -- 'bezel' | 'hairline' | 'none'
+	opacity = 0.55, backdrop = 0, fade = true,
+	housing = 'none', -- 'bezel' | 'hairline' | 'none'
+	tone = 'mono', -- 'color' (the map's own colors) | 'mono' (muted and cool, so it reads as a hologram over the world)
 	rotate = false,
-	pois = true, keySize = 14, group = true, arrowSize = 16, scaleChip = true, hideInCombat = false,
+	pois = true, keySize = 16, group = true, arrowSize = 16, scaleChip = false, hideInCombat = false,
 })
 -- defaults:end
 
@@ -144,6 +145,14 @@ local function Build()
 	Kit:SetLed(holder.signal.led, true, 'red')
 	holder.signal.led:SetPoint('RIGHT', holder.signal.text, 'LEFT', -4, 0)
 	holder.signal:Hide()
+end
+
+-- The map's tone: its own colors, or muted (no color, a cool light) so it reads
+-- as a projection over the world rather than a picture on it.
+local function Tone(tile)
+	local mono = m.mono
+	tile:SetDesaturated(mono and true or false)
+	if mono then tile:SetVertexColor(0.82, 0.9, 1) else tile:SetVertexColor(1, 1, 1) end
 end
 
 -- Layout --------------------------------------------------------------------------------------
@@ -259,7 +268,8 @@ local function Layout()
 	local opacity = Clamp(db.opacity, 0.1, 1, 0.6)
 	if db.fade and not round then opacity = min(1, opacity / SHADOW_PEAK) end
 	m.opacity = opacity
-	for _, tile in pairs(tiles) do ApplyMasks(tile); tile:SetAlpha(opacity) end
+	m.mono = db.tone == 'mono'
+	for _, tile in pairs(tiles) do ApplyMasks(tile); tile:SetAlpha(opacity); Tone(tile) end
 	for _, tile in ipairs(spare) do ApplyMasks(tile) end
 	-- Your arrow, the north mark and the scale chip.
 	m.arrow = Clamp(db.arrowSize, 10, 28, 16)
@@ -328,6 +338,7 @@ local function Tile(index)
 	tile:SetTexture(file, nil, nil, 'TRILINEAR')
 	tile:SetSize(m.grid.tw, m.grid.th)
 	tile:SetAlpha(m.opacity)
+	Tone(tile)
 	tile:SetRotation(0)
 	tile:Show()
 	tiles[index] = tile

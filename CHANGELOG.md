@@ -3,6 +3,19 @@
 What changed in each version of Jiberish SPEC-01 UI, newest first. The in-game
 **What's new** page (`/spec whatsnew`) shows the highlights, with a key to each page.
 
+## 0.6.4 (2026-11-18)
+
+### Navigation
+- **Frameless overlay map.** The NV-4 map now has no frame, glass or scale chip by default:
+  a round map with a soft edge over the world. A new **Tone** setting draws it **Muted** (no
+  color, a cool light, so it reads as a projection) or in the **map colors**. Frame, shape,
+  glass and the scale chip are still options on the Navigation page.
+- **Game icons** are now the default on the compass tape and the map, drawn bare (no keycap
+  or lamp, a soft shade behind for contrast): ! and ? for quests, and the game's mailbox,
+  repair, banker, auctioneer, innkeeper, flight master, stable and trainer icons. Points the
+  game has no icon for keep their SPEC-01 keycap. The printed glyphs are still an option.
+- Existing profiles switch to the new map look and game icons once.
+
 ## 0.6.3 (2026-11-18)
 
 ### Console

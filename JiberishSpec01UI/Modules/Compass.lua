@@ -34,7 +34,7 @@ UI:RegisterDefaults('compass', {
 	location = true, coords = true, heading = true,
 	motion = true, speedUnit = 'yards', -- 'yards' | 'percent'
 	pois = true, range = 400, maxPois = 8, keySize = 16, distances = true, pinTarget = true,
-	icons = 'glyph', -- 'glyph' | 'game'
+	icons = 'game', -- 'game' (the game's icons, bare) | 'glyph' (SPEC-01 keycaps)
 	nearest = 'alt', -- 'alt' | 'shift' | 'ctrl' | 'always' | 'off': the nearest repair, inn and mailbox
 })
 -- defaults:end

@@ -176,6 +176,16 @@ function UI:Migrate(db)
 		if db.actionbars.bagIcons == 'items' then db.actionbars.bagIcons = 'glyphs' end
 		db.actionbars.bagGlyphsMoved = true
 	end
+	-- 0.6.4: the overlay map goes frameless (round, soft edge, no glass or scale chip) and
+	-- the compass and map use the game's icons, once.
+	if type(db.overlaymap) == 'table' and not db.overlaymap.lookMoved then
+		local map = db.overlaymap
+		map.housing, map.shape, map.backdrop, map.scaleChip = 'none', 'round', 0, false
+		map.lookMoved = true
+	end
+	if type(db.compass) == 'table' and not db.compass.iconsMoved then
+		db.compass.icons, db.compass.iconsMoved = 'game', true
+	end
 	-- 0.5.1: the chat housing switch became a choice of housings.
 	if type(db.chat) == 'table' then
 		if db.chat.housing == true then db.chat.housing = 'device'

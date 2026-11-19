@@ -362,33 +362,34 @@ end
 Nav.ICON_FILE = Kit.media..'icons-nav.tga'
 
 -- kind -> how it is drawn: its glyph (and a letter where the atlas has none),
--- a lamp color, the game's own atlas for the "game icons" look, a rank (lower
+-- a lamp color, the game's own art for the "game icons" look (an atlas, else a
+-- file every client has: the minimap tracking and gossip icons), a rank (lower
 -- wins a place on a crowded tape), and the setting that shows a service.
 local KINDS = {
 	waypoint = {icon = 'waypoint', glyph = '+', token = 'lamp', rank = 1, atlas = 'Waypoint-MapPin-Tracked'},
-	turnin = {icon = 'turnin', glyph = '?', token = 'amber', rank = 2, atlas = 'QuestTurnin'},
-	quest = {icon = 'quest', glyph = 'Q', token = 'amber', rank = 3, atlas = 'QuestNormal'},
+	turnin = {icon = 'turnin', glyph = '?', token = 'amber', rank = 2, atlas = 'QuestTurnin', file = 'Interface\\GossipFrame\\ActiveQuestIcon'},
+	quest = {icon = 'quest', glyph = 'Q', token = 'amber', rank = 3, atlas = 'QuestNormal', file = 'Interface\\GossipFrame\\AvailableQuestIcon'},
 	world = {icon = 'world', glyph = 'W', token = 'blue', rank = 4, atlas = 'worldquest-icon'},
-	giver = {icon = 'giver', glyph = '!', token = 'amber', rank = 5, atlas = 'QuestNormal'},
-	rare = {icon = 'rare', glyph = '*', token = 'red', rank = 6},
-	treasure = {icon = 'treasure', glyph = 'T', token = 'amber', rank = 7},
-	event = {icon = 'event', glyph = 'E', token = 'blue', rank = 7},
-	dungeon = {icon = 'dungeon', glyph = 'D', token = 'red', rank = 8},
-	taxi = {icon = 'taxi', glyph = 'F', token = 'green', rank = 9, atlas = 'TaxiNode_Neutral'},
-	portal = {icon = 'portal', glyph = 'P', token = 'green', rank = 9},
-	inn = {icon = 'inn', glyph = 'I', token = 'ink', rank = 10, setting = 'svcInn'},
-	bank = {icon = 'bank', glyph = 'B', token = 'ink', rank = 10, setting = 'svcBank'},
-	guildbank = {icon = 'guildbank', glyph = 'G', token = 'ink', rank = 11, setting = 'svcBank'},
-	mail = {icon = 'mail', glyph = 'M', token = 'ink', rank = 10, setting = 'svcMail'},
-	repair = {icon = 'repair', glyph = 'R', token = 'ink', rank = 10, setting = 'svcRepair'},
-	auction = {icon = 'auction', glyph = 'A', token = 'ink', rank = 10, setting = 'svcAuction'},
-	vendor = {icon = 'vendor', glyph = 'V', token = 'ink', rank = 11, setting = 'svcVendor'},
-	trainer = {icon = 'trainer', glyph = 'TR', token = 'ink', rank = 11, setting = 'svcTrainer'},
-	profession = {icon = 'profession', glyph = 'PR', token = 'ink', rank = 11, setting = 'svcTrainer'},
-	stable = {icon = 'stable', glyph = 'S', token = 'ink', rank = 11, setting = 'svcStable'},
-	transmog = {icon = 'transmog', glyph = 'X', token = 'ink', rank = 11, setting = 'svcTransmog'},
-	barber = {icon = 'barber', glyph = 'BB', token = 'ink', rank = 11, setting = 'svcBarber'},
-	poi = {icon = 'poi', glyph = 'i', token = 'dim', rank = 12},
+	giver = {icon = 'giver', glyph = '!', token = 'amber', rank = 5, atlas = 'QuestNormal', file = 'Interface\\GossipFrame\\AvailableQuestIcon'},
+	rare = {icon = 'rare', glyph = '*', token = 'red', rank = 6, atlas = 'VignetteKill'},
+	treasure = {icon = 'treasure', glyph = 'T', token = 'amber', rank = 7, atlas = 'VignetteLoot'},
+	event = {icon = 'event', glyph = 'E', token = 'blue', rank = 7, atlas = 'VignetteEvent'},
+	dungeon = {icon = 'dungeon', glyph = 'D', token = 'red', rank = 8, atlas = 'Dungeon'},
+	taxi = {icon = 'taxi', glyph = 'F', token = 'green', rank = 9, atlas = 'TaxiNode_Neutral', file = 'Interface\\Minimap\\Tracking\\FlightMaster'},
+	portal = {icon = 'portal', glyph = 'P', token = 'green', rank = 9, atlas = 'MagePortalAlliance'},
+	inn = {icon = 'inn', glyph = 'I', token = 'ink', rank = 10, setting = 'svcInn', file = 'Interface\\Minimap\\Tracking\\Innkeeper'},
+	bank = {icon = 'bank', glyph = 'B', token = 'ink', rank = 10, setting = 'svcBank', file = 'Interface\\Minimap\\Tracking\\Banker'},
+	guildbank = {icon = 'guildbank', glyph = 'G', token = 'ink', rank = 11, setting = 'svcBank', file = 'Interface\\Minimap\\Tracking\\Banker'},
+	mail = {icon = 'mail', glyph = 'M', token = 'ink', rank = 10, setting = 'svcMail', file = 'Interface\\Minimap\\Tracking\\Mailbox'},
+	repair = {icon = 'repair', glyph = 'R', token = 'ink', rank = 10, setting = 'svcRepair', file = 'Interface\\Minimap\\Tracking\\Repair'},
+	auction = {icon = 'auction', glyph = 'A', token = 'ink', rank = 10, setting = 'svcAuction', file = 'Interface\\Minimap\\Tracking\\Auctioneer'},
+	vendor = {icon = 'vendor', glyph = 'V', token = 'ink', rank = 11, setting = 'svcVendor', file = 'Interface\\Minimap\\Tracking\\Food'},
+	trainer = {icon = 'trainer', glyph = 'TR', token = 'ink', rank = 11, setting = 'svcTrainer', file = 'Interface\\Minimap\\Tracking\\Class'},
+	profession = {icon = 'profession', glyph = 'PR', token = 'ink', rank = 11, setting = 'svcTrainer', file = 'Interface\\Minimap\\Tracking\\Profession'},
+	stable = {icon = 'stable', glyph = 'S', token = 'ink', rank = 11, setting = 'svcStable', file = 'Interface\\Minimap\\Tracking\\StableMaster'},
+	transmog = {icon = 'transmog', glyph = 'X', token = 'ink', rank = 11, setting = 'svcTransmog', atlas = 'poi-transmogrifier'},
+	barber = {icon = 'barber', glyph = 'BB', token = 'ink', rank = 11, setting = 'svcBarber', atlas = 'Barbershop-32x32'},
+	poi = {icon = 'poi', glyph = 'i', token = 'dim', rank = 12, atlas = 'PlayerPartyBlip'},
 	link = {icon = 'link', glyph = '>', token = 'dim', rank = 13},
 }
 Nav.KINDS = KINDS
@@ -971,29 +972,64 @@ function Nav:MakeKey(parent)
 	return key
 end
 
--- Dress a key for a point. size: its side in UI units; art: use the game's icon.
+-- The game's own picture for a point: the map's atlas, the kind's atlas, or the
+-- kind's file. An atlas the client doesn't have is skipped.
+local function HasAtlas(atlas)
+	if not atlas then return false end
+	if C_Texture and C_Texture.GetAtlasInfo then return C_Texture.GetAtlasInfo(atlas) ~= nil end
+	return true
+end
+local function GameArt(poi, kind)
+	if HasAtlas(poi.atlas) then return 'atlas', poi.atlas end
+	if HasAtlas(kind.atlas) then return 'atlas', kind.atlas end
+	if kind.file then return 'file', kind.file end
+end
+
+-- Dress a key for a point. size: its side in UI units; art: the game's icons,
+-- drawn bare over the world (no keycap or lamp, a soft shade behind for
+-- contrast); a point with no game icon keeps its printed keycap.
 function Nav:DressKey(key, poi, size, art)
 	local kind = KINDS[poi.kind] or KINDS.poi
 	key:SetSize(size, size)
-	local atlas = art and (poi.atlas or kind.atlas)
-	local shown = false
-	if atlas and key.atlas ~= atlas then
-		key.atlas = atlas
-		key.hasArt = pcall(key.art.SetAtlas, key.art, atlas) and true or false
+	local how, value
+	if art then how, value = GameArt(poi, kind) end
+	local bare = how ~= nil
+	if bare and key.artValue ~= value then
+		key.artValue = value
+		key.art:SetTexCoord(0, 1, 0, 1)
+		if how == 'atlas' then key.hasArt = pcall(key.art.SetAtlas, key.art, value) and true or false
+		else key.hasArt = pcall(key.art.SetTexture, key.art, value) and true or false end
 	end
-	if atlas then shown = key.hasArt end
-	key.art:SetShown(shown and true or false)
+	bare = bare and key.hasArt and true or false
+	key.face.shell:SetShown(not bare)
+	key.art:ClearAllPoints()
+	if bare then
+		local outset = floor(size * 0.12 + 0.5)
+		key.art:SetPoint('TOPLEFT', -outset, outset)
+		key.art:SetPoint('BOTTOMRIGHT', outset, -outset)
+	else
+		key.art:SetPoint('TOPLEFT', 2, -2)
+		key.art:SetPoint('BOTTOMRIGHT', -2, 2)
+	end
+	key.art:SetShown(bare)
+	if not key.shade then
+		key.shade = Kit:Texture(key, 'glow', 'BACKGROUND', -3)
+		key.shade:SetPoint('TOPLEFT', -4, 4)
+		key.shade:SetPoint('BOTTOMRIGHT', 4, -4)
+		key.shade:SetVertexColor(0, 0, 0)
+	end
+	key.shade:SetAlpha(bare and 0.55 or 0)
 	local l, r, t, b
-	if not shown and kind.icon then l, r, t, b = Nav.IconCoords(kind.icon) end
+	if not bare and kind.icon then l, r, t, b = Nav.IconCoords(kind.icon) end
 	key.icon:SetShown(l ~= nil)
-	key.glyph:SetShown(not shown and l == nil)
+	key.glyph:SetShown(not bare and l == nil)
 	local ink = kind.token == 'dim' and 'dim' or 'ink'
 	if l then
 		local side = floor(size * 0.72 + 0.5)
 		key.icon:SetSize(side, side)
 		key.icon:SetTexCoord(l, r, t, b)
 		Kit:Tint(key.icon, ink)
-	elseif not shown then
+	elseif not bare then
 		key.glyph:SetText(kind.glyph)
 		Kit:Font(key.glyph, max(6, floor(size * (#kind.glyph > 1 and 0.4 or 0.52))), nil, true)
 		Kit:Tint(key.glyph, ink)
@@ -1002,7 +1038,9 @@ function Nav:DressKey(key, poi, size, art)
 	local token = kind.token ~= 'ink' and kind.token ~= 'dim' and kind.token or nil
 	if poi.approx then token = 'dim' end
 	Kit:SetLed(key.lamp, true, token or 'ledOff')
-	key.lamp:SetShown(token ~= nil)
+	key.lamp:SetShown(token ~= nil and not bare)
+	-- Bare, a point known only roughly is drawn fainter.
+	key.art:SetAlpha(bare and poi.approx and 0.6 or 1)
 	if poi.super then
 		Kit:Tint(key.glow, 'lamp')
 		key.glow:SetAlpha(0.55)
@@ -1123,8 +1161,8 @@ UI:RegisterPage('navigation', {title = 'Navigation', order = 12.2, since = '0.5.
 		{'slider', 'Key size', 'compass.keySize', 12, 24, 1, nil, format = Int, disabled = NoPois, since = '0.5.2'},
 		{'switch', 'Distances', 'compass.distances', 'Yards on a small LCD chip under each key (~ marks a spot learned from a nearby title: within ten yards).', disabled = NoPois, since = '0.5.2'},
 		{'switch', 'Pin your target', 'compass.pinTarget', 'Your super-tracked quest or waypoint waits at the tape\'s end when it is behind you.', disabled = NoPois, since = '0.5.2'},
-		{'segmented', 'Icons', 'compass.icons', items = {{'glyph', 'SPEC-01'}, {'game', 'Game icons'}}, disabled = NoPois, since = '0.5.2',
-			note = 'SPEC-01: printed glyphs (a flag for a quest, ? to turn in, ! a quest giver, wings for flight, a hammer for repairs, a bed for the inn). Game icons: the map\'s own art.'},
+		{'segmented', 'Icons', 'compass.icons', items = {{'game', 'Game icons'}, {'glyph', 'SPEC-01'}}, disabled = NoPois, since = '0.6.4',
+			note = 'Game icons: the game\'s own art, drawn bare over the world (! and ? for quests, the mailbox, anvil, coins, bed, flight master). SPEC-01: printed glyphs on small keycaps. Both the compass and the map use this.'},
 	}},
 	{title = 'NV-4 overlay map', rows = {
 		{'switch', 'Overlay map', 'overlaymap.enable', 'A see-through map of the ground around you, like an action game\'s overlay. Show and hide it with /spec map, a key binding (Key Bindings, AddOns) or the key below.', since = '0.5.2'},
@@ -1135,6 +1173,8 @@ UI:RegisterPage('navigation', {title = 'Navigation', order = 12.2, since = '0.5.
 		{'slider', 'Map opacity', 'overlaymap.opacity', 0.1, 1, 0.05, nil, format = Pct, disabled = MapOff, since = '0.5.2'},
 		{'slider', 'Glass', 'overlaymap.backdrop', 0, 0.9, 0.05, 'Dark glass behind the map, so it reads over bright ground.', format = Pct, disabled = MapOff, since = '0.5.2'},
 		{'switch', 'Fade the edge', 'overlaymap.fade', nil, disabled = MapOff, since = '0.5.2'},
+		{'segmented', 'Tone', 'overlaymap.tone', items = {{'mono', 'Muted'}, {'color', 'Map colors'}}, disabled = MapOff, since = '0.6.4',
+			note = 'Muted: no color and a cool light, so the map reads as a projection over the world. Map colors: the map as the game draws it.'},
 		{'segmented', 'Frame', 'overlaymap.housing', items = {{'bezel', 'Bezel'}, {'hairline', 'Hairline'}, {'none', 'None'}},
 			disabled = MapOff, since = '0.5.2'},
 		{'switch', 'Turn with you', 'overlaymap.rotate', 'The map turns so the way you face is up; a lit N rides the edge. Off: north is always up and the arrow turns.', disabled = MapOff, since = '0.5.2'},

@@ -15,6 +15,14 @@ local floor, max = math.floor, math.max
 -- Releases, newest first. Each highlight: area (the card's printed title), title,
 -- text (one line or two), page (the hub page Open goes to) or command (a /spec word).
 local RELEASES = {
+	{version = '0.6.4', date = '2026-11-18',
+		summary = 'A frameless overlay map that reads as a projection over the world, and the game\'s own icons on the compass and map.',
+		entries = {
+			{area = 'Navigation', title = 'Frameless overlay map', page = 'navigation',
+				text = 'No frame, glass or scale chip: a round map with a soft edge, muted so it reads over the world (/spec map).'},
+			{area = 'Navigation', title = 'Game icons on the compass and map', page = 'navigation',
+				text = 'Quests, mailboxes, repairs, the auction house, inns and flight masters as the game draws them, without keycaps.'},
+		}},
 	{version = '0.6.3', date = '2026-11-18',
 		summary = 'The stance latch moves into the console\'s header, and edit mode can put it anywhere.',
 		entries = {
